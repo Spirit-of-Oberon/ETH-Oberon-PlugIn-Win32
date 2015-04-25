@@ -1,0 +1,1302 @@
+﻿(* Copyright (c) 1994 - 2000 Emil J. Zeller *)
+
+MODULE OLEFrames; (** non-portable / source: Win32.OLEFrames.Mod *)	(* ejz  *)
+	IMPORT SYSTEM, Kernel32, Kernel, Registry, FileDir, Modules, Strings, Objects, Display, Viewers, Displays,
+		User32, GDI32, COM, OLE, OLEData, OLEObjects, Windows, WinFrames, Oberon, Gadgets, Views,
+		Documents, Desktops;
+
+	(**
+		This module implements a visual ActiveX control containing an Viewers.Viewer (Control).
+
+		This control is an extension of the none-visual control implemented in module OLEObjects.
+		New interfaces implemented by the control are:
+			IOleObject
+			IViewObject
+				IViewObject2
+			IOleWindow
+				IOleInPlaceObject
+				IOleInPlaceActiveObject
+			IOleControl
+			IQuickActivate
+	*)
+
+	CONST
+		CLSIDStr = "{11E5F1C0-936A-11d3-A2B1-005004435167}";
+		LIBIDStr = "{11E5F1C1-936A-11d3-A2B1-005004435167}";
+		TLBFile = "OberonOleFrame.tlb";
+		InPlaceActive* = 8; DeactivateOnKillFocus* = 9; ActivateOnDraw* = 10; HostNamesSet = 11;
+		HimetricPerPixel = 2540/96;
+
+	TYPE
+		(** The visual ActiveX control *)
+		Object* = POINTER TO RECORD (OLEObjects.Object)
+			oleObject, viewObject2, oleInPlaceObject, oleInPlaceActiveObject, oleControl, quickActivate: COM.ObjectInterface;
+			(** interfaces provided by the control container *)
+			oleClientSite*[UNTRACED], oleInPlaceSite*[UNTRACED], oleAdviseHolder*[UNTRACED], adviseSink*[UNTRACED]: COM.Interface;
+			adviseAspects, adviseAdvf: LONGINT;
+			(** the control window *)
+			win*: Windows.Window; sizeExtent: User32.SizeL
+		END;
+
+	VAR
+		unknownVTBL: COM.IUnknownVTBL; (* none delegating IUnknown *)
+		(** VTBL instances used in the control implementation *)
+		persistStreamInitVTBL*: OLE.IPersistStreamInitVTBL;
+		dataObjectVTBL: OLE.IDataObjectVTBL;
+		oleObjectVTBL: OLE.IOleObjectVTBL;
+		viewObject2VTBL: OLE.IViewObject2VTBL;
+		oleInPlaceObjectVTBL: OLE.IOleInPlaceObjectVTBL;
+		oleInPlaceActiveObjectVTBL: OLE.IOleInPlaceActiveObjectVTBL;
+		oleControlVTBL: OLE.IOleControlVTBL;
+		quickActivateVTBL: OLE.IQuickActivateVTBL;
+		(** The class used for controls allocated by this module *)
+		class*: OLEObjects.Class; classVTBL: COM.IClassFactoryVTBL;
+
+	(* Stores a COM object descriptor in global memory (TyMedHGlobal). (CFObjectDescriptor) *)
+	PROCEDURE StoreObjectDescriptor(obj: Object; VAR medium: OLE.StgMedium): COM.HRESULT;
+		VAR desc: OLE.ObjectDescriptor; adr: Kernel32.ADDRESS; len: LONGINT; userType: OLE.LPOleStr;
+		PROCEDURE Release();
+		BEGIN
+			IF userType # Kernel32.NULL THEN OLE.FreeLPOleStr(userType) END
+		END Release;
+	BEGIN
+		desc.cbSize := SIZE(OLE.ObjectDescriptor);
+		desc.clsid := obj.class.clsid;
+		desc.dwDrawAspect := OLE.DVAspectContent;
+		desc.sizel.cx := 0; desc.sizel.cy := 0;
+		desc.pointl.x := 0; desc.pointl.y := 0;
+		desc.dwStatus := 0;
+		desc.dwFullUserTypeName := 0; userType := Kernel32.NULL;
+		desc.dwSrcOfCopy := 0; (* IOleLink ? *)
+		oleObjectVTBL.GetUserClassID(obj, desc.clsid);
+		oleObjectVTBL.GetUserType(obj, OLE.UserClassTypeFull, userType);
+		oleObjectVTBL.GetMiscStatus(obj, OLE.DVAspectContent, desc.dwStatus);
+		oleObjectVTBL.GetExtent(obj, OLE.DVAspectContent, desc.sizel);
+		len := SIZE(OLE.ObjectDescriptor);
+		IF userType # Kernel32.NULL THEN
+			desc.dwFullUserTypeName := len;
+			len := len+2*(OLE.LPOleStrLen(userType)+1)
+		END;
+		IF Kernel32.GlobalSize(medium.handle) < len THEN
+			medium.handle := Kernel32.GlobalReAlloc(medium.handle, len, {});
+			IF medium.handle = Kernel32.NULL THEN Release(); RETURN COM.EOutOfMemory END
+		END;
+		adr := Kernel32.GlobalLock(medium.handle);
+		IF adr = Kernel32.NULL THEN Release(); RETURN COM.EPointer END;
+		SYSTEM.MOVE(SYSTEM.ADR(desc), adr, SIZE(OLE.ObjectDescriptor));
+		IF userType # Kernel32.NULL THEN
+			SYSTEM.MOVE(userType, adr+SIZE(OLE.ObjectDescriptor), 2*(OLE.LPOleStrLen(userType)+1));
+			Release()
+		END;
+		Kernel32.GlobalUnlock(medium.handle);
+		RETURN COM.SOk
+	END StoreObjectDescriptor;
+
+	PROCEDURE *GetObjDescData(this: COM.Interface; obj: Objects.Object; pformatetc: OLE.FormatEtc; VAR pmedium: OLE.StgMedium): COM.HRESULT;
+		VAR fobj: Object;
+	BEGIN
+		IF (pformatetc.tymed * {OLE.TyMedHGlobal}) = {} THEN
+			RETURN OLE.DVETyMed
+		END;
+		IF pformatetc.cfFormat = OLE.CFObjectDescriptor THEN
+			fobj := this(COM.ObjectInterface).obj(Object);
+			RETURN StoreObjectDescriptor(fobj, pmedium)
+		ELSE
+			RETURN OLE.DVEClipformat
+		END
+	END GetObjDescData;
+
+	PROCEDURE *SetObjDescData(VAR obj: Objects.Object; pformatetc: OLE.FormatEtc; pmedium: OLE.StgMedium): COM.HRESULT;
+	BEGIN
+		RETURN OLE.DVEClipformat
+	END SetObjDescData;
+
+	PROCEDURE *CheckObjDescData(this: COM.Interface; obj: Objects.Object; dwDirection: LONGINT; pformatetc: OLE.FormatEtc): COM.HRESULT;
+	BEGIN
+		IF dwDirection = OLE.DataDirSet THEN
+			RETURN OLE.DVEClipformat
+		ELSIF (pformatetc.tymed * {OLE.TyMedHGlobal}) = {} THEN
+			RETURN OLE.DVETyMed
+		END;
+		IF (pformatetc.cfFormat = OLE.CFObjectDescriptor) & (obj # NIL) & (obj IS Display.Frame) THEN
+			RETURN COM.SOk
+		ELSE
+			RETURN OLE.DVEClipformat
+		END
+	END CheckObjDescData;
+
+	(** Call OnViewChange on the current AdviseSink. *)
+	PROCEDURE [WINAPI] OnViewChange*(obj: Object): COM.HRESULT;
+		VAR vtbl: OLE.IAdviseSinkVTBL;
+	BEGIN
+Kernel32.Str("OnViewChange"); Kernel32.Ln();
+		IF obj.adviseSink # NIL THEN
+			vtbl := SYSTEM.VAL(OLE.IAdviseSinkVTBL, obj.adviseSink.vtbl);
+			vtbl.OnViewChange(obj.adviseSink, OLE.DVAspectContent, -1)
+		END;
+		OLEObjects.OnDataChange(obj);
+		RETURN COM.SOk
+	END OnViewChange;
+
+	(** Update the contained frame from obj.object. *)
+	PROCEDURE [WINAPI] SetContent*(obj: Object): COM.HRESULT;
+		VAR F: Display.Frame;
+	BEGIN
+Kernel32.Str("SetContent"); Kernel32.Ln();
+		IF obj.object # NIL THEN
+			IF obj.object IS Display.Frame THEN
+				F := obj.object(Display.Frame);
+				IF ~(InPlaceActive IN obj.state) THEN
+					obj.win.width := F.W; obj.win.height := F.H;
+					obj.sizeExtent.cx := ENTIER(0.5+F.W*HimetricPerPixel);
+					obj.sizeExtent.cy := ENTIER(0.5+F.H*HimetricPerPixel)
+				END;
+				IF obj.win.viewer = NIL THEN
+					obj.win.viewer := WinFrames.NewViewer(F, obj.win)
+				ELSE
+					WinFrames.ChangeFrame(obj.win, F)
+				END
+			ELSE
+				RETURN COM.EFail
+			END
+		END;
+		OnViewChange(obj);
+		OLEObjects.FireEvent(obj, OLEObjects.IDChangeContent);
+		RETURN COM.SOk
+	END SetContent;
+
+	PROCEDURE [WINAPI] *WindowProc(hwnd: User32.HWND; uMsg: LONGINT; wParam: User32.WParam; lParam: User32.LParam): User32.LResult;
+		VAR win: Windows.Window; obj: Object; res: User32.LResult;
+	BEGIN
+		win := SYSTEM.VAL(Windows.Window, User32.GetWindowLong(hwnd, Windows.GWLWindow));
+		IF uMsg = User32.WMKillFocus THEN
+			obj := SYSTEM.VAL(Object, User32.GetWindowLong(hwnd, Windows.GWLControl));
+			IF DeactivateOnKillFocus IN obj.state THEN
+				InPlaceDeactivate(obj)
+			END
+		ELSIF uMsg = User32.WMSetFocus THEN
+			obj := SYSTEM.VAL(Object, User32.GetWindowLong(hwnd, Windows.GWLControl));
+			IF ~(InPlaceActive IN obj.state) THEN
+				Activate(obj)
+			END
+		END;
+		res := Windows.WindowHandler(win, uMsg, wParam, lParam);
+		RETURN res
+	END WindowProc;
+
+	(** Initialize obj and add it to class. *)
+	PROCEDURE AddObject*(class: OLEObjects.Class; obj: Object);
+	BEGIN
+		OLEObjects.AddObject(class, obj);
+		obj.unknown.vtbl := unknownVTBL;
+		obj.persistStreamInit.obj := obj; obj.persistStreamInit.vtbl := persistStreamInitVTBL;
+		obj.dataObject.obj := obj; obj.dataObject.vtbl := dataObjectVTBL;
+		NEW(obj.oleObject); obj.oleObject.obj := obj; obj.oleObject.vtbl := oleObjectVTBL;
+		NEW(obj.viewObject2); obj.viewObject2.obj := obj; obj.viewObject2.vtbl := viewObject2VTBL;
+		NEW(obj.oleInPlaceObject); obj.oleInPlaceObject.obj := obj; obj.oleInPlaceObject.vtbl := oleInPlaceObjectVTBL;
+		NEW(obj.oleInPlaceActiveObject); obj.oleInPlaceActiveObject.obj := obj; obj.oleInPlaceActiveObject.vtbl := oleInPlaceActiveObjectVTBL;
+		NEW(obj.oleControl); obj.oleControl.obj := obj; obj.oleControl.vtbl := oleControlVTBL;
+		NEW(obj.quickActivate); obj.quickActivate.obj := obj; obj.quickActivate.vtbl := quickActivateVTBL;
+		obj.oleClientSite := NIL; obj.oleInPlaceSite := NIL; obj.oleAdviseHolder := NIL; obj.adviseSink := NIL;
+		obj.adviseAspects := 0; obj.adviseAdvf := 0;
+		obj.sizeExtent.cx := 2*2540; obj.sizeExtent.cy := 2*2540;
+		NEW(obj.win); Windows.Init(obj.win);
+		obj.win.getDC := Windows.GetDC;
+		obj.win.releaseDC := Windows.ReleaseDC;
+		obj.win.handle := WinFrames.WindowHandler;
+		OLEObjects.AddConnectionPoint(obj, OLE.IIDIPropertyNotifySink)
+	END AddObject;
+
+	(** Create a new control containing object and add it to class. *)
+	PROCEDURE CreateObject*(class: OLEObjects.Class; F: Display.Frame): Object;
+		VAR obj: Object;
+	BEGIN
+Kernel32.Str("OLEFrames.CreateObject"); Kernel32.Ln();
+		NEW(obj); AddObject(class, obj);
+		obj.object := F;
+		SetContent(obj);
+		RETURN obj
+	END CreateObject;
+
+	PROCEDURE DestroyWindow(obj: Object);
+		VAR windowProc: User32.WndProc;
+	BEGIN
+		IF obj.win.hWnd # Kernel32.NULL THEN
+			windowProc := obj.win.defWindowProc;
+			User32.SetWindowLong(obj.win.hWnd, User32.GWLWndProc, SYSTEM.VAL(User32.WParam, windowProc));
+			User32.SendMessage(obj.win.hWnd, User32.WMClose, 0, 0);
+			User32.DestroyWindow(obj.win.hWnd);
+			obj.win.hWnd := Kernel32.NULL
+		END
+	END DestroyWindow;
+
+	(** Release any interfaces or resources owned by obj, call OLEObjects.ReleaseObject. *)
+	PROCEDURE ReleaseObject*(class: COM.Class; obj: COM.Object);
+	BEGIN
+Kernel32.Str("OLEFrames.ReleaseObject"); Kernel32.Ln();
+		WITH obj: Object DO
+			DestroyWindow(obj);
+			COM.AssignInterface(obj.oleClientSite, NIL);
+			COM.AssignInterface(obj.oleInPlaceSite, NIL);
+			COM.AssignInterface(obj.oleAdviseHolder, NIL);
+			COM.AssignInterface(obj.adviseSink, NIL);
+			OLEObjects.ReleaseObject(class, obj)
+		END
+	END ReleaseObject;
+
+(* Object *)
+
+(* IUnknown *)
+
+(* none delegating *)
+
+	(** None delegating implementation of QueryInterface. *)
+	PROCEDURE [WINAPI] NDQueryInterface*(this: COM.Interface; VAR riid: COM.IID; VAR ppvObject: COM.Interface): COM.HRESULT;
+		VAR obj: Object;
+	BEGIN
+Kernel32.Str("OLEFrames.NDQueryInterface "); COM.ConsoleIID(riid); Kernel32.Ln();
+		obj := this(COM.ObjectInterface).obj(Object);
+		IF COM.IsEqualGUID(riid, OLE.IIDIOleObject) THEN
+			COM.OutInterface(ppvObject, obj.oleObject)
+		ELSIF COM.IsEqualGUID(riid, OLE.IIDIViewObject) THEN
+			COM.OutInterface(ppvObject, obj.viewObject2)
+		ELSIF COM.IsEqualGUID(riid, OLE.IIDIViewObject2) THEN
+			COM.OutInterface(ppvObject, obj.viewObject2)
+		ELSIF COM.IsEqualGUID(riid, OLE.IIDIOleWindow) THEN
+			COM.OutInterface(ppvObject, obj.oleInPlaceObject)
+		ELSIF COM.IsEqualGUID(riid, OLE.IIDIOleInPlaceObject) THEN
+			COM.OutInterface(ppvObject, obj.oleInPlaceObject)
+		ELSIF COM.IsEqualGUID(riid, OLE.IIDIOleInPlaceActiveObject) THEN
+			COM.OutInterface(ppvObject, obj.oleInPlaceActiveObject)
+		ELSIF COM.IsEqualGUID(riid, OLE.IIDIOleControl) THEN
+			COM.OutInterface(ppvObject, obj.oleControl)
+		ELSIF COM.IsEqualGUID(riid, OLE.IIDIQuickActivate) THEN
+			COM.OutInterface(ppvObject, obj.quickActivate)
+		ELSE
+			RETURN OLEObjects.NDQueryInterface(this, riid, ppvObject)
+		END;
+		RETURN COM.SOk
+	END NDQueryInterface;
+
+(* IPersistStreamInit *)
+
+	PROCEDURE [WINAPI] *StrLoad(this: COM.Interface; pStm: COM.Interface): COM.HRESULT;
+		VAR obj: Object; vtbl: OLE.IStreamVTBL; n: LONGINT; hr: COM.HRESULT;
+	BEGIN
+Kernel32.Str("OLEFrames.IPersistStreamInit.Load"); Kernel32.Ln();
+		obj := this(COM.ObjectInterface).obj(Object);
+		hr := OLEObjects.persistStreamInitVTBL.Load(this, pStm);
+		IF COM.Succeeded(hr) THEN
+			vtbl := SYSTEM.VAL(OLE.IStreamVTBL, pStm.vtbl);
+			hr := vtbl.Read(pStm, obj.sizeExtent, SIZE(User32.SizeL), n);
+			RETURN SetContent(obj)
+		ELSE
+			RETURN hr
+		END
+	END StrLoad;
+
+	PROCEDURE [WINAPI] *StrSave(this: COM.Interface; pStm: COM.Interface; fClearDirty: Kernel32.BOOL): COM.HRESULT;
+		VAR obj: Object; vtbl: OLE.IStreamVTBL; n: LONGINT; hr: COM.HRESULT;
+	BEGIN
+Kernel32.Str("OLEFrames.IPersistStreamInit.Save"); Kernel32.Ln();
+		obj := this(COM.ObjectInterface).obj(Object);
+		hr := OLEObjects.persistStreamInitVTBL.Save(this, pStm, fClearDirty);
+		IF COM.Succeeded(hr) THEN
+			vtbl := SYSTEM.VAL(OLE.IStreamVTBL, pStm.vtbl);
+			hr := vtbl.Write(pStm, obj.sizeExtent, SIZE(User32.SizeL), n)
+		END;
+		RETURN hr
+	END StrSave;
+
+	PROCEDURE [WINAPI] *StrInitNew(this: COM.Interface): COM.HRESULT;
+		VAR obj: Object; hr: COM.HRESULT;
+	BEGIN
+Kernel32.Str("OLEFrames.IPersistStreamInit.InitNew"); Kernel32.Ln();
+		obj := this(COM.ObjectInterface).obj(Object);
+		hr := OLEObjects.persistStreamInitVTBL.InitNew(this);
+		IF COM.Succeeded(hr) THEN
+			RETURN SetContent(obj)
+		ELSE
+			RETURN hr
+		END
+	END StrInitNew;
+
+(* IDataObject *)
+
+	PROCEDURE StoreMetafilePict(obj: Object; VAR medium: OLE.StgMedium): COM.HRESULT;
+		VAR F: Display.Frame; hDC: User32.HDC; pict: OLE.MetafilePict; adr: Kernel32.ADDRESS;
+	BEGIN
+Kernel32.Str("StoreMetafilePict"); Kernel32.Ln();
+		IF (obj.win = NIL) OR (obj.win.viewer = NIL) OR (obj.win.viewer.dsc = NIL) THEN RETURN OLE.OLEENotRunning END;
+		F := obj.win.viewer;
+		hDC := GDI32.CreateMetaFile(NIL);
+		GDI32.SetMapMode(hDC, GDI32.MMText);
+		GDI32.SetWindowExtEx(hDC, F.W, F.H, NIL);
+Kernel32.Str("  "); Kernel32.Int(F.W); Kernel32.Str(" "); Kernel32.Int(F.H); Kernel32.Ln();
+		WinFrames.Snapshot(F(Viewers.Viewer), hDC, 0, 0, F.W, F.H);
+		pict.hMF := GDI32.CloseMetaFile(hDC);
+		pict.mm := GDI32.MMText;
+		pict.xExt := F.W; pict.yExt := F.H;
+		adr := Kernel32.GlobalLock(medium.handle);
+		IF adr = Kernel32.NULL THEN RETURN COM.EFail END;
+		SYSTEM.MOVE(SYSTEM.ADR(pict), adr, SIZE(OLE.MetafilePict));
+		Kernel32.GlobalUnlock(medium.handle);
+		RETURN COM.SOk
+	END StoreMetafilePict;
+
+	PROCEDURE StoreEnhMetafile(obj: Object; VAR medium: OLE.StgMedium): COM.HRESULT;
+		VAR F: Display.Frame; hDC: User32.HDC;
+	BEGIN
+Kernel32.Str("StoreEnhMetafile"); Kernel32.Ln();
+		IF (obj.win = NIL) OR (obj.win.viewer = NIL) OR (obj.win.viewer.dsc = NIL) THEN RETURN OLE.OLEENotRunning END;
+		F := obj.win.viewer;
+		hDC := GDI32.CreateEnhMetaFile(Kernel32.NULL, NIL, NIL, NIL);
+		GDI32.SetMapMode(hDC, GDI32.MMText);
+		GDI32.SetWindowExtEx(hDC, F.W, F.H, NIL);
+Kernel32.Str("  "); Kernel32.Int(F.W); Kernel32.Str(" "); Kernel32.Int(F.H); Kernel32.Ln();
+		WinFrames.Snapshot(F(Viewers.Viewer), hDC, 0, 0, F.W, F.H);
+		medium.handle := GDI32.CloseEnhMetaFile(hDC);
+		RETURN COM.SOk
+	END StoreEnhMetafile;
+
+	PROCEDURE [WINAPI] *GetDataHere(this: COM.Interface; pformatetc: OLE.FormatEtc; VAR pmedium: OLE.StgMedium): COM.HRESULT;
+		VAR obj: Object; hr: COM.HRESULT;
+name: ARRAY 64 OF CHAR;
+	BEGIN
+Kernel32.Str("OLEFrames.IDataObject.GetDataHere"); Kernel32.Ln();
+		obj := this(COM.ObjectInterface).obj(Object);
+		IF (pformatetc.cfFormat = User32.CFMetafilePict) & (pformatetc.tymed = {OLE.TyMedMFPict}) THEN
+			OLE.InitStgMedium(pmedium, pformatetc.tymed);
+			hr := OLEData.AllocMedium(pmedium);
+			IF COM.Succeeded(hr) THEN hr := StoreMetafilePict(obj, pmedium) END;
+			IF COM.Failed(hr) THEN OLE.ReleaseStgMedium(pmedium) END
+		ELSIF (pformatetc.cfFormat = User32.CFEnhMetafile) & (pformatetc.tymed = {OLE.TyMedEnhMF}) THEN
+			OLE.InitStgMedium(pmedium, pformatetc.tymed);
+			hr := OLEData.AllocMedium(pmedium);
+			IF COM.Succeeded(hr) THEN hr := StoreEnhMetafile(obj, pmedium) END;
+			IF COM.Failed(hr) THEN OLE.ReleaseStgMedium(pmedium) END
+		ELSE
+			hr := OLEObjects.dataObjectVTBL.GetDataHere(this, pformatetc, pmedium)
+		END;
+Kernel32.Str("  ");
+IF User32.GetClipboardFormatName(pformatetc.cfFormat, name, 64) > 0 THEN
+	Kernel32.Str(name)
+ELSE
+	Kernel32.Int(pformatetc.cfFormat)
+END;
+Kernel32.Str(" "); Kernel32.Int(hr); Kernel32.Ln();
+		RETURN hr
+	END GetDataHere;
+
+	PROCEDURE [WINAPI] *SetData(this: COM.Interface; pformatetc: OLE.FormatEtc; pmedium: OLE.StgMedium; fRelease: Kernel32.BOOL): COM.HRESULT;
+		VAR obj: Object; hr: COM.HRESULT;
+	BEGIN
+Kernel32.Str("OLEFrames.IDataObject.SetData"); Kernel32.Ln();
+		obj := this(COM.ObjectInterface).obj(Object);
+		hr := OLEObjects.dataObjectVTBL.SetData(this, pformatetc, pmedium, fRelease);
+		IF COM.Succeeded(hr) THEN
+			RETURN SetContent(obj)
+		ELSE
+			RETURN hr
+		END
+	END SetData;
+
+(* IOleObject *)
+
+	PROCEDURE [WINAPI] *SetClientSite(this: COM.Interface; pClientSite: COM.Interface): COM.HRESULT;
+		VAR obj: Object;
+	BEGIN
+Kernel32.Str("IOleObject.SetClientSite"); Kernel32.Ln();
+		obj := this(COM.ObjectInterface).obj(Object);
+		COM.AssignInterface(obj.oleClientSite, pClientSite);
+		RETURN COM.SOk
+	END SetClientSite;
+
+	PROCEDURE [WINAPI] *GetClientSite(this: COM.Interface; VAR ppClientSite: COM.Interface): COM.HRESULT;
+		VAR obj: Object;
+	BEGIN
+Kernel32.Str("IOleObject.GetClientSite"); Kernel32.Ln();
+		obj := this(COM.ObjectInterface).obj(Object);
+		COM.OutInterface(ppClientSite, obj.oleClientSite);
+		RETURN COM.SOk
+	END GetClientSite;
+
+	PROCEDURE [WINAPI] *SetHostNames(this: COM.Interface; szContainerApp, szContainerObj: OLE.LPOleStr): COM.HRESULT;
+		VAR obj: Object; name: ARRAY 64 OF CHAR; pos: LONGINT;
+	BEGIN
+Kernel32.Str("IOleObject.SetHostNames"); Kernel32.Ln();
+		obj := this(COM.ObjectInterface).obj(Object);
+		OLE.FromLPOleStr(szContainerApp, name);
+		pos := 0; Strings.CAPSearch("WORD", name, pos);
+		IF pos < 0 THEN pos := 0; Strings.CAPSearch("EXCEL", name, pos) END;
+		IF pos >= 0 THEN INCL(obj.state, DeactivateOnKillFocus) END;
+		INCL(obj.state, HostNamesSet);
+		RETURN COM.SOk
+	END SetHostNames;
+
+	PROCEDURE [WINAPI] *Close(this: COM.Interface; dwSaveOption: LONGINT): COM.HRESULT;
+		VAR obj: Object; vtblCS: OLE.IOleClientSiteVTBL; vtbl: OLE.IOleAdviseHolderVTBL; vtblAS: OLE.IAdviseSinkVTBL;
+	BEGIN
+Kernel32.Str("IOleObject.Close"); Kernel32.Ln();
+		obj := this(COM.ObjectInterface).obj(Object);
+		InPlaceDeactivate(this);
+		DestroyWindow(obj);
+		IF (dwSaveOption = OLE.OLECloseSaveIfDirty) & (OLEObjects.Dirty IN obj.state) & (obj.oleClientSite # NIL) THEN
+			vtblCS := SYSTEM.VAL(OLE.IOleClientSiteVTBL, obj.oleClientSite.vtbl);
+			vtblCS.SaveObject(obj.oleClientSite)
+		END;
+		IF obj.adviseSink # NIL THEN
+			vtblAS := SYSTEM.VAL(OLE.IAdviseSinkVTBL, obj.adviseSink.vtbl);
+			vtblAS.OnClose(obj.adviseSink)
+		END;
+		IF obj.oleAdviseHolder # NIL THEN
+			vtbl := SYSTEM.VAL(OLE.IOleAdviseHolderVTBL, obj.oleAdviseHolder.vtbl);
+			vtbl.SendOnClose(obj.oleAdviseHolder)
+		END;
+		COM.AssignInterface(obj.oleClientSite, NIL);
+		OLEObjects.FireEvent(obj, OLEObjects.IDClose);
+		RETURN COM.SOk
+	END Close;
+
+	PROCEDURE [WINAPI] *SetMoniker(this: COM.Interface; dwWhichMoniker: LONGINT; pmk: COM.Interface): COM.HRESULT;
+	BEGIN
+Kernel32.Str("IOleObject.SetMoniker (NotImpl)"); Kernel32.Ln();
+		RETURN COM.ENotImpl
+	END SetMoniker;
+
+	PROCEDURE [WINAPI] *GetMoniker(this: COM.Interface; dwAssign, dwWhichMoniker: LONGINT; VAR ppmk: COM.Interface): COM.HRESULT;
+	BEGIN
+Kernel32.Str("IOleObject.GetMoniker (NotImpl)"); Kernel32.Ln();
+		ppmk := NIL;
+		RETURN COM.ENotImpl
+	END GetMoniker;
+
+	PROCEDURE [WINAPI] *InitFromData(this: COM.Interface; pDataObject: COM.Interface; fCreation: Kernel32.BOOL; dwReserved: LONGINT): COM.HRESULT;
+	BEGIN
+Kernel32.Str("IOleObject.InitFromData (NotImpl)"); Kernel32.Ln();
+		RETURN COM.ENotImpl
+	END InitFromData;
+
+	PROCEDURE [WINAPI] *GetClipboardData(this: COM.Interface; dwReserved: LONGINT; VAR ppDataObject: COM.Interface): COM.HRESULT;
+	BEGIN
+Kernel32.Str("IOleObject.GetClipboardData (NotImpl)"); Kernel32.Ln();
+		ppDataObject := NIL;
+		RETURN COM.ENotImpl
+	END GetClipboardData;
+
+	PROCEDURE CreateWindow(obj: Object; hwndParent: User32.HWND; VAR pos: User32.Rect);
+		VAR windowProc: User32.WndProc;
+	BEGIN
+		obj.win.hWndParent := hwndParent;
+		Windows.CreateControl(obj.win, pos.left, pos.top, pos.right-pos.left, pos.bottom-pos.top);
+		User32.SetWindowLong(obj.win.hWnd, Windows.GWLControl, SYSTEM.VAL(User32.WParam, obj));
+		windowProc := WindowProc;
+		User32.SetWindowLong(obj.win.hWnd, User32.GWLWndProc, SYSTEM.VAL(User32.WParam, windowProc))
+	END CreateWindow;
+
+	PROCEDURE ActivateWindow(obj: Object; site: COM.Interface): COM.HRESULT;
+		VAR
+			vtblIPS: OLE.IOleInPlaceSiteVTBL; vtblCS: OLE.IOleClientSiteVTBL; vtblIPUI: OLE.IOleInPlaceUIWindowVTBL;
+			frame, window: COM.Interface; hwndParent: User32.HWND;
+			pos, clip: User32.Rect; info: OLE.OLEInPlaceFrameInfo; hr: COM.HRESULT;
+	BEGIN
+Kernel32.Str("IOleObject.DoVerb.Activate.ActivateWindow"); Kernel32.Ln();
+		vtblIPS := SYSTEM.VAL(OLE.IOleInPlaceSiteVTBL, site.vtbl);
+		hr := vtblIPS.GetWindow(site, hwndParent);
+		IF hr = COM.SOk THEN
+			hr := vtblIPS.GetWindowContext(site, frame, window, pos, clip, info);
+			IF hr = COM.SOk THEN
+				IF obj.win.hWnd = Kernel32.NULL THEN
+					CreateWindow(obj, hwndParent, pos);
+					User32.SetFocus(obj.win.hWnd);
+					IF frame # NIL THEN
+						vtblIPUI :=  SYSTEM.VAL(OLE.IOleInPlaceUIWindowVTBL, frame.vtbl);
+						vtblIPUI.SetActiveObject(frame, obj.oleInPlaceActiveObject, Kernel32.NULL)
+					END;
+					IF window # NIL THEN
+						vtblIPUI :=  SYSTEM.VAL(OLE.IOleInPlaceUIWindowVTBL, window.vtbl);
+						vtblIPUI.SetActiveObject(window, obj.oleInPlaceActiveObject, Kernel32.NULL)
+					END;
+					IF frame # NIL THEN
+						vtblIPUI :=  SYSTEM.VAL(OLE.IOleInPlaceUIWindowVTBL, frame.vtbl);
+						vtblIPUI.SetBorderSpace(frame, NIL)
+					END;
+					IF window # NIL THEN
+						vtblIPUI :=  SYSTEM.VAL(OLE.IOleInPlaceUIWindowVTBL, window.vtbl);
+						vtblIPUI.SetBorderSpace(window, NIL)
+					END
+				END;
+				IF obj.win.hWnd # Kernel32.NULL THEN
+					vtblCS := SYSTEM.VAL(OLE.IOleClientSiteVTBL, obj.oleClientSite.vtbl);
+					IF ~(InPlaceActive IN obj.state) THEN
+						User32.ShowWindow(obj.win.hWnd, User32.SWShow);
+						vtblCS.OnShowWindow(obj.oleClientSite, Kernel32.True);
+						INCL(obj.state, InPlaceActive)
+					END;
+					SetObjectRects(obj, pos, clip);
+					vtblCS.ShowObject(obj.oleClientSite);
+					User32.SetFocus(obj.win.hWnd);
+					hr := COM.SOk
+				ELSE
+					hr := COM.EFail
+				END;
+				COM.AssignInterface(frame, NIL);
+				COM.AssignInterface(window, NIL)
+			END
+		END;
+		RETURN hr
+	END ActivateWindow;
+
+	PROCEDURE SetHostNames0(obj: Object);
+		VAR name: FileDir.FileName; oleName: ARRAY Kernel32.MaxPath (*SIZE(FileDir.FileName)*) OF OLE.OleChar;
+	BEGIN
+		Kernel32.GetModuleFileName(Kernel32.NULL, name, SIZE(FileDir.FileName));
+		OLE.ToOleStr(name, oleName);
+		SetHostNames(obj, SYSTEM.ADR(oleName[0]), Kernel32.NULL)
+	END SetHostNames0;
+
+	PROCEDURE [WINAPI] Activate(obj: Object): COM.HRESULT;
+		VAR vtblIPS: OLE.IOleInPlaceSiteVTBL; hr: COM.HRESULT;
+	BEGIN
+Kernel32.Str("IOleObject.DoVerb.Activate"); Kernel32.Ln();
+		hr := obj.oleClientSite.vtbl.QueryInterface(obj.oleClientSite, OLE.IIDIOleInPlaceSite, obj.oleInPlaceSite);
+		IF COM.Failed(hr) THEN RETURN hr END;
+		IF ~(HostNamesSet IN obj.state) THEN SetHostNames0(obj) END;
+		IF ~(InPlaceActive IN obj.state) THEN
+			vtblIPS := SYSTEM.VAL(OLE.IOleInPlaceSiteVTBL, obj.oleInPlaceSite.vtbl);
+			hr := vtblIPS.CanInPlaceActivate(obj.oleInPlaceSite);
+			IF hr = COM.SOk THEN hr := vtblIPS.OnInPlaceActivate(obj.oleInPlaceSite) END;
+			IF hr # COM.SOk THEN hr := COM.EFail END
+		END;
+		IF COM.Succeeded(hr) THEN hr := ActivateWindow(obj, obj.oleInPlaceSite) END;
+		OLEObjects.FireEvent(obj, OLEObjects.IDActivate);
+		RETURN hr
+	END Activate;
+
+	PROCEDURE *DocHandler(D: Objects.Object; VAR M: Objects.ObjMsg);
+	BEGIN
+		IF M IS Objects.AttrMsg THEN
+			WITH M: Objects.AttrMsg DO
+				IF (M.id = Objects.get) & (M.name = "Gen") THEN
+					M.class := Objects.String; M.s := "OLEFrames.NewDoc"; M.res := 0
+				ELSE
+					Documents.Handler(D, M)
+				END
+			END
+		ELSE
+			Documents.Handler(D, M)
+		END	
+	END DocHandler;
+
+	PROCEDURE ShowDoc*;
+		VAR doc: Documents.Document; F: Display.Frame;
+	BEGIN
+Kernel32.Str("ShowDoc"); Kernel32.Ln();
+		IF (Gadgets.executorObj # NIL) & (Gadgets.executorObj IS Display.Frame) THEN
+			F := Gadgets.executorObj(Display.Frame)
+		ELSIF (Oberon.Par.obj # NIL) & (Oberon.Par.obj IS Display.Frame) THEN
+			F := Oberon.Par.obj(Display.Frame)
+		ELSE
+			F := NIL
+		END;
+		IF F # NIL THEN
+			NEW(doc); doc.Load := NIL; doc.Store := NIL;
+			doc.handle := DocHandler;
+			doc.dsc := Views.ViewOf(F);
+Kernel32.Str("Desktops.ShowDoc"); Kernel32.Ln();
+			Desktops.ShowDoc(doc)
+ELSE
+	Kernel32.Str("fail"); Kernel32.Ln()
+		END
+	END ShowDoc;
+
+	PROCEDURE OpenDoc(obj: Object): COM.HRESULT;
+		VAR done: BOOLEAN;
+	BEGIN
+Kernel32.Str("OpenDoc ");
+		IF (obj.object # NIL) & (obj.object IS Display.Frame) THEN
+			done := Displays.PutCmd(obj.win, obj.object, "OLEFrames.ShowDoc", 0);
+Kernel32.Str("COM.SOk"); Kernel32.Ln();
+			RETURN COM.SOk
+		END;
+Kernel32.Str("OLE.OLEENotRunning"); Kernel32.Ln();
+		RETURN OLE.OLEENotRunning
+	END OpenDoc;
+
+	PROCEDURE [WINAPI] *DoVerb(this: COM.Interface; iVerb: LONGINT; VAR lpmsg: User32.Msg; pActiveSite: COM.Interface; lindex: LONGINT; hwndParent: User32.HWND; VAR lprcPosRect: User32.Rect): COM.HRESULT;
+		VAR obj: Object; hr: COM.HRESULT;
+	BEGIN
+Kernel32.Str("IOleObject.DoVerb "); Kernel32.Int(iVerb); Kernel32.Ln();
+		obj := this(COM.ObjectInterface).obj(Object);
+		CASE iVerb OF
+			OLE.OLEIVerbPrimary, OLE.OLEIVerbShow, OLE.OLEIVerbUIActivate, OLE.OLEIVerbInPlaceActivate: hr := Activate(obj)
+			|OLE.OLEIVerbOpen: hr := OpenDoc(obj)
+			|OLE.OLEIVerbHide: hr := InPlaceDeactivate(obj)
+			|OLE.OLEIVerbDiscardUndoState: hr := COM.ENotImpl
+		ELSE
+			IF iVerb > 0 THEN
+				hr := Activate(obj);
+				IF COM.Succeeded(hr) THEN hr := OLE.OLEObjSInvalidVerb END
+			ELSE
+				hr := COM.ENotImpl
+			END
+		END;
+		RETURN hr
+	END DoVerb;
+
+	PROCEDURE [WINAPI] *EnumVerbs(this: COM.Interface; VAR ppEnumOleVerb: COM.Interface): COM.HRESULT;
+		VAR obj: Object;
+	BEGIN
+Kernel32.Str("IOleObject.EnumVerb"); Kernel32.Ln();
+		obj := this(COM.ObjectInterface).obj(Object);
+		RETURN OLE.OleRegEnumVerbs(obj.class.clsid, ppEnumOleVerb)
+	END EnumVerbs;
+
+	PROCEDURE [WINAPI] *Update(this: COM.Interface): COM.HRESULT;
+		VAR obj: Object;
+	BEGIN
+Kernel32.Str("IOleObject.Update"); Kernel32.Ln();
+		obj := this(COM.ObjectInterface).obj(Object);
+		OnViewChange(obj);
+		RETURN COM.SOk
+	END Update;
+
+	PROCEDURE [WINAPI] *IsUpToDate(this: COM.Interface): COM.HRESULT;
+	BEGIN
+Kernel32.Str("IOleObject.IsUpToDate"); Kernel32.Ln();
+		RETURN COM.SOk
+	END IsUpToDate;
+
+	PROCEDURE [WINAPI] *GetUserClassID(this: COM.Interface; VAR pClsid: COM.CLSID): COM.HRESULT;
+		VAR obj: Object;
+	BEGIN
+Kernel32.Str("IOleObject.GetUserClassID"); Kernel32.Ln();
+		obj := this(COM.ObjectInterface).obj(Object);
+		pClsid := obj.class.clsid;
+		RETURN COM.SOk
+	END GetUserClassID;
+
+	PROCEDURE [WINAPI] *GetUserType(this: COM.Interface; dwFormOfType: LONGINT; VAR pszUserType: OLE.LPOleStr): COM.HRESULT;
+		VAR obj: Object;
+	BEGIN
+Kernel32.Str("IOleObject.GetUserType"); Kernel32.Ln();
+		obj := this(COM.ObjectInterface).obj(Object);
+		RETURN OLE.OleRegGetUserType(obj.class.clsid, dwFormOfType, pszUserType)
+	END GetUserType;
+
+	PROCEDURE [WINAPI] *SetExtent(this: COM.Interface; dwDrawAspect: LONGINT; psizel: User32.SizeL): COM.HRESULT;
+		VAR obj: Object; done: BOOLEAN;
+	BEGIN
+Kernel32.Str("IOleObject.SetExtent"); Kernel32.Ln();
+		obj := this(COM.ObjectInterface).obj(Object);
+		IF dwDrawAspect = OLE.DVAspectContent THEN
+			IF ~User32.EqualSize(obj.sizeExtent, psizel) THEN
+				obj.sizeExtent := psizel;
+				IF ~(InPlaceActive IN obj.state) THEN
+					obj.win.width := ENTIER(0.5+psizel.cx/HimetricPerPixel); obj.win.height := ENTIER(0.5+psizel.cy/HimetricPerPixel);
+					IF obj.win.viewer # NIL THEN
+						done := Displays.PutEvent(NIL, obj.win, Displays.resize, 0)
+					END;
+					OnViewChange(obj)
+				END
+			END;
+			RETURN COM.SOk
+		ELSE
+			RETURN OLE.DVEDVAspect
+		END
+	END SetExtent;
+
+	PROCEDURE [WINAPI] *GetExtent(this: COM.Interface; dwDrawAspect: LONGINT; VAR psizel: User32.SizeL): COM.HRESULT;
+		VAR obj: Object;
+	BEGIN
+Kernel32.Str("IOleObject.GetExtent"); Kernel32.Ln();
+		obj := this(COM.ObjectInterface).obj(Object);
+		IF dwDrawAspect = OLE.DVAspectContent THEN
+			psizel := obj.sizeExtent;
+			RETURN COM.SOk
+		ELSE
+			RETURN OLE.DVEDVAspect
+		END
+	END GetExtent;
+
+	PROCEDURE [WINAPI] *Advise(this: COM.Interface; pAdvSink: COM.Interface; VAR pdwConnection: LONGINT): COM.HRESULT;
+		VAR obj: Object; vtbl: OLE.IOleAdviseHolderVTBL; hr: COM.HRESULT;
+	BEGIN
+Kernel32.Str("IOleObject.Advise"); Kernel32.Ln();
+		obj := this(COM.ObjectInterface).obj(Object);
+		IF obj.oleAdviseHolder = NIL THEN
+			hr := OLE.CreateOleAdviseHolder(obj.oleAdviseHolder)
+		ELSE
+			hr := COM.SOk
+		END;
+		IF COM.Succeeded(hr) THEN
+			vtbl := SYSTEM.VAL(OLE.IOleAdviseHolderVTBL, obj.oleAdviseHolder.vtbl);
+			RETURN vtbl.Advise(obj.oleAdviseHolder, pAdvSink, pdwConnection)
+		ELSE
+			RETURN hr
+		END
+	END Advise;
+
+	PROCEDURE [WINAPI] *Unadvise(this: COM.Interface; dwConnection: LONGINT): COM.HRESULT;
+		VAR obj: Object; vtbl: OLE.IOleAdviseHolderVTBL;
+	BEGIN
+Kernel32.Str("IOleObject.Unadvise"); Kernel32.Ln();
+		obj := this(COM.ObjectInterface).obj(Object);
+		IF obj.oleAdviseHolder # NIL THEN
+			vtbl := SYSTEM.VAL(OLE.IOleAdviseHolderVTBL, obj.oleAdviseHolder.vtbl);
+			RETURN vtbl.Unadvise(obj.oleAdviseHolder, dwConnection)
+		ELSE
+			RETURN OLE.OLEENoConnection
+		END
+	END Unadvise;
+
+	PROCEDURE [WINAPI] *EnumAdvise(this: COM.Interface; VAR ppenumAdvise: COM.Interface): COM.HRESULT;
+		VAR obj: Object; vtbl: OLE.IOleAdviseHolderVTBL;
+	BEGIN
+Kernel32.Str("IOleObject.EnumAdvise"); Kernel32.Ln();
+		obj := this(COM.ObjectInterface).obj(Object);
+		IF obj.oleAdviseHolder # NIL THEN
+			vtbl := SYSTEM.VAL(OLE.IOleAdviseHolderVTBL, obj.oleAdviseHolder.vtbl);
+			RETURN vtbl.EnumAdvise(obj.oleAdviseHolder, ppenumAdvise)
+		ELSE
+			RETURN OLE.OLEENoConnection
+		END
+	END EnumAdvise;
+
+	PROCEDURE [WINAPI] *GetMiscStatus(this: COM.Interface; dwAspect: LONGINT; VAR pdwStatus: LONGINT): COM.HRESULT;
+		VAR obj: Object;
+	BEGIN
+Kernel32.Str("IOleObject.GetMiscStatus"); Kernel32.Ln();
+		obj := this(COM.ObjectInterface).obj(Object);
+		RETURN OLE.OleRegGetMiscStatus(obj.class.clsid, dwAspect, pdwStatus)
+	END GetMiscStatus;
+
+	PROCEDURE [WINAPI] *SetColorScheme(this: COM.Interface; pLogpal: GDI32.LogPalette): COM.HRESULT;
+	BEGIN
+Kernel32.Str("IOleObject.SetColorScheme"); Kernel32.Ln();
+		RETURN COM.ENotImpl
+	END SetColorScheme;
+
+(* IViewObject *)
+
+	PROCEDURE [WINAPI] *Draw(this: COM.Interface; dwDrawAspect, lindex: LONGINT; VAR pvAspect: OLE.DVAspectInfo; VAR ptd: OLE.DVTargetDevice; hdcTargetDev, hdcDraw: User32.HDC; VAR lprcBounds, lprcWBounds: User32.RectL; pfnContinue: OLE.ContinueProc; dwContinue: LONGINT): COM.HRESULT;
+		VAR obj: Object; F: Display.Frame;
+	BEGIN
+Kernel32.Str("IViewObject.Draw "); Kernel32.Int(dwDrawAspect); Kernel32.Ln();
+		obj := this(COM.ObjectInterface).obj(Object);
+		IF ~(InPlaceActive IN obj.state) & (ActivateOnDraw IN obj.state) THEN
+			Activate(obj)
+		END;
+		IF dwDrawAspect = OLE.DVAspectContent THEN
+			IF (SYSTEM.ADR(lprcBounds) # Kernel32.NULL) & (hdcDraw # Kernel32.NULL) THEN
+				GDI32.SaveDC(hdcDraw);
+				IF (obj.win # NIL) & (obj.win.viewer # NIL) THEN
+					F := obj.win.viewer;
+					WinFrames.Snapshot(F(Viewers.Viewer), hdcDraw, lprcBounds.left, lprcBounds.top, lprcBounds.right-lprcBounds.left, lprcBounds.bottom-lprcBounds.top)
+				ELSIF ~(InPlaceActive IN obj.state) OR (obj.object = NIL) THEN
+					GDI32.Rectangle(hdcDraw, lprcBounds.left, lprcBounds.top, lprcBounds.right, lprcBounds.bottom);
+					GDI32.MoveToEx(hdcDraw, lprcBounds.left, lprcBounds.top, NIL);
+					GDI32.LineTo(hdcDraw, lprcBounds.right, lprcBounds.bottom);
+					GDI32.MoveToEx(hdcDraw, lprcBounds.left, lprcBounds.bottom, NIL);
+					GDI32.LineTo(hdcDraw, lprcBounds.right, lprcBounds.top)
+				ELSE
+					Displays.UpdateObj(obj.win, obj.object)
+				END;
+				GDI32.RestoreDC(hdcDraw, -1);
+				RETURN COM.SOk
+			ELSE
+				RETURN OLE.OLEEInvalidRect
+			END
+		ELSE
+			RETURN OLE.DVEDVAspect
+		END
+	END Draw;
+
+	PROCEDURE [WINAPI] *GetColorSet(this: COM.Interface; dwDrawAspect, lindex: LONGINT; pvAspect: PTR; VAR ptd: OLE.DVTargetDevice; hicTargetDev: User32.HDC; VAR ppColorSet: OLE.LPLogPalette): COM.HRESULT;
+	BEGIN
+Kernel32.Str("IViewObject.GetColorSet"); Kernel32.Ln();
+		ppColorSet := Kernel32.NULL;
+		RETURN COM.SFalse
+	END GetColorSet;
+
+	PROCEDURE [WINAPI] *Freeze(this: COM.Interface; dwDrawAspect, lindex: LONGINT; pvAspect: PTR; VAR pdwFreeze: LONGINT): COM.HRESULT;
+	BEGIN
+Kernel32.Str("IViewObject.Freeze (NotImpl)"); Kernel32.Ln();
+		RETURN COM.ENotImpl
+	END Freeze;
+
+	PROCEDURE [WINAPI] *Unfreeze(this: COM.Interface; dwFreeze: LONGINT): COM.HRESULT;
+	BEGIN
+Kernel32.Str("IViewObject.Unfreeze (NotImpl)"); Kernel32.Ln();
+		RETURN COM.ENotImpl
+	END Unfreeze;
+
+	PROCEDURE [WINAPI] *SetAdvise(this: COM.Interface; aspects, advf: LONGINT; pAdvSink: COM.Interface): COM.HRESULT;
+		VAR obj: Object;
+	BEGIN
+Kernel32.Str("IViewObject.SetAdvise"); Kernel32.Ln();
+		obj := this(COM.ObjectInterface).obj(Object);
+		obj.adviseAspects := aspects; obj.adviseAdvf := advf;
+		COM.AssignInterface(obj.adviseSink, pAdvSink);
+		OnViewChange(obj);
+		RETURN COM.SOk
+	END SetAdvise;
+
+	PROCEDURE [WINAPI] *GetAdvise(this: COM.Interface; VAR pAspects, pAdvf: LONGINT; VAR ppAdvSink: COM.Interface): COM.HRESULT;
+		VAR obj: Object;
+	BEGIN
+Kernel32.Str("IViewObject.GetAdvise"); Kernel32.Ln();
+		obj := this(COM.ObjectInterface).obj(Object);
+		IF SYSTEM.ADR(pAspects) # Kernel32.NULL THEN
+			pAspects := obj.adviseAspects
+		END;
+		IF SYSTEM.ADR(pAdvf) # Kernel32.NULL THEN
+			pAdvf := obj.adviseAdvf
+		END;
+		IF SYSTEM.ADR(ppAdvSink) # Kernel32.NULL THEN
+			COM.OutInterface(ppAdvSink, obj.adviseSink)
+		END;
+		RETURN COM.SOk
+	END GetAdvise;
+
+(* IViewObject2 *)
+
+	PROCEDURE [WINAPI] *VOGetExtent(this: COM.Interface; dwDrawAspect, lindex: LONGINT; VAR ptd: OLE.DVTargetDevice; VAR lpsizel: User32.SizeL): COM.HRESULT;
+		VAR obj: Object;
+	BEGIN
+Kernel32.Str("IViewObject2.GetExtent"); Kernel32.Ln();
+		obj := this(COM.ObjectInterface).obj(Object);
+		lpsizel := obj.sizeExtent;
+		RETURN COM.SOk
+	END VOGetExtent;
+
+(* IOleWindow *)
+
+	PROCEDURE [WINAPI] *GetWindow(this: COM.Interface; VAR phwnd: User32.HWND): COM.HRESULT;
+		VAR obj: Object;
+	BEGIN
+Kernel32.Str("IOleWindow.GetWindow"); Kernel32.Ln();
+		obj := this(COM.ObjectInterface).obj(Object);
+		phwnd := obj.win.hWnd;
+		RETURN COM.SOk
+	END GetWindow;
+
+	PROCEDURE [WINAPI] *ContextSensitiveHelp(this: COM.Interface; fEnterMode: Kernel32.BOOL): COM.HRESULT;
+	BEGIN
+Kernel32.Str("IOleWindow.ContextSensitiveHelp (NotImpl)"); Kernel32.Ln();
+		RETURN COM.ENotImpl
+	END ContextSensitiveHelp;
+
+(* IOleInPlaceObject *)
+
+	PROCEDURE [WINAPI] *InPlaceDeactivate(this: COM.Interface): COM.HRESULT;
+		VAR
+			vtblIPS: OLE.IOleInPlaceSiteVTBL; vtblIPUI: OLE.IOleInPlaceUIWindowVTBL;
+			frame, window: COM.Interface; pos, clip: User32.Rect; info: OLE.OLEInPlaceFrameInfo;
+			hwndParent: User32.HWND; obj: Object; hr: COM.HRESULT;
+	BEGIN
+Kernel32.Str("IOleInPlaceObject.InPlaceDeactivate"); Kernel32.Ln();
+		obj := this(COM.ObjectInterface).obj(Object);
+		IF InPlaceActive IN obj.state THEN
+			IF obj.oleInPlaceSite # NIL THEN
+				vtblIPS := SYSTEM.VAL(OLE.IOleInPlaceSiteVTBL, obj.oleInPlaceSite.vtbl);
+				hr := vtblIPS.GetWindow(obj.oleInPlaceSite, hwndParent);
+				IF hr = COM.SOk THEN
+					hr := vtblIPS.GetWindowContext(obj.oleInPlaceSite, frame, window, pos, clip, info);
+					IF hr = COM.SOk THEN
+						IF frame # NIL THEN
+							vtblIPUI :=  SYSTEM.VAL(OLE.IOleInPlaceUIWindowVTBL, frame.vtbl);
+							vtblIPUI.SetActiveObject(frame, NIL, Kernel32.NULL)
+						END;
+						IF window # NIL THEN
+							vtblIPUI :=  SYSTEM.VAL(OLE.IOleInPlaceUIWindowVTBL, window.vtbl);
+							vtblIPUI.SetActiveObject(window, NIL, Kernel32.NULL)
+						END;
+						COM.AssignInterface(frame, NIL);
+						COM.AssignInterface(window, NIL)
+					END
+				END;
+				vtblIPS.OnUIDeactivate(obj.oleInPlaceSite, Kernel32.False);
+				EXCL(obj.state, InPlaceActive);
+				vtblIPS.OnInPlaceDeactivate(obj.oleInPlaceSite);
+			END;
+			User32.ShowWindow(obj.win.hWnd, User32.SWHide);
+			OLEObjects.FireEvent(obj, OLEObjects.IDDeactivate)
+		END;
+(*COM.AssignInterface(obj.oleInPlaceSite, NIL);*)
+		RETURN COM.SOk
+	END InPlaceDeactivate;
+
+	PROCEDURE [WINAPI] *UIDeactivate(this: COM.Interface): COM.HRESULT;
+	BEGIN
+Kernel32.Str("IOleInPlaceObject.UIDeactivate"); Kernel32.Ln();
+		RETURN InPlaceDeactivate(this)
+	END UIDeactivate;
+
+	PROCEDURE [WINAPI] *SetObjectRects(this: COM.Interface; VAR lprcPosRect, lprcClipRect: User32.Rect): COM.HRESULT;
+		VAR obj: Object; rcIRect: User32.Rect; rgn: User32.HRgn;
+	BEGIN
+Kernel32.Str("IOleInPlaceObject.SetObjectRects"); Kernel32.Ln();
+		obj := this(COM.ObjectInterface).obj(Object);
+		IF (obj.win.hWnd # Kernel32.NULL) & (InPlaceActive IN obj.state) THEN
+			IF (User32.IntersectRect(rcIRect, lprcPosRect, lprcClipRect) # Kernel32.False) & (User32.EqualRect(rcIRect, lprcPosRect) = Kernel32.False) THEN
+				User32.OffsetRect(rcIRect, -lprcPosRect.left, -lprcPosRect.top);
+				rgn := GDI32.CreateRectRgnIndirect(rcIRect)
+			ELSE
+				rgn := Kernel32.NULL
+			END;
+Kernel32.Str("  ");
+Kernel32.Int(lprcPosRect.left); Kernel32.Str("  "); Kernel32.Int(lprcPosRect.top); Kernel32.Str("  ");
+Kernel32.Int(lprcPosRect.right); Kernel32.Str("  "); Kernel32.Int(lprcPosRect.bottom); Kernel32.Ln();
+			User32.SetWindowRgn(obj.win.hWnd, rgn, Kernel32.True);
+			User32.SetWindowPos(obj.win.hWnd, Kernel32.NULL, lprcPosRect.left, lprcPosRect.top, lprcPosRect.right-lprcPosRect.left, lprcPosRect.bottom-lprcPosRect.top, {User32.SWPNoZOrder, User32.SWPNoActivate})
+		END;
+		IF DeactivateOnKillFocus IN obj.state THEN OnViewChange(obj) END;
+		RETURN COM.SOk
+	END SetObjectRects;
+
+	PROCEDURE [WINAPI] *ReactivateAndUndo(this: COM.Interface): COM.HRESULT;
+	BEGIN
+Kernel32.Str("IOleInPlaceObject.ReactivateAndUndo (NotImpl)"); Kernel32.Ln();
+		RETURN COM.ENotImpl
+	END ReactivateAndUndo;
+
+(* IOleInPlaceActiveObject *)
+
+	PROCEDURE [WINAPI] *TranslateAccelerator(this: COM.Interface; lpmsg: User32.Msg): COM.HRESULT;
+		(* provided by: Dan Parnete *)
+		VAR fobj: Object; lParam: User32.LParam; ch: CHAR;
+	BEGIN
+Kernel32.Str("IOleInPlaceActiveObject.TranslateAccelerator"); Kernel32.Ln();
+		IF lpmsg.wParam= User32.VKTab THEN
+			fobj := this(COM.ObjectInterface).obj(Object);
+			IF lpmsg.message = User32.WMKeyDown THEN
+				ch := Strings.ISOToOberon[lpmsg.wParam];
+				Displays.WriteChar(fobj.win, ch);
+				RETURN COM.STrue
+			ELSIF lpmsg.message = User32.WMChar THEN
+				ch := Strings.ISOToOberon[lpmsg.wParam];
+				lParam := lParam MOD ASH(1, 16);
+				WHILE lParam > 0 DO
+					Displays.WriteChar(fobj.win, ch); DEC(lParam)
+				END;
+				RETURN COM.STrue
+			END
+		END;
+		RETURN COM.SFalse
+	END TranslateAccelerator;
+
+	PROCEDURE [WINAPI] *OnFrameWindowActivate(this: COM.Interface; fActivate: Kernel32.BOOL): COM.HRESULT;
+	BEGIN
+Kernel32.Str("IOleInPlaceActiveObject.OnFrameWindowActivate"); Kernel32.Ln();
+		RETURN COM.SOk
+	END OnFrameWindowActivate;
+
+	PROCEDURE [WINAPI] *OnDocWindowActivate(this: COM.Interface; fActivate: Kernel32.BOOL): COM.HRESULT;
+	BEGIN
+Kernel32.Str("IOleInPlaceActiveObject.OnDocWindowActivate"); Kernel32.Ln();
+		RETURN COM.SOk
+	END OnDocWindowActivate;
+
+	PROCEDURE [WINAPI] *ResizeBorder(this: COM.Interface; prcBorder: User32.Rect; pUIWindow: COM.Interface; fFrameWindow: Kernel32.BOOL): COM.HRESULT;
+	BEGIN
+Kernel32.Str("IOleInPlaceActiveObject.ResizeBorder (NotImpl)"); Kernel32.Ln();
+		RETURN COM.ENotImpl
+	END ResizeBorder;
+
+	PROCEDURE [WINAPI] *EnableModeless(this: COM.Interface; fEnable: Kernel32.BOOL): COM.HRESULT;
+	BEGIN
+Kernel32.Str("IOleInPlaceActiveObject.EnableModeless (NotImpl)"); Kernel32.Ln();
+		RETURN COM.ENotImpl
+	END EnableModeless;
+
+(* IOleControl *)
+
+	PROCEDURE [WINAPI] *GetControlInfo(this: COM.Interface; VAR pCI: OLE.ControlInfo): COM.HRESULT;
+	BEGIN
+Kernel32.Str("IOleControl.GetControlInfo"); Kernel32.Ln();
+		pCI.cb := SIZE(OLE.ControlInfo);
+		pCI.hAccel := Kernel32.NULL;
+		pCI.cAccel := 0;
+		pCI.dwFlags := {OLE.CtrlInfoEatsReturn, OLE.CtrlInfoEatsEscape};
+		RETURN COM.SOk
+	END GetControlInfo;
+
+	PROCEDURE [WINAPI] *OnMnemonic(this: COM.Interface; pMsg: User32.Msg): COM.HRESULT;
+	BEGIN
+Kernel32.Str("IOleControl.OnMnemonic"); Kernel32.Ln();
+		RETURN COM.ENotImpl
+	END OnMnemonic;
+
+	PROCEDURE [WINAPI] *OnAmbientPropertyChange(this: COM.Interface; dispID: OLE.DISPID): COM.HRESULT;
+	BEGIN
+Kernel32.Str("IOleControl.OnAmbientPropertyChange"); Kernel32.Ln();
+		RETURN COM.SOk
+	END OnAmbientPropertyChange;
+
+	PROCEDURE [WINAPI] *FreezeEvents(this: COM.Interface; bFreeze: Kernel32.BOOL): COM.HRESULT;
+	BEGIN
+Kernel32.Str("IOleControl.FreezeEvents"); Kernel32.Ln();
+		RETURN COM.SOk
+	END FreezeEvents;
+
+(* IQuickActivate *)
+
+	PROCEDURE [WINAPI] *QuickActivate(this: COM.Interface; VAR pQaContainer: OLE.QAContainer; VAR pQaControl: OLE.QAControl): COM.HRESULT;
+		VAR guid: COM.GUID; cp: COM.Interface; vtbl: OLE.IConnectionPointVTBL; hr: COM.HRESULT;
+	BEGIN
+Kernel32.Str("IQuickActivate.QuickActivate"); Kernel32.Ln();
+		IF (SYSTEM.ADR(pQaContainer) = Kernel32.NULL) OR (SYSTEM.ADR(pQaControl) = Kernel32.NULL) THEN
+			RETURN COM.EPointer
+		END;
+		SetClientSite(this, pQaContainer.pClientSite);
+		SetAdvise(this, OLE.DVAspectContent, 0, pQaContainer.pAdviseSink);
+		pQaControl.cbSize := SIZE(OLE.QAControl);
+		GetMiscStatus(this, OLE.DVAspectContent, pQaControl.dwMiscStatus);
+		pQaControl.dwViewStatus := 0; (* IViewObjectEx.GetViewStatus *)
+		pQaControl.dwPointerActivationPolicy  := 0; (* IPointerInactive.GetActivationPolicy *)
+		pQaControl.dwEventCookie := 0;
+		IF pQaContainer.pUnkEventSink # NIL THEN
+			OLEObjects.provideClassInfo2VTBL.GetGUID(this, OLE.GUIDKindDefaultSourceDispIID, guid);
+			hr := OLEObjects.FindConnectionPoint(this, guid, cp);
+			IF COM.Succeeded(hr) & (cp # NIL) THEN
+				vtbl := SYSTEM.VAL(OLE.IConnectionPointVTBL, cp.vtbl);
+				vtbl.Advise(cp, pQaContainer.pUnkEventSink, pQaControl.dwEventCookie);
+				COM.AssignInterface(cp, NIL)
+			END
+		END;
+		pQaControl.dwPropNotifyCookie := 0;
+		IF pQaContainer.pPropertyNotifySink # NIL THEN
+			hr := OLEObjects.FindConnectionPoint(this, OLE.IIDIPropertyNotifySink, cp);
+			IF COM.Succeeded(hr) & (cp # NIL) THEN
+				vtbl := SYSTEM.VAL(OLE.IConnectionPointVTBL, cp.vtbl);
+				vtbl.Advise(cp, pQaContainer.pPropertyNotifySink, pQaControl.dwPropNotifyCookie);
+				COM.AssignInterface(cp, NIL)
+			END
+		END;
+		RETURN COM.SOk
+	END QuickActivate;
+
+	PROCEDURE [WINAPI] *SetContentExtent(this: COM.Interface; pSizel: User32.SizeL): COM.HRESULT;
+	BEGIN
+Kernel32.Str("IQuickActivate.SetContentExtent"); Kernel32.Ln();
+		RETURN SetExtent(this, OLE.DVAspectContent, pSizel)
+	END SetContentExtent;
+
+	PROCEDURE [WINAPI] *GetContentExtent(this: COM.Interface; VAR pSizel: User32.SizeL): COM.HRESULT;
+	BEGIN
+Kernel32.Str("IQuickActivate.GetContentExtent"); Kernel32.Ln();
+		RETURN GetExtent(this, OLE.DVAspectContent, pSizel)
+	END GetContentExtent;
+
+(* Class *)
+
+	(** Register a class in the registry. *)
+	PROCEDURE RegisterServer*(class: COM.Class): COM.HRESULT;
+		VAR key, key2: FileDir.FileName; clsid, file: ARRAY 64 OF CHAR; status: LONGINT;
+	BEGIN
+Kernel32.Str("OLEFrames.RegisterServer"); Kernel32.Ln();
+		COM.StringFromGUID(class.clsid, clsid);
+		key := "CLSID\"; Strings.Append(key, clsid); Strings.Append(key, "\Control");
+		Registry.SetKeyValue(Registry.ClassesRoot, key, "", "");
+		Registry.DeleteKeyValue(Registry.ClassesRoot, key, "");
+
+		key := "CLSID\"; Strings.Append(key, clsid); Strings.Append(key, "\Insertable");
+		Registry.SetKeyValue(Registry.ClassesRoot, key, "", "");
+		Registry.DeleteKeyValue(Registry.ClassesRoot, key, "");
+
+		Kernel32.GetModuleFileName(Kernel.hInstance, file, SIZE(FileDir.FileName));
+		Strings.Append(file, ",1");
+		key := "CLSID\"; Strings.Append(key, CLSIDStr); Strings.Append(key, "\ToolboxBitmap32");
+		Registry.SetKeyValue(Registry.ClassesRoot, key, "", file);
+
+		status := OLE.OLEMiscRecomposeOnResize + OLE.OLEMiscInsideOut + OLE.OLEMiscActivateWhenVisible +
+			OLE.OLEMiscRenderingIsDevIndep + OLE.OLEMiscAlwaysRun + OLE.OLEMiscSetClientSiteFirst;
+		key := "CLSID\"; Strings.Append(key, CLSIDStr); Strings.Append(key, "\MiscStatus");
+		Strings.IntToStr(status, file);
+		Registry.SetKeyValue(Registry.ClassesRoot, key, "", file); (* default value *)
+		Strings.IntToStr(OLE.DVAspectContent, file); (* value for DVAspectContent *)
+		Strings.AppendCh(key, "\"); Strings.Append(key, file);
+		Strings.IntToStr(status, file);
+		Registry.SetKeyValue(Registry.ClassesRoot, key, "", file);
+
+		key := "CLSID\"; Strings.Append(key, clsid); Strings.Append(key, "\Implemented Categories\");
+		COM.StringFromGUID(OLE.CATIDInsertable, file);
+		COPY(key, key2); Strings.Append(key2, file);
+		Registry.SetKeyValue(Registry.ClassesRoot, key2, "", "");
+		Registry.DeleteKeyValue(Registry.ClassesRoot, key2, "");
+
+		key := "CLSID\"; Strings.Append(key, clsid); Strings.Append(key, "\Implemented Categories\");
+		COM.StringFromGUID(OLE.CATIDControl, file);
+		COPY(key, key2); Strings.Append(key2, file);
+		Registry.SetKeyValue(Registry.ClassesRoot, key2, "", "");
+		Registry.DeleteKeyValue(Registry.ClassesRoot, key2, "");
+
+		RETURN COM.SOk
+	END RegisterServer;
+
+	PROCEDURE [WINAPI] *ClassRegisterServer(class: COM.Class): COM.HRESULT;
+	BEGIN
+Kernel32.Str("OLEFrames.ClassRegisterServer"); Kernel32.Ln();
+		OLEObjects.RegisterServer(class(OLEObjects.Class), "Oberon.OLEFrames", "Oberon.OLEFrames.1", "ETH Oberon, OLE Frames");
+		RETURN RegisterServer(class)
+	END ClassRegisterServer;
+
+	PROCEDURE [WINAPI] *ClassUnregisterServer(class: COM.Class): COM.HRESULT;
+	BEGIN
+Kernel32.Str("OLEFrames.ClassUnregisterServer"); Kernel32.Ln();
+		OLEObjects.UnregisterServer(class(OLEObjects.Class), "Oberon.OLEFrames", "Oberon.OLEFrames.1");
+		RETURN COM.SOk
+	END ClassUnregisterServer;
+
+	PROCEDURE [WINAPI] *CreateInstance(this: COM.Interface; pUnkOuter: COM.Interface; VAR riid: COM.IID; VAR ppvObject: COM.Interface): COM.HRESULT;
+		VAR class: OLEObjects.Class; obj: Object;
+	BEGIN
+Kernel32.Str("OLEFrames.CreateInstance"); Kernel32.Ln();
+		ppvObject := NIL;
+		IF (pUnkOuter # NIL) & ~COM.IsEqualGUID(riid, COM.IIDIUnknown) THEN
+			RETURN COM.ClassENoAggregation
+		END;
+		class := this(OLEObjects.Class);
+		obj := CreateObject(class, NIL);
+		IF pUnkOuter # NIL THEN
+			obj.unkOuter := pUnkOuter
+		ELSE
+			obj.unkOuter := obj.unknown
+		END;
+		RETURN NDQueryInterface(obj, riid, ppvObject)
+	END CreateInstance;
+
+	(** Register the class of this module with module COM. *)
+	PROCEDURE RegisterThisClass*;
+	BEGIN
+Kernel32.Str("OLEFrames.RegisterThisClass"); Kernel32.Ln();
+		IF class.typeLib = NIL THEN
+			OLEObjects.LoadTypeLib(class, TLBFile)
+		END;
+		OLEObjects.RegisterClass(class)
+	END RegisterThisClass;
+
+	PROCEDURE *createObject(class: COM.Class; data: PTR): COM.Object;
+		VAR F: Display.Frame;
+	BEGIN
+		RegisterThisClass();
+		IF data # NIL THEN
+			F := data(Display.Frame)
+		ELSE
+			F := NIL
+		END;
+		RETURN CreateObject(class(OLEObjects.Class), F)
+	END createObject;
+
+	PROCEDURE *Term();
+	BEGIN
+		OLEObjects.UnregisterClass(class)
+	END Term;
+
+	PROCEDURE Init();
+	BEGIN
+		OLEData.RegisterFormat(GetObjDescData, SetObjDescData, CheckObjDescData, OLE.CFObjectDescriptor, {OLE.TyMedHGlobal});
+	
+		NEW(class); COM.InitClass(class); OLEObjects.frameClass := class;
+		COM.GUIDFromString(CLSIDStr, class.clsid);
+		COM.GUIDFromString(LIBIDStr, class.libid);
+		class.RegisterServer := ClassRegisterServer;
+		class.UnregisterServer := ClassUnregisterServer;
+		class.CanUnloadNow := COM.ClassCanUnloadNow;
+		class.CreateObject := createObject;
+		class.ReleaseObject := ReleaseObject;
+		class.typeLib := NIL; class.clipFormat := OLEObjects.CFObjectLibrary;
+		NEW(classVTBL); class.vtbl := classVTBL;
+		classVTBL^ := OLEObjects.classVTBL^;
+		classVTBL.CreateInstance := CreateInstance;
+		NEW(unknownVTBL);
+		unknownVTBL^ := OLEObjects.unknownVTBL^;
+		unknownVTBL.QueryInterface := NDQueryInterface;
+		NEW(persistStreamInitVTBL);
+		persistStreamInitVTBL^ := OLEObjects.persistStreamInitVTBL^;
+		persistStreamInitVTBL.Load := StrLoad;
+		persistStreamInitVTBL.Save := StrSave;
+		persistStreamInitVTBL.InitNew := StrInitNew;
+		NEW(dataObjectVTBL);
+		dataObjectVTBL^ := OLEObjects.dataObjectVTBL^;
+		dataObjectVTBL.GetDataHere := GetDataHere;
+		dataObjectVTBL.SetData := SetData;
+		NEW(oleObjectVTBL);
+		oleObjectVTBL.QueryInterface := OLEObjects.QueryInterface;
+		oleObjectVTBL.AddRef := OLEObjects.AddRef;
+		oleObjectVTBL.Release := OLEObjects.Release;
+		oleObjectVTBL.SetClientSite := SetClientSite;
+		oleObjectVTBL.GetClientSite := GetClientSite;
+		oleObjectVTBL.SetHostNames := SetHostNames;
+		oleObjectVTBL.Close := Close;
+		oleObjectVTBL.SetMoniker := SetMoniker;
+		oleObjectVTBL.GetMoniker := GetMoniker;
+		oleObjectVTBL.InitFromData := InitFromData;
+		oleObjectVTBL.GetClipboardData := GetClipboardData;
+		oleObjectVTBL.DoVerb := DoVerb;
+		oleObjectVTBL.EnumVerbs := EnumVerbs;
+		oleObjectVTBL.Update := Update;
+		oleObjectVTBL.IsUpToDate := IsUpToDate;
+		oleObjectVTBL.GetUserClassID := GetUserClassID;
+		oleObjectVTBL.GetUserType := GetUserType;
+		oleObjectVTBL.SetExtent := SetExtent;
+		oleObjectVTBL.GetExtent := GetExtent;
+		oleObjectVTBL.Advise := Advise;
+		oleObjectVTBL.Unadvise := Unadvise;
+		oleObjectVTBL.EnumAdvise := EnumAdvise;
+		oleObjectVTBL.GetMiscStatus := GetMiscStatus;
+		oleObjectVTBL.SetColorScheme := SetColorScheme;
+		NEW(viewObject2VTBL);
+		viewObject2VTBL.QueryInterface := OLEObjects.QueryInterface;
+		viewObject2VTBL.AddRef := OLEObjects.AddRef;
+		viewObject2VTBL.Release := OLEObjects.Release;
+		viewObject2VTBL.Draw := Draw;
+		viewObject2VTBL.GetColorSet := GetColorSet;
+		viewObject2VTBL.Freeze := Freeze;
+		viewObject2VTBL.Unfreeze := Unfreeze;
+		viewObject2VTBL.SetAdvise := SetAdvise;
+		viewObject2VTBL.GetAdvise := GetAdvise;
+		viewObject2VTBL.GetExtent := VOGetExtent;
+		NEW(oleInPlaceObjectVTBL);
+		oleInPlaceObjectVTBL.QueryInterface := OLEObjects.QueryInterface;
+		oleInPlaceObjectVTBL.AddRef := OLEObjects.AddRef;
+		oleInPlaceObjectVTBL.Release := OLEObjects.Release;
+		oleInPlaceObjectVTBL.GetWindow := GetWindow;
+		oleInPlaceObjectVTBL.ContextSensitiveHelp := ContextSensitiveHelp;
+		oleInPlaceObjectVTBL.InPlaceDeactivate := InPlaceDeactivate;
+		oleInPlaceObjectVTBL.UIDeactivate := UIDeactivate;
+		oleInPlaceObjectVTBL.SetObjectRects := SetObjectRects;
+		oleInPlaceObjectVTBL.ReactivateAndUndo := ReactivateAndUndo;
+		NEW(oleInPlaceActiveObjectVTBL);
+		oleInPlaceActiveObjectVTBL.QueryInterface := OLEObjects.QueryInterface;
+		oleInPlaceActiveObjectVTBL.AddRef := OLEObjects.AddRef;
+		oleInPlaceActiveObjectVTBL.Release := OLEObjects.Release;
+		oleInPlaceActiveObjectVTBL.GetWindow := GetWindow;
+		oleInPlaceActiveObjectVTBL.ContextSensitiveHelp := ContextSensitiveHelp;
+		oleInPlaceActiveObjectVTBL.TranslateAccelerator := TranslateAccelerator;
+		oleInPlaceActiveObjectVTBL.OnFrameWindowActivate := OnFrameWindowActivate;
+		oleInPlaceActiveObjectVTBL.OnDocWindowActivate := OnDocWindowActivate;
+		oleInPlaceActiveObjectVTBL.ResizeBorder := ResizeBorder;
+		oleInPlaceActiveObjectVTBL.EnableModeless := EnableModeless;
+		NEW(oleControlVTBL);
+		oleControlVTBL.QueryInterface := OLEObjects.QueryInterface;
+		oleControlVTBL.AddRef := OLEObjects.AddRef;
+		oleControlVTBL.Release := OLEObjects.Release;
+		oleControlVTBL.GetControlInfo := GetControlInfo;
+		oleControlVTBL.OnMnemonic := OnMnemonic;
+		oleControlVTBL.OnAmbientPropertyChange := OnAmbientPropertyChange;
+		oleControlVTBL.FreezeEvents := FreezeEvents;
+		NEW(quickActivateVTBL);
+		quickActivateVTBL.QueryInterface := OLEObjects.QueryInterface;
+		quickActivateVTBL.AddRef := OLEObjects.AddRef;
+		quickActivateVTBL.Release := OLEObjects.Release;
+		quickActivateVTBL.QuickActivate := QuickActivate;
+		quickActivateVTBL.SetContentExtent := SetContentExtent;
+		quickActivateVTBL.GetContentExtent := GetContentExtent;
+		Modules.InstallTermHandler(Term)
+	END Init;
+
+BEGIN
+	Init()
+END OLEFrames.
