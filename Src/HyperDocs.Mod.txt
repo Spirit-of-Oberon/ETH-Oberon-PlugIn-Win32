@@ -1,21 +1,20 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE HyperDocs; (* ejz,  *)
-	IMPORT Registry, Files, BTrees, Strings, Objects, Display3, Fonts, Texts, Oberon, Attributes, Links,
+MODULE HyperDocs; (** portable *)	(* ejz,  *)
+	IMPORT Files, BTrees, Strings, Objects, Display3, Fonts, Texts, Oberon, Attributes, Links,
 		Modules, Gadgets, TextGadgets0, TextGadgets, Documents, Desktops, Pictures, Display, MIME;
 
 (** Module HyperDocs allows to build links between any documents. Documents are either documents on the
@@ -123,6 +122,7 @@ MODULE HyperDocs; (* ejz,  *)
 		linkBeg, linkEnd: LONGINT;
 		linkF: Gadgets.Frame;
 		docW*, docH*: INTEGER;
+		keepurls: BOOLEAN;
 
 	PROCEDURE HexVal(ch: CHAR): INTEGER;
 	BEGIN
@@ -191,22 +191,14 @@ MODULE HyperDocs; (* ejz,  *)
 			l: LinkScheme;
 			gen: ARRAY 64 OF CHAR;
 			obj: Objects.Object;
+			S: Texts.Scanner;
 	BEGIN
 		Strings.Lower(prefix, prefix); l := linkSchemes;
 		WHILE (l # NIL) & (l.prefix # prefix) DO
 			l := l.next
 		END;
 		IF l = NIL THEN
-(* Win *) (* Mac *)
-			Registry.Get("LinkSchemes", prefix, gen);
-			IF (gen # "") & (Registry.res = Registry.Done) THEN
-				obj := Gadgets.CreateObject(gen);
-				IF (obj # NIL) & (obj IS LinkScheme) THEN
-					l := obj(LinkScheme); COPY(prefix, l.prefix);
-					l.next := linkSchemes; linkSchemes := l
-				END
-			END
-(* gen := "LinkSchemes."; Strings.Append(gen, prefix);
+			gen := "LinkSchemes."; Strings.Append(gen, prefix);
 			Oberon.OpenScanner(S, gen);
 			IF S.class IN {Texts.Name, Texts.String} THEN
 				obj := Gadgets.CreateObject(S.s);
@@ -214,7 +206,7 @@ MODULE HyperDocs; (* ejz,  *)
 					l := obj(LinkScheme); COPY(prefix, l.prefix);
 					l.next := linkSchemes; linkSchemes := l
 				END
-			END *)
+			END
 		END;
 		RETURN l
 	END LinkSchemeByPrefix;
@@ -1527,13 +1519,14 @@ MODULE HyperDocs; (* ejz,  *)
 			R: Files.Rider;
 			org: LONGINT;
 			W: Texts.Writer;
-			res: INTEGER;
 	BEGIN
 		linksFile := Files.Old("URL.DB");
 		IF (linksFile = NIL) OR new THEN
-			Texts.OpenWriter(W);
-			Texts.WriteString(W, "HyperDocs: creating new URL.DB"); 
-			Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf);
+			IF keepurls THEN
+				Texts.OpenWriter(W);
+				Texts.WriteString(W, "HyperDocs: Creating URL.DB"); 
+				Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
+			END;
 			linksFile := Files.New("URL.DB");
 			Files.Set(R, linksFile, 0);
 			curKey := 0; Files.WriteLInt(R, -curKey-1);
@@ -1542,13 +1535,11 @@ MODULE HyperDocs; (* ejz,  *)
 			org := Files.Length(linksFile);
 			keysIndex := BTrees.NewLInt(linksFile, org, 100);
 			Files.Set(R, linksFile, 4);
-			Files.WriteLInt(R, 12); Files.WriteLInt(R, org);
-			Files.Register(linksFile)
+			Files.WriteLInt(R, 12); Files.WriteLInt(R, org)
 		ELSE
 			Files.Set(R, linksFile, 0);
 			Files.ReadLInt(R, curKey);
-			IF curKey < 0 THEN
-				Files.Rename("URL.DB", "URL.DB.Bak", res);
+			IF (curKey < 0) OR ~keepurls THEN
 				InitIndex(TRUE)
 			ELSE
 				Files.Set(R, linksFile, 0);
@@ -1564,13 +1555,34 @@ MODULE HyperDocs; (* ejz,  *)
 	PROCEDURE *FreeMod();
 		VAR R: Files.Rider;
 	BEGIN
-		Files.Set(R, linksFile, 0);
-		Files.WriteLInt(R, curKey);
-		BTrees.Flush(linksIndex); BTrees.Flush(keysIndex);
-		Files.Close(linksFile)
+		IF keepurls THEN
+			Files.Set(R, linksFile, 0);
+			Files.WriteLInt(R, curKey);
+			BTrees.Flush(linksIndex); 
+			BTrees.Flush(keysIndex);
+			Files.Register(linksFile)
+		END
 	END FreeMod;
 
+	PROCEDURE Init;
+		VAR S: Texts.Scanner; W: Texts.Writer;
+	BEGIN
+		Oberon.OpenScanner(S, "LinkSchemes");
+		IF S.class = Texts.Inval THEN
+			Texts.OpenWriter(W);
+			Texts.WriteString(W, "Oberon.Text - LinkSchemes not found");
+			Texts.WriteLn(W);  Texts.Append(Oberon.Log, W.buf)
+		END;
+		Oberon.OpenScanner(S, "NetSystem.KeepURLs");
+		IF (S.class = Texts.Name) OR (S.class = Texts.String) THEN
+			keepurls := CAP(S.s[0]) = "Y"
+		ELSE
+			keepurls := FALSE
+		END
+	END Init;
+
 BEGIN
+	Init;
 	linkSchemes := NIL;
 	curKey := 0; diskCache := Files.New("");
 	InitIndex(FALSE);
@@ -1584,5 +1596,5 @@ BEGIN
 	linkPictMethods.Background := Background;
 	ClearCache();
 	Modules.InstallTermHandler(FreeMod);
-	docW := Oberon.SystemTrack(0)-Oberon.UserTrack(0); docH := Display.Height-Desktops.menuH
+	docW := Display.Width*5 DIV 8; docH := Display.Height*7 DIV 8
 END HyperDocs.

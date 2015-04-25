@@ -1,0 +1,2537 @@
+﻿(* OBERON System 3, Release 2.3.
+
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE OPLL; (** non-portable / source: Win32.OPLL.Mod *)	(* NM 19.6.94 / tk 6.7.96 *)
+(*
+	code generator for Intel i386, i387/ i486 - Diplomarbeit ETH-Zürich WS 92/93
+	by Niklaus Mannhart, 87-913-117I
+	author's address: 	Himmelrich 22
+		6340 Baar, Switzerland
+		e-mail: mannhart@inf.ethz.ch	phone: +41 (0)42 31 40 33
+
+This program is distributed in the hope that it will be useful, 
+but WITHOUT ANY WARRANTY; without even the implied warranty of 
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+	March the 2nd 1993
+	Release 12.12.93 / Release 1.0 
+	Release 12.1.94 / Release 1.1 (fixed: bugs in LoadProc and floating point compare (FloadCmp))
+	Release 13.3.94 / Release 1.2 (fixed: bugs in PushRegs (floating point registers))
+	Release 23.6.94  /  Release 1.3 (fixed: bug in register allocation of movsx, movsz, PushRegs with floating point)
+	Release 30.8.94 / 1.4 (array of chars are included in ref section regardless of their length)
+	Release 8.5.94 / 1.5 (register allocator bug in imul (i*j DIV k didn't work))
+	6.7.96	Method support (mfix) 
+*)
+
+IMPORT
+	PLT := OPLT, PLO := OPLO, Modules, SYSTEM;
+	
+CONST 
+
+	(* integer *)
+	ld* = 32;	ldbdw* = 64;	ldwdw* = 96;	ldbw* = 128;	
+	ldbdwu* = 160;	ldwdwu* = 196;	ldbwu* = 224;	getReg* = 256 ;
+	putReg* = 288;	ldProc* = 320;	ldXProc* = 352;	lea* = 384;	
+	store* = 416;	push* = 448;	pop* = 480;	add* = 512;	
+	sub* = 544;	mul* = 576;	div* = 608;	mod* = 640;	
+	neg*= 960;	abs* = 992;	cmp* = 1056;	je* = 1504;	
+	jne* = 1536;	jl* = 1568;	jle* = 1600;	jg* = 1632;	
+	jge* = 1664;	ja* = 1696;	jae* = 1728;	jb* = 1760;	
+	jbe* = 1792;	jc* = 1824;	jnc* = 1856;	jmp* = 1888;	
+	jmpReg* = 1920;	sete* = 1120;	setne* = 1152;	setl* = 1184;	
+	setle* = 1216;	setg* = 1248;	setge* = 1280;	seta* = 1312;	
+	setae* = 1344;	setb* = 1376;	setbe* = 1408;	setc* = 1440;	
+	setnc* = 1472;	te* = 1952;	tne* = 1984;	tle* = 2944;
+	ta* = 2016;	tae* = 2880;	to* = 2912;	
+	trap* = 2048;	or* = 672;	xor* = 704;	and* = 736;	
+	not* = 1024;	bt* = 1088;	btr* = 768;	bts* = 800;	
+	call* = 2080;	callReg* = 2112;	xcall* = 2144;	ret* = 2176;	
+	enter* = 2208;	leave* = 2240;	sal* = 832;	sar* = 864;	
+	shr* = 896;	rol* = 928;	cld* = 2272;	repMovs* = 2304;	
+	cmpString* = 2336;	pushReg* = 2368;	popReg* = 2400;	case* = 2432;	
+	short* = 2976;	phi* = 2464;	label* = 2496;	entier* = 3104;
+
+	(* floating point *)
+	fload*= 2528;	fstore* = 2560;	fist*= 2592;	fild* = 2624;
+	fadd* = 2656;	fsub* = 2688;	fmul* = 2720;	fdiv* = 2752;
+	fabs* = 2784;	fchs* = 2816;	fcmp* = 2848;
+	
+	newStat* = 3136;
+
+	(* short form *)
+	Ld = ld DIV 32;	Ldbdw = ldbdw DIV 32;	Ldwdw = ldwdw DIV 32;	Ldbw = ldbw DIV 32;	
+	Ldbdwu* = ldbdwu DIV 32;	Ldwdwu* = ldwdwu DIV 32;   Ldbwu* = ldbwu DIV 32;	GETreg* = getReg DIV 32;
+	PUTreg* = putReg DIV 32;	LdProc = ldProc DIV 32;	LdXProc = ldXProc DIV 32;	Lea = lea DIV 32;	
+	Sto = store DIV 32;	Push = push DIV 32;	Pop = pop DIV 32;	Add = add DIV 32;	
+	Sub = sub DIV 32;	Mul = mul DIV 32;	Div = div DIV 32;	Mod = mod DIV 32;	
+	Neg= neg DIV 32;	Abso = abs DIV 32;	Cmp = cmp DIV 32;	Je = je DIV 32;	
+	Jnc = jnc DIV 32;	Jmp = jmp DIV 32;	JmpReg = jmpReg DIV 32;	Sete = sete DIV 32;	
+	Setnc = setnc DIV 32;	Te = te DIV 32;	Tne = tne DIV 32;	Tle = tle DIV 32;
+	Ta = ta DIV 32;	Tae = tae DIV 32;	To = to DIV 32;
+	Trap = trap DIV 32;	oR = or DIV 32;	Xor = xor DIV 32;	And = and DIV 32;	
+	Not = not DIV 32;	Bt = bt DIV 32;	Btr = btr DIV 32;	Bts = bts DIV 32;	
+	Call = call DIV 32;	CallReg = callReg DIV 32;	Xcall = xcall DIV 32;	Ret = ret DIV 32;	
+	Enter = enter DIV 32;	Leave = leave DIV 32;	Sal = sal DIV 32;	Sar = sar DIV 32;	
+	Shr= shr DIV 32;	Rol = rol DIV 32;	Cld = cld DIV 32;	RepMovs = repMovs DIV 32; 
+	CmpString = cmpString DIV 32; PushReg = pushReg DIV 32;	PopReg = popReg DIV 32;	Case= case DIV 32;
+	Short* = short DIV 32;	Phi = phi DIV 32 ;	Label = label DIV 32;	Entier = entier DIV 32;
+
+	(* floating point *)
+	FLoad= fload DIV 32;	FStore = fstore DIV 32;	Fist= fist DIV 32;	Fild = fild DIV 32;
+	Fadd = fadd DIV 32;	Fsub = fsub DIV 32;	Fmul = fmul DIV 32;	Fdiv = fdiv DIV 32;
+	Fabs= fabs DIV 32;	Fchs = fchs DIV 32;	Fcmp = fcmp DIV 32;
+
+	NewStat = newStat DIV 32;
+	
+	(* hints for the pseudo machine *)
+	noHint* = -1;
+	useEAX* = 0; useECX* = 1; useEDX* = 2; useEBX* = 3;  useESP* = 4;
+	useEBP* = 5; useESI* = 6; useEDI* = 7; useST* = 8;
+	tryEAX* = 16; tryECX* = 17; tryEDX* = 18; tryEBX* = 19;
+	tryESI* = 22; tryEDI* = 23;
+
+	useReg = {useEAX, useECX, useEDX, useEBX, useESP, useEBP, useESI, useEDI};
+	tryReg = {tryEAX, tryECX, tryEDX, tryEBX, tryESI, tryEDI};
+
+	(* pseudo register *)
+	none* = -1; RiscFP* = -2; RiscESP* = -3;
+
+	(* Traps *)
+		WithTrap* = 15; CaseTrap* = 16; FuncTrap* = 17; EqualGuardTrap* = 18; GuardTrap* = 19;
+		OverflowTrap* = 20; RangeTrap* = 21; DimTrap* = 22;
+		nofTrapFixups = 8;	(* trap 15..22 *)
+
+	BUG = 41;
+
+	SplittableReg = {PLO.EAX, PLO.ECX, PLO.EDX, PLO.EBX, PLO.AX, PLO.CX, PLO.DX, PLO.BX};
+
+	free = -1; Occupied = MIN (INTEGER); Splitted = Occupied + 1; (* Register *) 
+
+	(* GenSetcc *)
+	SETB = 2; SETAE = 3; SETNB = 3; SETE = 4; SETNE = 5; SETBE = 6; SETA = 7; SETL = 12; SETGE = 13; SETLE = 14; SETG = 15;
+
+	RiscCodeLen* = 7000;
+	RefLen = 16384;
+	
+	Nil* = -1;	(* for Instr[..].pc initialization *)
+
+	MaxRecs = 64 ;	(* maximum records *)
+	MaxPtrs	= 512;	(* maximum pointers *)
+	MaxEntry 	= 256;	(* maximum entrys *)
+	MaxSaveLevel = 32;	(* maximum register pops *)
+	
+	ExtTabWordSize = 16;
+	Tag0WordOffset = -2;
+	Mth0WordOffset = Tag0WordOffset - ExtTabWordSize;
+	
+	MaxAdr = 7FFFFFFFH;	(* OPM.MaxLInt *)
+	MinAdr = 80000000H;	(* OPM.MinLInt *)
+	
+	VarParSize = 4;	(* OPM.PointerSize *)
+	RecVarParSize = 8;	(* push ADR(rec); push TAG(reg) *)
+	PointerSize = 4;
+	ProcSize = 4;
+	ExtProcOff = 8;	(* parameter offset of external procedures *)
+	LProcOffSL 	= 12; 	(* parameter offset with static link *)
+	LProcOff 	= 8; 	(* parameter offset without static link *)
+	
+	Var = 1; Par = 2; VarPar = 3; TypDynArr = 8; TypArray = 9; TypPointer = 10; TypRecord = 11;
+	TypProcTyp = 12;
+	
+	(* item/object modes *)
+	Fld = 5; LProc = 6; XProc = 7; CProc = 9; TProc = 14;
+
+	(* structure forms *)
+	Undef = 0; Byte = 1; Char = 3;
+	LReal = 8; Set = 9; NilTyp = 11; NoTyp = 12; Pointer = 13; ProcTyp = 14;
+
+	(* composite structure forms *)
+	Array = 2; DynArr = 3; Record = 4;
+
+TYPE
+	Labels* = INTEGER;
+
+	Node* = POINTER TO NodeDesc;
+	NodeDesc* = RECORD
+		left*, right*: Node;
+		tag*: LONGINT;
+		flag*, subflg*: SHORTINT;
+		typ*: PLT.Struct; obj*: PLT.Object;
+		safe*, global*: BOOLEAN;
+		from*, to*: Labels;
+(*		filler*: LONGINT *)
+	END;
+
+	WeakNode* = LONGINT; (* -> now we can define Intr static *)
+	Instruction* = RECORD 
+		scale*, reg*: SHORTINT;
+		op*: INTEGER;
+		dest*, src1*, src2*, inx*, pc*, hint*: LONGINT; (* pc: PC on the target machine, used for jumps *)
+		link*, used*: INTEGER;
+		node*: WeakNode;
+	END;
+
+	SavedRegRec = RECORD
+		reg, sreg, freg: ARRAY 8 OF INTEGER
+	END;
+
+VAR
+	ptrinit*: BOOLEAN; (* pointer initialization: initialized by OPC *)
+	ConstErr, RegErr: BOOLEAN;
+	ftop: SHORTINT;	(* floating point top of stack *)
+	FreeRegDisp: SHORTINT;
+	nofEntries*: INTEGER;
+	nofrecs*, nofSavedLevel: INTEGER;
+	refSize*: LONGINT;
+	linkTable: LONGINT;
+	refs*: ARRAY RefLen OF CHAR;
+	JmpConvert: ARRAY Jnc-Je+1 OF SHORTINT;
+	SetccConvert: ARRAY Setnc - Sete + 1 OF SHORTINT;
+	entry*: ARRAY MaxEntry OF INTEGER;	(* entry table *)
+	ptrTab*: ARRAY MaxPtrs OF LONGINT;	(* pointer table *)
+	regTab, sregTab, fregTab: ARRAY 8 OF LONGINT;	(* regTab: 32/16 bit: sregTab: 8 Bit; fregTab: floating points *)
+	trapFixupTab: ARRAY nofTrapFixups OF LONGINT;
+	Instr*:  POINTER TO ARRAY OF Instruction; (* Pseudo Code *)
+	savedRegs: ARRAY MaxSaveLevel OF SavedRegRec;
+	recTab*: ARRAY MaxRecs OF PLT.Struct;
+	noftyp: INTEGER; typs: ARRAY 256 OF PLT.Struct;
+	fixProc*: PLT.Object;
+	
+(* size and adr *)
+
+PROCEDURE IncAdr(VAR adr: LONGINT; s: LONGINT);
+BEGIN
+	IF (s >= 0) & (adr <= MaxAdr - s) OR (s < 0) & (adr >= MinAdr - s) THEN INC(adr, s)
+	ELSE PLO.Err(242)
+	END
+END IncAdr;
+
+PROCEDURE AlignFld(VAR offset: LONGINT; elemsize: LONGINT);
+(* offset is initialized to base type size, 0 if none *)
+BEGIN
+	IF elemsize >= 4 THEN IncAdr(offset, (-offset) MOD 4)
+	ELSIF elemsize = 2 THEN IncAdr(offset, offset MOD 2)
+	END
+END AlignFld;
+
+PROCEDURE AllocFld(VAR offset, this: LONGINT; elemsize: LONGINT);
+BEGIN
+	this := offset; IncAdr(offset, elemsize)
+END AllocFld;
+
+PROCEDURE AlignRec(VAR size: LONGINT);
+BEGIN 
+	IncAdr(size, (-size) MOD 4)
+END AlignRec;
+
+PROCEDURE AlignPar(VAR elemsize: LONGINT);
+BEGIN 
+	IncAdr(elemsize, (-elemsize) MOD 4)
+END AlignPar;
+
+PROCEDURE AllocPar (VAR adr, this: LONGINT; elemsize: LONGINT);
+BEGIN
+	IncAdr(adr, elemsize); this := adr
+END AllocPar;
+
+PROCEDURE AlignVar*(VAR adr: LONGINT; elemsize: LONGINT);
+BEGIN
+	IF elemsize >= 4 THEN IncAdr(adr, - (adr MOD 4))
+	ELSIF elemsize = 2 THEN IncAdr(adr, - (adr MOD 2))
+	END
+END AlignVar;
+
+PROCEDURE AllocVar*(VAR adr, this: LONGINT; elemsize: LONGINT);
+BEGIN
+	IncAdr(adr, -elemsize); this := adr
+END AllocVar;
+
+PROCEDURE AlignBlock(adr: LONGINT; VAR dsize: LONGINT);
+BEGIN 
+	IncAdr(adr, - (adr MOD 4)); dsize := -adr
+END AlignBlock;
+
+PROCEDURE ^ ParamAdr*(VAR firstPar: PLT.Object);
+
+PROCEDURE TypSize*(typ : PLT.Struct);
+VAR
+	f, c, nofptr: INTEGER; offset, size: LONGINT;
+	btyp: PLT.Struct; fld: PLT.Object;
+BEGIN
+	IF typ.size < 0 THEN
+		f := typ.form; c := typ.comp; btyp := typ.BaseTyp;
+		IF c = Record THEN 
+			fld := typ.dsc;
+			IF btyp = NIL THEN nofptr := 0; offset := 0
+			ELSE TypSize(btyp); typ.extlev := btyp.extlev + 1; nofptr := btyp.nofptr; offset := btyp.size (* eb, 17.11.95: ;base := btyp.align *)
+			END;
+			WHILE (fld # NIL) & (fld.mode = Fld) DO
+				btyp := fld.typ; 
+				IF btyp # NIL THEN
+					TypSize(btyp);
+					size := btyp.size;
+					WHILE btyp.comp = Array DO btyp := btyp.BaseTyp END;
+					AlignFld(offset, btyp.size);
+					AllocFld(offset, fld.adr, size);
+					INC(nofptr, btyp.nofptr);
+				END;
+				fld := fld.nxtobj
+			END;
+			AlignRec(offset);
+			typ.size := offset; typ.nofptr := nofptr;
+			WHILE fld#NIL DO	(* Methods / mfix *)
+				ParamAdr(fld);
+				IF fld.adr MOD 10000H = 0 THEN	(* entno *)
+					INC(fld.adr, LONG(nofEntries)); INC(nofEntries)
+				END;
+				fld := fld.nxtobj;
+			END;
+		ELSIF f = Pointer THEN typ.size := PointerSize; typ.nofptr := 1
+		ELSIF c = Array THEN
+			TypSize(btyp);
+			typ.size := typ.n*btyp.size;
+			typ.nofptr := SHORT(typ.n*btyp.nofptr)
+		ELSIF f = ProcTyp THEN typ.size := ProcSize; TypSize(btyp);
+		ELSE (* c = DynArr *)
+			TypSize(btyp);
+			IF btyp.comp = DynArr THEN typ.size := btyp.size + 4; typ.offset := btyp.offset + 4
+			ELSE typ.size := 8; typ.offset := 4
+			END
+		END
+	END;
+END TypSize;
+
+PROCEDURE AllocConst* (VAR s: ARRAY OF SYSTEM.BYTE; len, align: LONGINT; VAR adr: LONGINT);
+VAR fill: LONGINT;
+BEGIN
+	IF ~ConstErr THEN
+		adr := PLO.dsize;
+		(* may cause problems with defined constants *)
+		PLO.dsize := PLO.dsize + len;
+		fill := (-len) MOD align;
+		IF PLO.dsize + fill > PLO.ConstLength + PLO.DataLength THEN
+			PLO.Err (230); ConstErr := TRUE
+		ELSE
+			WHILE fill > 0 DO
+				PLO.data [PLO.dsize] := 0X; INC (PLO.dsize);
+				DEC (fill)
+			END;
+			SYSTEM.MOVE (SYSTEM.ADR (s[0]), SYSTEM.ADR (PLO.data [adr]), len);
+			adr := SYSTEM.ADR(PLO.data[adr]);
+		END
+	ELSE adr := 0
+	END
+END AllocConst;
+
+PROCEDURE FindPtrs*(typ: PLT.Struct; adr: LONGINT; VAR nofptrs: INTEGER);
+	VAR
+		fld: PLT.Object;
+		i, n, s: LONGINT;
+		btyp: PLT.Struct;
+BEGIN
+	IF typ.form = Pointer THEN
+		IF (* (typ.sysflag=0) & ejz *) (nofptrs < MaxPtrs) THEN 
+			ptrTab[nofptrs] := adr; 
+			INC (nofptrs)
+		END
+	ELSIF typ.comp = Record THEN
+		btyp := typ.BaseTyp;
+		IF btyp # NIL THEN FindPtrs (btyp, adr, nofptrs) END;
+		fld := typ.dsc;
+		WHILE (fld # NIL) & (fld.mode = Fld) DO
+			FindPtrs (fld.typ, fld.adr + adr, nofptrs);
+			fld := fld.nxtobj
+		END
+	ELSIF typ.comp = Array THEN
+		btyp := typ.BaseTyp; n := typ.n;
+		WHILE btyp.comp = Array DO
+			n := btyp.n * n;
+			btyp := btyp.BaseTyp
+		END;
+		IF (btyp.form = Pointer) OR (btyp.comp = Record) THEN
+			i := 0; s := btyp.size;
+			WHILE i < n DO 
+				FindPtrs (btyp, i * s + adr, nofptrs);
+				INC (i)
+			END
+		END
+	END
+END FindPtrs;
+
+PROCEDURE AllocTypDesc (typ: PLT.Struct);
+(* typ.tdadr = entryNr adr *)
+	TYPE TDesc = POINTER TO RECORD word: ARRAY 32000 OF LONGINT END;
+	VAR nil, tag, root, tdsize, relAdr, k: LONGINT; i, nofptrs, extlev: INTEGER; btyp: PLT.Struct; ch: CHAR;
+		td: TDesc;  
+		
+BEGIN
+	ASSERT (typ.comp IN {Record, Array});
+	IF typ.comp = Record THEN
+		IF typ.tdadr = 0 THEN
+			typ.strobj.linkadr := -1;
+			btyp := typ.BaseTyp;
+			IF btyp # NIL THEN AllocTypDesc(btyp) END;
+
+			nil := 0; AllocConst(nil, 4, 4, relAdr);
+
+			typs[noftyp] := typ; INC(noftyp);
+			FindPtrs(typ, 0, nofptrs); 
+			
+			root := 13 + typ.n (* nof methods *) + ExtTabWordSize + 1; INC(root, (-root+2) MOD 4);
+			tdsize := (root + 1 + nofptrs + 1) * 4; SYSTEM.NEW(td, tdsize - 24);
+			IF td = NIL THEN HALT(99) END;
+			
+			DEC(SYSTEM.VAL(LONGINT, td), 24);
+			td.word[0] := tdsize;
+			td.word[1] := -4;	(* sentinel *)
+			td.word[2] := SYSTEM.ADR(td.word[root]);	(* self *)
+			td.word[3] := typ.extlev;	 (* extlev *)
+			
+			k := SYSTEM.ADR(td.word[4]); i := 0;
+			REPEAT ch := typ.strobj.name[i]; SYSTEM.PUT(k, ch); INC(i); INC(k) UNTIL ch = 0X;
+			td.word[12] := SYSTEM.ADR(typ.mod^);
+						
+			td.word[root - 1] := SYSTEM.ADR(td.word[0]);	(* tag of subobj *)
+			td.word[root] := typ.size;
+			typ.tdadr := SYSTEM.ADR(td.word[root]);
+			SYSTEM.PUT(relAdr, typ.tdadr);
+			typ.strobj.lim := relAdr; (* SYSTEM.ADR(PLO.data[0]); *)
+			
+			(* Base Types *)
+			IF btyp # NIL THEN
+				SYSTEM.GET(btyp.tdadr + Tag0WordOffset*4, tag); extlev := 0;
+				WHILE tag # 0 DO
+					td.word[root + Tag0WordOffset - extlev] := tag;
+					INC(extlev);
+					SYSTEM.GET(btyp.tdadr + (Tag0WordOffset - extlev)*4, tag)
+				END
+			END;
+			td.word[root + Tag0WordOffset - typ.extlev] := typ.tdadr;	(* own type tag *)
+			
+			(* Pointers *)
+			i := 0; WHILE i < nofptrs DO td.word[root+1+i] := ptrTab[i]; INC(i) END;
+			td.word[root+1+nofptrs] := -(nofptrs+1)*4; 	(* sentinel *)
+
+		END
+	END (* no typ desc for arrays *)
+END AllocTypDesc;
+
+PROCEDURE FixTypeDescs;
+	VAR NewMthTab: ARRAY MaxEntry OF PLT.Object; nofnewmth, mthno, mentno: INTEGER;
+		i, j: INTEGER; typ, btyp: PLT.Struct; adr: LONGINT;
+		
+	PROCEDURE FindNewMths (obj: PLT.Object);
+	BEGIN
+		WHILE obj # NIL DO
+			IF obj^.mode = TProc THEN NewMthTab[nofnewmth] := obj; INC(nofnewmth) END ;
+			obj := obj.nxtobj;
+		END
+	END FindNewMths;		
+		
+BEGIN
+	i := 0; WHILE i < noftyp DO
+		typ := typs[i]; btyp := typ.BaseTyp;
+		(* Methods *)
+		j := 0; WHILE j < typ.n DO SYSTEM.PUT(typ.tdadr + (Mth0WordOffset - j)*4, LONG(LONG(-1))); INC(j) END; 
+		IF btyp # NIL THEN
+			j := 0; WHILE j < btyp.n DO 
+				SYSTEM.GET(btyp.tdadr + (Mth0WordOffset - j)*4, adr);
+				SYSTEM.PUT(typ.tdadr + (Mth0WordOffset - j)*4, adr);
+				INC(j)
+			END
+		END;
+		nofnewmth := 0; FindNewMths(typ.dsc);
+		j := 0; WHILE j < nofnewmth DO
+			mthno := SHORT(NewMthTab[j].adr DIV 10000H);
+			mentno := SHORT(NewMthTab[j].adr MOD 10000H);
+			adr := typ.mod.entries[mentno]; 
+			SYSTEM.PUT(typ.tdadr + (Mth0WordOffset - mthno)*4, adr);  
+			INC(j)
+		END;
+		typs[i] := NIL;
+		INC(i)
+	END
+END FixTypeDescs;
+
+PROCEDURE AllocLinkTable*(noMod: LONGINT);
+VAR x: ARRAY 32 OF LONGINT; i: LONGINT;
+BEGIN
+	i := 0; WHILE i < 32 DO x[i] := 0; INC(i) END;
+	AllocConst(x, noMod*4, 4, linkTable)
+END AllocLinkTable;
+
+PROCEDURE ParamAdr*(VAR firstPar: PLT.Object);
+	VAR
+		par, parOld: PLT.Object; typ: PLT.Struct; adr, 
+		psize, dsize, s: LONGINT; stop: BOOLEAN;
+BEGIN
+	IF firstPar.mode = LProc THEN 
+		IF firstPar.level >= 1 THEN psize := LProcOffSL ELSE psize := LProcOff END;
+	ELSE psize := ExtProcOff
+	END;
+	dsize := 0; adr := 0; par := firstPar.par;
+	IF par # NIL THEN
+		stop := FALSE;
+		WHILE par.nxtobj # NIL DO par := par.nxtobj END;
+		WHILE ~stop DO
+			stop := par = firstPar.par;
+			typ := par^.typ; TypSize(typ);
+			IF typ.comp = DynArr THEN s:= typ.size
+			ELSIF (par.mode = VarPar) OR ((typ.size > 4) & (typ.form # LReal)) THEN 
+					(* ValPar (RECORD), size > 4 are equal to VarPar *)
+				IF (typ.comp = Record) & (par.mode = VarPar) THEN s:= RecVarParSize
+				ELSE s:= VarParSize
+				END
+			ELSE s:= typ.size
+			END;
+			AlignPar(s);
+			AllocPar(adr, par^.adr, s); 
+			parOld := par;
+			par := firstPar.par;
+			WHILE ~stop & (par.nxtobj # parOld) DO par := par.nxtobj END
+		END
+	END ;
+	psize := psize + adr;
+	par := firstPar.par;
+	IF par # NIL THEN
+		stop := FALSE;
+		WHILE par.nxtobj # NIL DO par := par.nxtobj END;
+		WHILE ~stop DO
+			stop := par = firstPar.par;
+			par^.adr := psize - par^.adr;
+			IF ((par^.mode = Var) OR (par.mode = Par)) & (par^.typ.comp IN {Array, Record}) THEN
+				(* Value parameter of type ARRAY or RECORD will be copied by the callee *)
+				dsize:= dsize + par^.typ^.size;
+				par.linkadr:= -dsize
+			ELSE par.linkadr:= par.adr
+			END;
+			parOld := par;
+			par := firstPar.par;
+			WHILE ~stop & (par.nxtobj # parOld) DO par := par.nxtobj END
+		END
+	END;
+	firstPar.ival := psize; firstPar.intval2 := -dsize;
+END ParamAdr;
+
+PROCEDURE VarAdr*(var: PLT.Object; VAR varSize: LONGINT);
+VAR
+	adr, size: LONGINT;
+	typ: PLT.Struct;
+BEGIN
+	adr := varSize;
+	WHILE var # NIL DO
+		IF var.mode = Var THEN
+			typ := var.typ; TypSize(typ);
+			size := typ.size;
+			AlignVar(adr, size);
+			AllocVar(adr, var.linkadr, size)
+		END;
+		var := var.nxtobj
+	END;
+	AlignBlock(adr, varSize)
+END VarAdr;
+	
+PROCEDURE Traverse*(obj: PLT.Object);
+	VAR typ: PLT.Struct; tobj: PLT.Object;
+BEGIN
+	tobj := obj;
+	(* calculate type sizes *)
+	WHILE tobj # NIL DO
+		IF tobj.mode IN {TypDynArr, TypArray, TypProcTyp, TypPointer, TypRecord} THEN TypSize(tobj.typ) END;
+		tobj:=tobj.nxtobj
+	END;
+	(* calculate addresses *)
+	WHILE obj # NIL DO 
+		typ := obj.typ;
+		CASE obj.mode OF
+		| TypDynArr: 
+		| TypRecord: IF typ.tdadr = 0 THEN AllocTypDesc(typ) END;
+			IF typ.strobj.linkadr = -1 THEN typ.strobj.linkadr := nofrecs; recTab[nofrecs] := typ; INC(nofrecs) END; 
+		| TypProcTyp: ParamAdr(obj);
+		| LProc, XProc: ParamAdr(obj); obj.linkadr := -1;
+			IF (obj.mode = XProc) & (obj.adr = 0) THEN INC(obj.adr, LONG(nofEntries)); INC(nofEntries)
+			ELSIF obj.mode = LProc THEN obj.adr := -1 END;
+		ELSE
+		END;
+		obj := obj.nxtobj
+	END
+END Traverse;
+
+PROCEDURE AllocGlobalVar*(publics, globals: PLT.Object);
+VAR adr, size, dsize: LONGINT; obj: PLT.Object;
+BEGIN
+	INC(PLO.dsize, -PLO.dsize MOD 4);
+	adr := 0; obj := publics;
+	WHILE obj # NIL DO
+		IF obj.mode = Var THEN
+			(* adr2 := -adr; *)
+			size := obj.typ.size;
+			AlignVar(adr, size);
+			AllocVar(adr, obj.linkadr, size);
+			(* obj.linkadr := adr2 + SYSTEM.ADR(PLO.data[PLO.dsize]); *)
+			obj.adr := -1
+		END;
+		obj := obj.nxtobj
+	END;
+	obj := globals; 
+	WHILE obj # NIL DO
+		IF (obj.mode = Var) & (obj.adr = 0) THEN
+			(* adr2 := -adr; *)
+			size := obj.typ.size;
+			AlignVar(adr, size);
+			AllocVar(adr, obj.linkadr, size);
+			(* obj.linkadr := adr2 + SYSTEM.ADR(PLO.data[PLO.dsize]); *)
+			(* obj.adr := 0 *)
+		ELSIF (obj.mode = Var) THEN obj.adr := 0
+		END;
+		obj := obj.nxtobj
+	END;
+	AlignBlock(adr, dsize); INC(PLO.dsize, dsize);
+	IF PLO.dsize >= (PLO.ConstLength + PLO.DataLength) THEN
+		PLO.DataLength := PLO.dsize + 1024 - (PLO.dsize MOD 1024); PLO.dsize := 0;
+		Modules.DeAllocCodeBlock(SYSTEM.VAL(LONGINT, PLO.data));
+		Modules.AllocCodeBlock(SYSTEM.VAL(LONGINT, PLO.data), PLO.ConstLength + PLO.DataLength);
+		AllocGlobalVar(publics, globals);
+		RETURN
+	END;
+	PLO.sb := SYSTEM.ADR(PLO.data[PLO.dsize]);
+	obj := globals;
+	WHILE obj # NIL DO
+		IF obj.mode = Var THEN obj.linkadr := obj.linkadr + PLO.sb END;
+		obj := obj.nxtobj
+	END
+END AllocGlobalVar;
+
+(* i386 Register *)
+
+PROCEDURE^ GetThisReg (this: SHORTINT);
+
+PROCEDURE GetReg8 (VAR reg: SHORTINT);
+	VAR i: SHORTINT;
+BEGIN
+	i := PLO.EBX;
+	WHILE (i >= PLO.EAX) & ~((regTab[i] = Splitted) & ((sregTab[i] = free) OR (sregTab[i+4] = free))) DO DEC (i) END;
+	IF i < PLO.EAX THEN (* in splitted registers are no 8 bit registers free *)
+		i := PLO.EBX;
+		WHILE (i >= PLO.EAX) & (regTab [i] # free) DO DEC (i) END; (* search a free splittable register *)
+		IF i < PLO.EAX THEN (* no free splittable register *)
+			i := PLO.EBX; (* look for a splittable register which is unsplitted *)
+			WHILE (i >= PLO.EAX) & (regTab [i] = Splitted) DO DEC (i) END;
+			IF i < PLO.EAX THEN
+				PLO.Err (215); RegErr := TRUE;
+				reg := PLO.AL; 
+				RETURN
+			END;
+		END;
+		GetThisReg (i);
+		regTab [i] := Splitted
+	ELSIF sregTab [i] # free THEN INC (i,4)
+	END;
+	sregTab [i] := Occupied;
+	reg := i+PLO.AL
+END GetReg8;
+
+PROCEDURE GetThisReg8 (this: SHORTINT);
+(* this IN {AL..BH} *)
+	VAR i, reg: SHORTINT;
+BEGIN
+	ASSERT (this IN {PLO.AL..PLO.BH});
+	reg := this MOD 4; (* = splitted 32/16 bit register *)
+	IF (regTab [reg] = Splitted) & (sregTab [this-PLO.AL] = free) THEN sregTab [this-PLO.AL] := Occupied
+	ELSIF regTab [reg] # free THEN
+		IF regTab [reg] = Splitted THEN (* 8 bit register is occupied -> move value to another register *)
+			GetReg8 (i);
+			ASSERT (sregTab [this - PLO.AL] >= 0);
+			Instr [sregTab [this-PLO.AL]].reg := i;
+			PLO.GenMOV (PLO.RegReg, i, this, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm);
+			sregTab [i - PLO.AL] := sregTab [this-PLO.AL];
+			sregTab [this-PLO.AL] := Occupied
+		ELSE
+			GetThisReg (reg);
+			(*regTab [i] := Splitted;*)
+			regTab [reg] := Splitted;
+			sregTab [this-PLO.AL] := Occupied
+		END
+	ELSE
+		regTab [reg] := Splitted;
+		sregTab [this-PLO.AL] := Occupied
+	END
+END GetThisReg8;
+
+PROCEDURE GetSplittableReg (VAR reg: SHORTINT);
+(* returns any splittable register -> EBX, EDX, ECX, EAX *)
+	VAR r: SHORTINT;
+BEGIN
+	r := PLO.EBX;
+	WHILE (r >= PLO.EAX) & (regTab [r] # free) DO DEC (r) END;
+	IF r < PLO.EAX THEN
+		r := PLO.EBX;
+		WHILE (r >= PLO.EAX) & (regTab [r] = Splitted) DO DEC (r) END;
+		IF r < PLO.EAX THEN
+			PLO.Err (215); RegErr := TRUE;
+			reg := PLO.EAX;
+			RETURN
+		END;
+		GetThisReg (r)
+	END;
+	regTab [r] := Occupied;
+	reg := r
+END GetSplittableReg;
+
+PROCEDURE GetReg (VAR reg: SHORTINT);
+(* returns any free 32 bit register and marks it as occupied *)
+	VAR r: SHORTINT;
+BEGIN
+	r := PLO.EBX;
+	WHILE (r >= PLO.EAX) & (regTab [r] # free) DO DEC (r) END;
+	IF r < PLO.EAX THEN
+		IF regTab [PLO.EDI] = free THEN r := PLO.EDI
+		ELSIF regTab [PLO.ESI] = free THEN r := PLO.ESI
+		END
+	END;
+	IF r < PLO.EAX THEN
+		PLO.Err (215); RegErr := TRUE;
+		reg := PLO.EAX;
+		RETURN
+	END;
+	regTab [r] := Occupied;
+	reg := r
+END GetReg;
+
+PROCEDURE GetThisReg (this: SHORTINT);
+(* marks 'this' as occupied. If the register is not free it will be moved to any free one (with pReg if necessary) *)
+	VAR 
+		r, reg, r0, r1: SHORTINT;
+		pReg: LONGINT;
+BEGIN
+	ASSERT (this IN {PLO.EAX..PLO.DI});
+	reg := this MOD 8;
+	IF regTab [reg] = Splitted THEN
+		IF (sregTab [reg] = free) OR (sregTab [reg + 4] = free) THEN
+			IF sregTab [reg] = free THEN 
+				r0 := reg + PLO.AL + 4; r1 := reg + 4
+			ELSE 
+				r0 := reg + PLO.AL; r1 := reg
+			END;
+			GetReg8 (r); PLO.GenMOV (PLO.RegReg, r, r0, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm);
+			sregTab [r - PLO.AL] := sregTab [r1]; Instr [sregTab [r1]].reg := r; sregTab [r1] := free
+		ELSE
+			r := PLO.EBX;
+			WHILE (r >= PLO.EAX) & (regTab [r] # free) DO DEC (r) END; (* search any free, splittable register *)
+			IF r < PLO.EAX THEN (* no free splittable register *)
+				GetReg8 (r0); PLO.GenMOV (PLO.RegReg, r0, reg + PLO.AL, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm); (* move lower 8 bit *)
+				GetReg8 (r1); PLO.GenMOV (PLO.RegReg, r1, reg + PLO.AL + 4, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm); 
+					(* move higher 8 bit *)
+			ELSE
+				PLO.GenMOV (PLO.RegReg, r, reg, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm);
+				r0 := r + PLO.AL; r1 := r0 + 4; regTab [r] := Splitted;
+			END;
+			sregTab [r0 - PLO.AL] := sregTab [reg + PLO.AL]; Instr [sregTab [reg + PLO.AL]].reg := r0; sregTab [r0 - PLO.AL] := free;
+			sregTab [r1 - PLO.AL] := sregTab [reg + PLO.AL + 4]; Instr [sregTab [reg + PLO.AL + 4]].reg := r1; sregTab [r1 - PLO.AL] := free
+		END;
+		regTab [reg] := Occupied
+	ELSIF regTab [reg] # free THEN (* conflict *)
+		pReg := regTab [reg];
+		ASSERT (pReg >= 0);
+		GetReg (r); 
+		regTab [r] := pReg;
+		INC (r, SHORT ((Instr[pReg].op MOD 8) * 8));
+		Instr [pReg].reg := r; (* Instr [regTab [reg]].reg = new register *)
+		PLO.GenMOV (PLO.RegReg, r, reg, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm)
+	END;
+	regTab [reg] := Occupied
+END GetThisReg;
+
+PROCEDURE AssignNewReg (pReg: LONGINT);
+(* assigns pReg to any free register *)
+	VAR reg: SHORTINT; size: LONGINT;
+BEGIN
+	size := Instr [pReg].op MOD 8;
+	IF size = 2 THEN (* Byte *)
+		GetReg8 (reg);
+		sregTab [reg-PLO.AL] := pReg
+	ELSE
+		GetReg (reg);
+		regTab [reg] := pReg;
+		IF size = 1 THEN (* Word *) INC (reg, PLO.AX) END
+	END;
+	Instr [pReg].reg := reg
+END AssignNewReg;
+
+PROCEDURE AssignThisReg (pReg: LONGINT; this: SHORTINT);
+(* assigns pReg to the register 'this'. 'this' will be moved to another register if it is occupied *)
+BEGIN
+	IF this IN {PLO.AL..PLO.BH} THEN
+		GetThisReg8 (this);
+		sregTab [this-PLO.AL] := pReg
+	ELSIF ~(this IN {PLO.ESP, PLO.SP, PLO.EBP, PLO.BP}) THEN
+		GetThisReg (this);
+		regTab [this MOD 8] := pReg
+	END;
+	Instr [pReg].reg := this
+END AssignThisReg;
+
+PROCEDURE^ LastUse (reg: SHORTINT): BOOLEAN;
+
+PROCEDURE AssignReg (pReg: LONGINT; VAR reg, base, inx: SHORTINT);
+	VAR
+		hint, size, pRegBase, pRegInx, pRegReg: LONGINT;
+BEGIN
+	hint := Instr[pReg].hint; size:= (Instr[pReg].op MOD 8) * 8;
+	ASSERT ((reg = none) OR ((size = PLO.Bit8) & (reg >= PLO.AL)) OR  
+		((size = PLO.Bit16) & (reg >= PLO.AX)) OR ((size = PLO.Bit32) & (reg >= PLO.EAX)));
+	IF hint >= tryEAX THEN
+		IF size = PLO.Bit8 THEN
+			IF sregTab [hint - tryEAX] = free THEN
+				AssignThisReg (pReg, SHORT (SHORT (hint-tryEAX+PLO.Bit8)));
+				RETURN
+			END
+		ELSIF regTab [hint - tryEAX] = free THEN
+			AssignThisReg (pReg, SHORT (SHORT (hint - tryEAX)));
+			RETURN
+		END;
+		hint:= noHint
+	END;
+	IF hint <= noHint THEN
+		IF (reg = none) OR ~LastUse (reg) THEN AssignNewReg (pReg)
+		ELSE Instr[pReg].reg := reg
+		END
+	ELSE
+		IF reg >= PLO.AL THEN pRegReg := sregTab [reg - PLO.AL]
+		ELSIF reg # none THEN pRegReg := regTab [reg MOD 8]
+		END;
+		IF inx >= PLO.AL THEN pRegInx := sregTab [inx - PLO.AL]
+		ELSIF inx # PLO.noInx THEN pRegInx := regTab [inx MOD 8]
+		END;
+		IF base >= PLO.AL THEN pRegBase := sregTab [base - PLO.AL]
+		ELSIF base # PLO.noBase THEN pRegBase := regTab [base MOD 8]
+		END;
+		AssignThisReg (pReg, SHORT (SHORT (hint + size)));
+		IF (reg # none) & (pRegReg >= 0) THEN reg := Instr [pRegReg].reg END;
+		IF (inx # none) & (pRegInx >= 0) THEN inx := Instr [pRegInx].reg END;
+		IF (base # none) & (pRegBase >= 0) THEN base := Instr [pRegBase].reg END
+	END
+END AssignReg;
+
+PROCEDURE FreeReg (reg: SHORTINT);
+(* releases register reg *)
+	VAR i: SHORTINT;
+BEGIN
+	IF (reg > none) & ~(reg IN {PLO.ESP, PLO.SP, PLO.EBP, PLO.BP}) THEN
+		IF reg IN {PLO.AL..PLO.BH} THEN
+			i := reg-PLO.AL;
+			IF sregTab [i] >= 0 THEN Instr [sregTab [i]].reg := -2-reg END;
+			sregTab [i] := free;
+			IF i < 4 THEN
+				IF sregTab [i+4] = free THEN regTab [i] := free (* release 32/16 bit register *) END
+			ELSIF sregTab [i-4] = free THEN regTab [i MOD 4] := free (* release 32/16 bit register *)
+			END;
+		ELSE
+			i := reg MOD 8;
+			IF regTab [i] >= 0 THEN Instr [regTab [i]].reg := -2-reg END;
+			IF i IN {PLO.ESP, PLO.SP, PLO.EBP, PLO.BP} THEN regTab [i] := Occupied
+			ELSE regTab [i] := free
+			END
+		END
+	END
+END FreeReg;
+
+PROCEDURE DecReg (reg: SHORTINT); (* only used by DecCheckReg, Store, GenPush, Gen0, GenFlags *)
+	VAR pReg: LONGINT;
+BEGIN
+	IF reg > none THEN
+		IF reg >= PLO.AL THEN pReg := sregTab [reg-PLO.AL]
+		ELSE pReg := regTab [reg MOD 8]
+		END;
+		IF pReg > none THEN
+			DEC (Instr [pReg].used);
+			IF (Instr [pReg].used = 0) & (Instr [pReg].reg > Nil) THEN FreeReg (Instr [pReg].reg) END
+		END
+	END
+END DecReg;
+
+PROCEDURE DecCheckReg (pReg: LONGINT; src, base, inx: SHORTINT);
+VAR reg, r: SHORTINT;
+	
+	PROCEDURE ReleaseReg (reg: SHORTINT);
+		VAR pReg: LONGINT;
+	BEGIN
+		IF reg > none THEN
+			IF reg >= PLO.AL THEN pReg := sregTab [reg-PLO.AL]
+			ELSE pReg := regTab [reg MOD 8]
+			END;
+			IF pReg > none THEN Instr [pReg].reg := -2-reg END
+		END
+	END ReleaseReg;
+
+	PROCEDURE CheckRegister (reg, src: SHORTINT);
+		VAR s: SHORTINT;
+	BEGIN
+		IF src IN {PLO.AL..PLO.BH} THEN s := src MOD 4
+		ELSE s := src MOD 8
+		END;
+		IF reg IN {PLO.AL..PLO.BH} THEN
+			IF src IN {PLO.AL..PLO.BH} THEN
+				IF reg = src THEN ReleaseReg (src)
+				ELSE DecReg (src)
+				END
+			ELSIF reg MOD 4 = s THEN ReleaseReg (src)
+			ELSE DecReg (src)
+			END
+		ELSIF reg MOD 8 = s THEN ReleaseReg (src)
+		ELSE DecReg (src)
+		END
+	END CheckRegister;
+
+BEGIN
+	reg:= Instr[pReg].reg; 
+	CheckRegister (reg, src);
+	CheckRegister (reg, base);
+	CheckRegister (reg, inx);
+	IF reg >= PLO.AL THEN
+		regTab [reg MOD 4] := Splitted;
+		sregTab [reg - PLO.AL] := pReg
+	ELSIF (reg # none) & ~(reg IN {PLO.ESP, PLO.EBP, PLO.SP, PLO.BP}) THEN
+		r := reg MOD 8;
+		regTab [r] := pReg;
+		IF reg IN SplittableReg THEN
+			sregTab [r] := free; sregTab [r+4] := free
+		END
+	END
+END DecCheckReg;
+
+PROCEDURE loaded (pReg: LONGINT): BOOLEAN;
+BEGIN
+	IF pReg > none THEN RETURN (Instr [pReg].reg > none)
+	ELSE RETURN ((pReg = RiscESP) OR (pReg = RiscFP))
+	END
+END loaded;
+
+PROCEDURE^ Load (VAR instr: Instruction);
+
+PROCEDURE FindReg (pReg: LONGINT; VAR reg: SHORTINT);
+BEGIN
+	ASSERT (loaded (pReg));
+	IF pReg > none THEN reg := Instr [pReg].reg
+	ELSIF pReg = RiscESP THEN reg := PLO.ESP
+	ELSE reg := PLO.EBP
+	END
+END FindReg;
+
+PROCEDURE FindLoadReg (pReg: LONGINT; VAR reg: SHORTINT);
+BEGIN
+	IF pReg > none THEN
+		IF ~loaded (pReg) THEN Load (Instr [pReg]) END;
+		reg := Instr [pReg].reg
+	ELSIF pReg = RiscESP THEN reg := PLO.ESP
+	ELSIF pReg = RiscFP THEN reg := PLO.EBP
+	ELSE reg := none
+	END
+END FindLoadReg;
+
+(* general *)
+
+PROCEDURE LastUse (reg: SHORTINT): BOOLEAN;
+	VAR pReg: LONGINT;
+BEGIN
+	ASSERT (reg IN {PLO.EAX..PLO.BH});
+	IF reg >= PLO.AL THEN pReg := sregTab [reg-PLO.AL]
+	ELSE pReg := regTab [reg MOD 8]
+	END;
+	IF pReg > none THEN  RETURN Instr[pReg].used = 1
+	ELSE 
+		ASSERT (reg IN {PLO.ESP, PLO.SP, PLO.EBP, PLO.BP});
+		RETURN TRUE
+	END
+END LastUse;
+
+(* Risc Code -> i386 Code *)
+
+PROCEDURE FindMemReg (VAR instr: Instruction; VAR mode, scale, size, base, inx: SHORTINT; VAR disp: LONGINT);
+BEGIN
+	size := SHORT (instr.op MOD 8) * 8; mode := SHORT((instr.op DIV 8) MOD 4); scale := instr.scale;
+	IF mode IN {PLO.MemReg, PLO.RegMem} THEN
+		FindLoadReg (instr.src1, base); disp := instr.src2;
+		FindLoadReg (instr.inx, inx)
+	ELSIF mode = PLO.RegReg THEN
+		FindLoadReg (instr.src1, base);
+		disp := PLO.noDisp; inx := none
+	ELSE (* mode = ImmReg *)
+		ASSERT (mode = PLO.ImmReg);
+		base := PLO.noBase; disp := PLO.noDisp; inx := none
+	END
+END FindMemReg;
+
+PROCEDURE Load (VAR instr: Instruction);
+(* ld, lea, ldbdw, ldbw, ldwdw, ldProc, ldXProc *)
+	VAR
+		mode, scale, size, base, inx, dummy: SHORTINT;
+		disp: LONGINT;
+		
+	PROCEDURE AssignReg (pReg: LONGINT; VAR baseReg, inxReg: SHORTINT);
+		VAR
+			hint, size, pRegBase, pRegInx: LONGINT;
+			base, inx, op: SHORTINT;  (* NM 7.6.94; workaround for sign-extended bug *)
+	BEGIN
+		hint := Instr[pReg].hint; size:= (Instr[pReg].op MOD 8) * 8;
+		IF hint >= tryEAX THEN
+			IF size = PLO.Bit8 THEN
+				IF sregTab [hint - tryEAX] = free THEN
+					AssignThisReg (pReg, SHORT (SHORT (hint-tryEAX+PLO.Bit8)));
+					RETURN
+				END
+			ELSIF regTab [hint - tryEAX] = free THEN
+				AssignThisReg (pReg, SHORT (SHORT (hint - tryEAX + size)));
+				RETURN
+			END;
+			hint:= noHint
+		END;
+		base:= baseReg; inx:= inxReg;
+		IF hint <= noHint THEN
+			op := SHORT (instr.op DIV 32);
+			IF (op = Ldbdw) OR (op = Ldbw) OR (op = Ldwdw) OR (op = Ldbdwu) OR 
+				(op = Ldbwu) OR (op = Ldwdwu) THEN AssignNewReg (pReg)
+			ELSIF (base = none) OR (base IN {PLO.ESP, PLO.EBP}) OR ~LastUse (base) OR 
+				((size = PLO.Bit8) & (base IN {PLO.EDI, PLO.ESI, PLO.ESP, PLO.EBP, PLO.DI, PLO.SI, PLO.SP, PLO.BP})) THEN (* base can't be reused *)
+					IF (inx = none) OR (inx IN {PLO.ESP, PLO.EBP}) OR ~LastUse (inx) OR 
+					((size = PLO.Bit8) & (inx IN {PLO.EDI, PLO.ESI, PLO.ESP, PLO.EBP, PLO.DI, PLO.SI, PLO.SP, PLO.BP})) THEN 
+					(* inx can't be reused *)
+						AssignNewReg (pReg)
+					ELSE Instr[pReg].reg := inx MOD 8 + SHORT (SHORT (size))
+					END
+			ELSE Instr[pReg].reg := base MOD 8 + SHORT (SHORT (size))
+			END
+		ELSE
+			IF inx >= PLO.AL THEN pRegInx := sregTab [inx - PLO.AL]
+			ELSIF inx # PLO.noInx THEN pRegInx := regTab [inx MOD 8]
+			END;
+			IF base >= PLO.AL THEN pRegBase := sregTab [base - PLO.AL]
+			ELSIF base # PLO.noBase THEN pRegBase := regTab [base MOD 8]
+			END;
+			AssignThisReg (pReg, SHORT (SHORT (hint + size)));
+			IF (inx # none) & (pRegInx >= 0) THEN inxReg := Instr [pRegInx].reg END;
+			IF (base # none) & (pRegBase >= 0) THEN baseReg := Instr [pRegBase].reg END
+		END
+	END AssignReg;
+
+BEGIN
+	FindMemReg (instr, mode, scale, size, base, inx, disp);
+	ASSERT ((size = PLO.Bit8) OR (size = PLO.Bit16) OR (size = PLO.Bit32));
+	IF instr.op DIV 32 # PUTreg THEN AssignReg (instr.dest, base, inx) END;
+	CASE instr.op DIV 32 OF
+		Ld:
+			ASSERT ((mode # PLO.RegReg) OR ((mode = PLO.RegReg) & (instr.reg # base)));
+			PLO.GenMOV (mode, instr.reg, base, inx, scale, disp, instr.src2)
+	  | Lea: 
+			ASSERT ((mode # PLO.RegReg) OR ((mode = PLO.RegReg) & (instr.reg # base)));
+			PLO.GenLEA (instr.reg, base, inx, scale, disp)
+	  | Ldbdw, Ldbw: PLO.GenMOVSX (mode, 0, instr.reg, base, inx, scale, disp)
+	  | Ldwdw: PLO.GenMOVSX (mode, 1, instr.reg, base, inx, scale, disp)
+	  | Ldbdwu, Ldbwu: PLO.GenMOVZX (mode, 0, instr.reg, base, inx, scale, disp)
+	  | Ldwdwu: PLO.GenMOVZX (mode, 1, instr.reg, base, inx, scale, disp)
+	  | PUTreg: PLO.GenMOV (mode, SHORT (instr.hint + size), base, inx, scale, disp, instr.src2)
+	ELSE HALT (BUG)
+	END;
+	dummy:=  none;
+	DecCheckReg (instr.dest, dummy, base, inx)
+END Load;
+
+PROCEDURE LoadProc (VAR instr: Instruction);
+	VAR dummy: SHORTINT; node: Node;
+
+	PROCEDURE AssignReg (pReg: LONGINT);
+		VAR
+			hint, size: LONGINT;
+	BEGIN
+		hint := Instr[pReg].hint; size:= (Instr[pReg].op MOD 8) * 8;
+		IF hint >= tryEAX THEN
+			IF size = PLO.Bit8 THEN
+				IF sregTab [hint - tryEAX] = free THEN
+					AssignThisReg (pReg, SHORT (SHORT (hint-tryEAX+PLO.Bit8)));
+					RETURN
+				END
+			ELSIF regTab [hint - tryEAX] = free THEN
+				AssignThisReg (pReg, SHORT (SHORT (hint - tryEAX + size)));
+				RETURN
+			END;
+			hint:= noHint
+		END;
+		IF hint = noHint THEN AssignNewReg (instr.dest)
+		ELSE
+			ASSERT (hint > noHint);
+			AssignThisReg (pReg, SHORT (SHORT (hint + size)));
+		END
+	END AssignReg;
+
+BEGIN (* LoadProc *)
+	AssignReg (instr.dest);
+	IF instr.op DIV 32 = LdProc THEN (* procedure in the compiled module *)
+		node := SYSTEM.VAL(Node, instr.node);
+		IF node.obj.linkadr = -1 THEN instr.src1 := -node.obj.lim; node.obj.lim := instr.pc + 1 END;
+		node := NIL; (* << jm *)
+		PLO.GenMOV (PLO.ImmReg, instr.reg, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp, instr.src1)
+	ELSE (* instr.op DIV 32 = LdXProc *)
+		PLO.GenMOV (PLO.ImmReg, instr.reg, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp, 0FFFFH)
+	END;
+	dummy := none;
+	DecCheckReg (instr.dest, dummy, dummy, dummy)
+END LoadProc;
+
+PROCEDURE Store (VAR instr: Instruction);
+(* store, getReg *)
+	VAR
+		mode, scale, size, reg, base, inx: SHORTINT;
+		disp: LONGINT;
+BEGIN
+	FindMemReg (instr, mode, scale, size, base, inx, disp);
+	IF instr.op DIV 32 = GETreg THEN
+		PLO.GenMOV (mode, SHORT (instr.hint + size), base, inx, scale, disp, PLO.noImm);
+		reg := none
+	ELSIF ~loaded (instr.dest) & ((Instr [instr.dest].op DIV 8) MOD 4 = PLO.ImmReg) THEN
+		PLO.GenMOV (PLO.ImmMem, size, base, inx, scale, disp, Instr [instr.dest].src2);
+		mode := PLO.ImmMem;
+		IF PLO.lastImmSize = PLO.Bit8 THEN
+		ELSIF PLO.lastImmSize = PLO.Bit16 THEN
+		ELSE (* lastImmSize = Bit 32 *)
+		END
+	ELSE
+		FindLoadReg (instr.dest, reg);
+		ASSERT (((size = PLO.Bit8) & ((reg IN SplittableReg) OR (reg IN {PLO.AL..PLO.BH}))) OR (size # PLO.Bit8));
+		PLO.GenMOV (mode, (reg MOD 8) + size, base, inx, scale, disp, PLO.noImm)
+	END;
+	DecReg (reg); DecReg (base); DecReg (inx)
+END Store;
+
+PROCEDURE GenPush (VAR instr: Instruction);
+	VAR reg, i: SHORTINT;
+BEGIN
+	ASSERT ((instr.op DIV 8) MOD 4 IN {PLO.ImmReg, PLO.RegReg});
+	IF (instr.op DIV 8) MOD 4 = PLO.ImmReg THEN PLO.GenPUSH (PLO.ImmReg, PLO.Bit32, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp, instr.src2)
+	ELSE (* first load and then push -> faster on i486 based machines *)
+		FindLoadReg (instr.src1, reg);
+		IF reg IN {PLO.AH, PLO.CH, PLO.DH, PLO.BH} THEN
+			i := PLO.EBX;
+			WHILE (i >= PLO.EAX) & ~((regTab [i] = Splitted) & (sregTab [i] = free)) DO DEC (i) END;
+			IF i < PLO.EAX THEN (* none of the 8 bit registers AL, CL, DL, BL are free *)
+				i := PLO.EBX;
+				WHILE (i >= PLO.EAX) & (regTab [i] # free) DO DEC (i) END; (* search a splittable register *)
+				IF i < PLO.EAX THEN GetReg (i) END
+			END;
+			IF i IN SplittableReg THEN
+				GetThisReg8 (i + PLO.AL);
+				PLO.GenMOV (PLO.RegReg, i+PLO.AL, reg, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm);
+				PLO.GenPUSH (PLO.RegReg, i, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm)
+			ELSE (* move sign extended *)
+				PLO.GenMOVSX (PLO.RegReg, 0, i, reg, PLO.noInx, PLO.noScale, PLO.noDisp);
+				PLO.GenPUSH (PLO.RegReg, i, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm)
+			END;
+			FreeReg (i)
+		ELSE
+			IF reg IN {PLO.AL, PLO.CL, PLO.DL, PLO.BL} THEN i := reg MOD 4 (* we can't push a byte *)
+			ELSE i := reg MOD 8 (* only push 32 bit register *)
+			END;
+			PLO.GenPUSH (PLO.RegReg, i, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm)
+		END;
+		DecReg (reg)
+	END
+END GenPush;
+
+PROCEDURE GenPop (VAR instr: Instruction);
+	VAR reg, dummy: SHORTINT;
+BEGIN
+	dummy := PLO.noBase; (* = noInx *)
+	AssignReg (instr.dest, dummy, dummy, dummy); reg := instr.reg;
+	ASSERT (((instr.op DIV 8) MOD 4 = PLO.RegReg) & ~(reg IN {PLO.AL..PLO.BH})); (* 8 bit pop is not allowed *)
+	reg := reg MOD 8; (* only pop 32 bit register *)
+	PLO.GenPOP (PLO.RegReg, reg, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp)
+END GenPop;
+
+PROCEDURE Gen1 (VAR instr: Instruction; RiscPC: LONGINT);
+(* je, jne, jl, jle, jg, jge, ja, jae, jb, jbe, jc, jnc, jmp, jmpReg *)
+	VAR
+		op, mode, scale, size, reg, base, inx: SHORTINT; disp: LONGINT;
+BEGIN
+	op := SHORT (instr.op DIV 32);
+	IF op = JmpReg THEN
+		IF ~loaded (instr.src2) THEN
+			FindMemReg (Instr[instr.src2], mode, scale, size, base, inx, disp);
+			PLO.GenJMP (PLO.Mem, 0, base, inx, scale, disp);
+			DecReg (base); DecReg (inx)
+		ELSE
+			FindReg (instr.src2, reg);
+			PLO.GenJMP (PLO.RegReg, reg, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp);
+			DecReg (reg)
+		END
+	ELSIF op = Jmp THEN
+		IF RiscPC >= instr.src2 THEN (* backward jump *)
+			disp := Instr [instr.src2].pc - (PLO.pc+2);
+			IF disp < -128 THEN DEC (disp, 3) END; (* 32 bit displacement *)
+			PLO.GenJMP (PLO.ImmReg, none, PLO.noBase, PLO.noInx, PLO.noScale, disp)
+		ELSE (* link with fixup chain *)
+			(* always 32 bit displacement *)
+			PLO.GenJMP (PLO.ImmReg, none, PLO.noBase, PLO.noInx, PLO.noScale, -2 - Instr [instr.src2].pc - 10000H);
+			Instr [instr.src2].pc := RiscPC
+		END
+	ELSE
+		ASSERT ((op >= Je) & (op <= Jnc));
+		op := JmpConvert [op-Je];
+		IF RiscPC >= instr.src2 THEN (* backward jump *)
+			disp := Instr [instr.src2].pc - (PLO.pc+2);
+			IF disp < -128 THEN DEC (disp, 4) END; (* 32 bit displacement *)
+			PLO.GenJcc (op, disp)
+		ELSE (* link with fixup chain *)
+			(* always 32 bit displacement *)
+			PLO.GenJcc (op, -2 - Instr [instr.src2].pc - 10000H);
+			Instr [instr.src2].pc := RiscPC
+		END
+	END
+END Gen1;
+
+PROCEDURE Gen2 (VAR instr: Instruction);
+(* neg, not *)
+	VAR src, dummy: SHORTINT;
+BEGIN
+	ASSERT ((instr.op DIV 32 = Neg) OR (instr.op DIV 32 = Not));
+	dummy := PLO.noInx;
+	FindLoadReg (instr.src1, src);
+	AssignReg (instr.dest, src, dummy, dummy);
+	IF instr.reg # src THEN PLO.GenMOV (PLO.RegReg, instr.reg, src, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm) END;
+	IF instr.op DIV 32 = Neg THEN PLO.GenNEG (PLO.RegReg, instr.reg, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp)
+	ELSE PLO.GenNOT (PLO.RegReg, instr.reg, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp)
+	END;
+	DecCheckReg (instr.dest, src, dummy, dummy)
+END Gen2;
+
+PROCEDURE Gen3 (VAR instr: Instruction);
+(* add, sub, or, xor, and, btr, bts, sal, sar, shl, shr, rol *)
+	VAR
+		op, mode, scale, base, inx, src, dummy, shiftReg: SHORTINT;
+		disp: LONGINT;
+BEGIN
+	op := SHORT (instr.op DIV 32); mode := SHORT ((instr.op DIV 8) MOD 4);
+	IF mode = PLO.ImmReg THEN
+		FindLoadReg (instr.src1, src); base := PLO.noBase; inx := PLO.noInx; scale := PLO.noScale; disp := PLO.noDisp
+	ELSIF  ~loaded (instr.src1) THEN
+		IF  ~loaded (instr.src2) THEN
+			FindLoadReg (instr.src1, src);
+			FindMemReg (Instr [instr.src2], dummy, scale, dummy, base, inx, disp);
+			mode := PLO.MemReg
+		ELSIF ((op = Add) OR (op = oR) OR (op = Xor) OR (op = And)) THEN
+			FindReg (instr.src2, src);
+			FindMemReg (Instr [instr.src1], dummy, scale, dummy, base, inx, disp);
+			mode := PLO.MemReg
+		ELSE
+			FindLoadReg (instr.src1, src);
+			FindReg (instr.src2, base); inx := none; scale := PLO.noScale; disp := PLO.noDisp;
+			mode := PLO.RegReg
+		END
+	ELSIF ~loaded (instr.src2) THEN
+		mode := PLO.MemReg;
+		FindReg (instr.src1, src);
+		FindMemReg (Instr [instr.src2], dummy, scale, dummy, base, inx, disp)
+	ELSE
+		mode := PLO.RegReg;
+		FindReg (instr.src1, src); FindReg (instr.src2, base);
+		inx := PLO.noInx; scale := PLO.noScale; disp := PLO.noDisp
+	END;
+	AssignReg (instr.dest, src, base, inx);
+	IF instr.reg # src THEN PLO.GenMOV (PLO.RegReg, instr.reg, src, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm) END;
+	IF op <= And THEN (* !!later: optimize add, 1 -> INC, sub, 1 -> DEC *)
+		CASE op OF
+			Add: op := PLO.ADD
+		  | Sub: op := PLO.SUB
+		  | oR: op := PLO.Or
+		  | Xor: op := PLO.XOR
+		  | And: op := PLO.AND
+		ELSE HALT (BUG)
+		END;
+		PLO.GenTyp1 (op, mode, instr.reg, base, inx, scale, disp, instr.src2)
+	ELSIF op = Bts THEN PLO.GenBTS (mode, instr.reg, base, inx, scale, disp, instr.src2)
+	ELSIF op = Btr THEN PLO.GenBTR (mode, instr.reg, base, inx, scale, disp, instr.src2)
+	ELSE (* op <= Rol *)
+		ASSERT (op <= Rol);
+		IF (mode = PLO.RegReg) & ~(base IN {PLO.ECX, PLO.CX, PLO.CL}) THEN
+			shiftReg := PLO.ECX + (base DIV 8) * 8;
+			AssignThisReg (instr.src2, shiftReg);
+			PLO.GenMOV (PLO.RegReg, shiftReg, base, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm);
+			IF base IN {PLO.AL..PLO.BH} THEN
+				sregTab [base-PLO.AL] := Occupied; FreeReg (base)
+			ELSE regTab [base MOD 8] := free
+			END;
+			base := shiftReg
+		END;
+		CASE op OF
+			Sal: op := PLO.SAL
+		  | Sar: op := PLO.SAR
+		  | Shr: op := PLO.SHR
+		  | Rol: op := PLO.ROL
+		ELSE HALT (BUG)
+		END;
+		PLO.GenShiftRot (op, mode, instr.reg, base, inx, scale, disp, instr.src2)
+	END;
+	DecCheckReg (instr.dest, src, base, inx)
+END Gen3;
+
+PROCEDURE Flags (VAR instr: Instruction);
+(* cmp, bt *)
+	VAR
+		op, mode, scale, size, base, inx, reg, dummy: SHORTINT;
+		disp: LONGINT;
+BEGIN
+	op := SHORT (instr.op DIV 32); mode := SHORT ((instr.op DIV 8) MOD 4); size := SHORT (instr.op MOD 8) * 8;
+	IF mode # PLO.ImmReg THEN
+		IF ~loaded (instr.src1) THEN
+			IF ~loaded (instr.src2) THEN
+				FindLoadReg (instr.src1, reg);
+				FindMemReg (Instr [instr.src2], dummy, scale, dummy, base, inx, disp);
+				mode := PLO.MemReg
+			ELSE
+				FindReg (instr.src2, reg);
+				FindMemReg (Instr [instr.src1], dummy, scale, dummy, base, inx, disp);
+				mode := PLO.RegMem
+			END
+		ELSE
+			FindReg (instr.src1, reg);
+			IF ~loaded (instr.src2) THEN
+				FindMemReg (Instr [instr.src2], dummy, scale, dummy, base, inx, disp);
+				mode := PLO.RegMem
+			ELSE
+				FindReg (instr.src2, base); inx := PLO.noInx; disp := PLO.noDisp; mode := PLO.RegReg
+			END
+		END
+	ELSIF ~loaded (instr.src1) THEN
+		FindMemReg (Instr [instr.src1], dummy, scale, dummy, base, inx, disp);
+		reg := size; mode := PLO.ImmMem
+	ELSE
+		FindReg (instr.src1, reg); base := PLO.noBase; inx := PLO.noInx; disp := PLO.noDisp
+	END;
+	IF op = Cmp THEN PLO.GenTyp1 (PLO.CMP, mode, reg, base, inx, scale, disp, instr.src2)
+	ELSE PLO.GenBT (mode, reg, base, inx, scale, disp, instr.src2)
+	END;
+	DecReg (reg); DecReg (base); DecReg (inx)
+END Flags;
+
+PROCEDURE GenAbs (VAR instr: Instruction);
+(* abs *)
+	VAR size, src, reg, dummy: SHORTINT;
+BEGIN
+	size := SHORT ((instr.op MOD 8) * 8);
+	FindLoadReg (instr.src1, src);
+	IF size = PLO.Bit8 THEN
+		IF instr.hint IN useReg THEN
+			IF LastUse (src) & (src MOD 4 = instr.hint) THEN
+				IF src IN {PLO.AL, PLO.CL, PLO.DL, PLO.BL} THEN GetThisReg8 (src + 4)
+				ELSE GetThisReg8 (src - 4)
+				END;
+				reg := src MOD 4
+			ELSE
+				reg := SHORT (SHORT (instr.hint));
+				GetThisReg (reg)
+			END
+		ELSE
+			IF (instr.hint IN tryReg) & (regTab [instr.hint - tryEAX] = free) THEN reg:= SHORT (SHORT (instr.hint - tryEAX))
+			ELSE
+				reg := PLO.EBX;
+				WHILE (reg >= PLO.EAX) & (regTab [reg] # free) DO DEC (reg) END;
+				IF LastUse (src) & (((src IN {PLO.AL, PLO.CL, PLO.DL, PLO.BL}) & (sregTab [src - PLO.AL + 4] = free)) OR 
+			 	   ((src IN {PLO.AH, PLO.CH, PLO.DH, PLO.BH}) & (sregTab [src+PLO.AL-4] = free))) THEN 
+					reg := src MOD 4
+				ELSIF reg < PLO.EAX THEN GetSplittableReg (reg)
+				END
+			END
+		END;
+		PLO.GenMOVSX (PLO.RegReg, 0, reg, src, PLO.noInx, PLO.noScale, PLO.noDisp);
+		IF LastUse (src) THEN
+			FreeReg (src); src:= none
+		END;
+		regTab [reg] := Splitted; sregTab [reg] := instr.dest; sregTab [reg + 4] := free;
+		INC (reg, PLO.AL); instr.reg := reg;
+		PLO.GenTyp1 (PLO.XOR, PLO.RegReg, reg, reg + 4, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm);
+		PLO.GenTyp1 (PLO.SUB, PLO.RegReg, reg, reg + 4, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm)
+	ELSE (* Bit16 / Bit32 *)
+		IF regTab [PLO.EDX] = free THEN regTab [PLO.EDX] := Occupied END;
+		IF ~LastUse (src) & (src IN {PLO.EAX, PLO.AX}) THEN (* conflict *)
+			AssignNewReg (instr.src1); regTab [PLO.EAX] := Occupied;
+			PLO.GenMOV (PLO.RegReg, Instr [instr.src1].reg, PLO.EAX, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm)
+		ELSIF ~(src IN {PLO.EAX, PLO.AX}) THEN
+			GetThisReg (PLO.EAX);
+			PLO.GenMOV (PLO.RegReg, PLO.EAX, src, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm);
+			IF LastUse (src) THEN
+				FreeReg (src); src := none
+			END
+		ELSE
+			FreeReg (src); src := none; GetThisReg (PLO.EAX)
+		END;
+		instr.reg := PLO.EAX + size; regTab [PLO.EAX] := instr.dest;
+		IF regTab [PLO.EDX] # Occupied THEN GetThisReg (PLO.EDX) END;
+		PLO.Prefix (size, dummy); PLO.PutByte (PLO.CWD);
+		PLO.GenTyp1 (PLO.XOR, PLO.RegReg, PLO.EAX + size, PLO.EDX + size, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm);
+		PLO.GenTyp1 (PLO.SUB, PLO.RegReg, PLO.EAX + size, PLO.EDX + size, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm);
+		FreeReg (PLO.EDX)
+	END;
+	DecReg (src);
+	IF (instr.hint IN useReg) & (instr.reg MOD 8 # instr.hint) THEN (* result is in the wrong register *)
+		src := instr.reg;
+		AssignThisReg (instr.dest, SHORT (SHORT (instr.hint)) + size);
+		PLO.GenMOV (PLO.RegReg, instr.reg, src, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm);
+		FreeReg (src)
+	END
+END GenAbs;
+
+PROCEDURE GenDivMod (VAR instr: Instruction);
+	VAR
+		size, mode, src, base, inx, scale, dummy: SHORTINT;
+		disp, pRegBase, pRegInx: LONGINT;
+BEGIN
+	size := SHORT (instr.op MOD 8) * 8; mode := SHORT ((instr.op DIV 8) MOD 4);
+	IF (size # PLO.Bit8) & (regTab [PLO.EDX] = free) THEN regTab [PLO.EDX] := Occupied END; (* reserve EDX *)
+	IF mode # PLO.ImmReg THEN
+		IF loaded (instr.src2) THEN
+			FindReg (instr.src2, base); inx := PLO.noInx; scale := PLO.noScale; disp := PLO.noDisp
+		ELSE
+			mode := PLO.MemReg;
+			FindMemReg (Instr[instr.src2], dummy, scale, dummy, base, inx, disp)
+		END
+	ELSE
+		inx := PLO.noInx; base := PLO.noBase
+	END;
+	IF ~loaded (instr.src1) THEN 
+		Instr [instr.src1].hint := useEAX;
+		FindLoadReg (instr.src1, src)
+	ELSE FindReg (instr.src1, src)
+	END;
+	IF base >= PLO.AL THEN pRegBase := sregTab [base-PLO.AL]
+	ELSIF base # none THEN pRegBase := regTab [base MOD 8]
+	END;
+	IF inx # none THEN
+		ASSERT (inx IN {PLO.EAX..PLO.EDI});
+		pRegInx := regTab [inx]
+	END;
+	IF size = PLO.Bit8 THEN
+		IF LastUse (src) & (src IN {PLO.AL, PLO.AH}) THEN
+			IF src = PLO.AL THEN GetThisReg8 (PLO.AH)
+			ELSE GetThisReg8 (PLO.AL)
+			END;
+			regTab [PLO.EAX] := Occupied
+		ELSE GetThisReg (PLO.EAX)
+		END;
+		PLO.GenMOVSX (PLO.RegReg, 0, PLO.AX, src, PLO.noInx, PLO.noScale, PLO.noDisp);
+		IF LastUse (src) THEN
+			FreeReg (src); src := none
+		END;
+		IF mode = PLO.ImmReg THEN (* immediate division not allowed *)
+			mode := PLO.RegReg; inx := PLO.noInx; scale := PLO.noScale; disp := PLO.noDisp;
+			GetReg8 (base);
+			PLO.GenMOV (PLO.ImmReg, base, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp, instr.src2)
+		END
+	ELSE (* Bit16 / Bit32 *)
+		IF ~LastUse (src) & (src IN {PLO.EAX, PLO.AX}) THEN (* conflict *)
+			AssignNewReg (instr.src1); src := Instr [instr.src1].reg;
+			PLO.GenMOV (PLO.RegReg, src, PLO.EAX, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm);
+			regTab [PLO.EAX] := Occupied
+		ELSIF ~(src IN {PLO.EAX, PLO.AX}) THEN
+			GetThisReg (PLO.EAX);
+			PLO.GenMOV (PLO.RegReg, PLO.EAX+size, src, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm);
+			IF LastUse (src) THEN
+				FreeReg (src); src := none
+			END
+		ELSE
+			FreeReg (src); src := none;
+			regTab [PLO.EAX] := Occupied
+		END;
+		IF regTab [PLO.EDX] # Occupied THEN GetThisReg (PLO.EDX) END;
+		IF mode = PLO.ImmReg THEN (* immediate division not allowed *)
+			GetReg (base); INC (base, size); inx := PLO.noInx;
+			PLO.GenMOV (PLO.ImmReg, base, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp, instr.src2);
+			mode := PLO.RegReg
+		END;
+		PLO.Prefix (size, dummy); PLO.PutByte (PLO.CWD);
+	END;
+	IF (base # none) & ((instr.op DIV 8) MOD 4 # PLO.ImmReg) THEN base := Instr [pRegBase].reg END;
+	IF inx # none THEN inx := Instr [pRegInx].reg END;
+	IF mode = PLO.RegReg THEN PLO.GenIDIV (PLO.RegReg, base, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp)
+	ELSE PLO.GenIDIV (mode, size, base, inx, scale, disp)
+	END;
+	IF (size = PLO.Bit8) THEN PLO.GenTyp1 (PLO.CMP, PLO.ImmReg, PLO.AH, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp, 0)
+	ELSE PLO.GenTyp1 (PLO.CMP, PLO.ImmReg, PLO.EDX+size, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp, 0)
+	END;
+	IF instr.op DIV 32 = Div THEN
+		IF size = PLO.Bit32 THEN PLO.GenJcc (PLO.JGE, 1)
+		ELSE PLO.GenJcc (PLO.JGE, 2)
+		END;
+		PLO.GenDEC (PLO.ImmReg, PLO.EAX+size, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp);
+		instr.reg := PLO.EAX+size;
+		IF size = PLO.Bit8 THEN
+			regTab [PLO.EAX] := Splitted; sregTab [PLO.AL-PLO.AL] := instr.dest; sregTab [PLO.AH-PLO.AL] := free		
+		ELSE 
+			regTab [PLO.EAX] := instr.dest;
+			FreeReg (PLO.EDX)
+		END
+	ELSE (* MOD *)
+		ASSERT (instr.op DIV 32 = Mod);
+		IF size = PLO.Bit16 THEN PLO.GenJcc (PLO.JGE, 3)
+		ELSE PLO.GenJcc (PLO.JGE, 2)
+		END;
+		IF (size = PLO.Bit8) THEN
+			PLO.GenTyp1 (PLO.ADD, mode, PLO.AH, base, inx, scale, disp, PLO.noImm);
+			instr.reg := PLO.AH; regTab [PLO.EAX] := Splitted; sregTab [PLO.AH-PLO.AL] := instr.dest; sregTab [PLO.AL-PLO.AL] := free
+		ELSE
+			PLO.GenTyp1 (PLO.ADD, mode, PLO.EDX+size, base, inx, scale, disp, PLO.noImm);
+			instr.reg := PLO.EDX+size; regTab [PLO.EDX] := instr.dest;
+			FreeReg (PLO.EAX)
+		END
+	END;
+	IF (instr.op DIV 8) MOD 4 = PLO.ImmReg THEN
+		FreeReg (base); base := none
+	END;
+	DecCheckReg (instr.dest, src, base, inx);
+	IF (instr.hint IN useReg) & (instr.reg MOD 8 # instr.hint) THEN (* result is in the wrong register *)
+		src := instr.reg;
+		AssignThisReg (instr.dest, SHORT (SHORT (instr.hint)) + size);
+		PLO.GenMOV (PLO.RegReg, instr.reg, src, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm);
+		FreeReg (src)
+	END
+END GenDivMod;
+
+PROCEDURE GenMul (VAR instr: Instruction);
+	VAR
+		size, mode, src, base, inx, scale, dummy:  SHORTINT;
+		disp, pRegBase, pRegInx: LONGINT;
+BEGIN
+	size := SHORT ((instr.op MOD 8) * 8); mode := SHORT ((instr.op DIV 8) MOD 4);
+	IF mode # PLO.ImmReg THEN
+		IF loaded (instr.src2) THEN
+			FindReg (instr.src2, base); inx := PLO.noInx; scale := PLO.noScale; disp := PLO.noDisp
+		ELSE
+			mode := PLO.RegMem;
+			FindMemReg (Instr [instr.src2], dummy, scale, dummy, base, inx, disp)
+		END
+	END;
+	IF ~loaded (instr.src1) THEN
+		IF size = PLO.Bit8 THEN Instr [instr.src1].hint := useEAX END;
+		FindLoadReg (instr.src1, src)
+	ELSE FindReg (instr.src1, src)
+	END;
+	IF (mode = PLO.ImmReg) & (size # PLO.Bit8) THEN (* imul reg, src, immediate *)
+		inx := none; base := none;
+		AssignReg (instr.dest, src, base, inx);
+		PLO.GenIMUL (PLO.ImmReg, FALSE, instr.reg(*+size*), src, PLO.noInx, PLO.noScale, PLO.noDisp, instr.src2)
+	ELSE
+		IF size = PLO.Bit8 THEN (* imul reg/mem *)
+			IF mode # PLO.ImmReg THEN
+				IF base >= PLO.AL THEN pRegBase := sregTab [base - PLO.AL]
+				ELSIF base # none THEN pRegBase := regTab [base MOD 8]
+				END;
+				IF inx # none THEN
+					ASSERT (inx < PLO.AL); 
+					pRegInx := regTab [inx MOD 8] 
+				END
+			END;
+			IF LastUse (src) & (src IN {PLO.AL, PLO.AH}) THEN
+				IF src = PLO.AL THEN
+					IF ~((mode = PLO.RegReg) & LastUse (base)) THEN GetThisReg8 (PLO.AH) END;
+				ELSE
+					GetThisReg8 (PLO.AL);
+					PLO.GenMOV (PLO.RegReg, PLO.AL, src, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm)
+				END
+			ELSE
+				GetThisReg (PLO.EAX); src := Instr [instr.src1].reg;
+				PLO.GenMOV (PLO.RegReg, PLO.AL, src, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm)
+			END;
+			IF LastUse (src) THEN
+				FreeReg (src); src:= none
+			END;
+			instr.reg := PLO.AL; regTab [PLO.EAX] := Splitted; sregTab [PLO.AL-PLO.AL] := instr.dest; sregTab [PLO.AH - PLO.AL] := free;
+			IF mode = PLO.ImmReg THEN (* immediate mul not allowed *)
+				mode := PLO.RegReg; GetReg8 (base); inx := PLO.noInx; scale := PLO.noScale; disp := PLO.noDisp;
+				PLO.GenMOV (PLO.ImmReg, base, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp, instr.src2);
+				PLO.GenIMUL (mode, TRUE, instr.reg, base, inx, scale, disp, PLO.noImm);
+				FreeReg (base); base := none
+			ELSE
+				IF base # none THEN base := Instr [pRegBase].reg END;
+				IF inx # none THEN inx := Instr [pRegInx].reg END;
+				PLO.GenIMUL (mode, TRUE, instr.reg, base, inx, scale, disp, PLO.noImm)
+			END
+		ELSE
+			ASSERT (size IN {PLO.Bit16, PLO.Bit32});
+			AssignReg (instr.dest, src, base, inx);
+			IF instr.reg # src THEN PLO.GenMOV (PLO.RegReg, instr.reg, src, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm) END;
+			IF (instr.reg IN {PLO.AX, PLO.EAX}) & (regTab [PLO.EDX] = free) THEN (* use short form *)
+				PLO.GenIMUL (mode, TRUE, instr.reg(*+size  why not?*), base, inx, scale, disp, PLO.noImm)
+			ELSE PLO.GenIMUL (mode, FALSE, instr.reg+size, base, inx, scale, disp, PLO.noImm)
+			END
+		END
+	END;
+	DecCheckReg (instr.dest, src, base, inx)
+END GenMul;
+
+PROCEDURE GenRepMovs (VAR instr: Instruction);
+(* repMovs *)
+	VAR
+		src, dest, nofElem: SHORTINT;
+BEGIN
+	FindLoadReg (instr.dest, dest);
+	ASSERT (dest IN {PLO.EAX..PLO.EDI});
+	IF dest # PLO.EDI THEN
+		IF instr.dest >= 0 THEN AssignThisReg (instr.dest, PLO.EDI)
+		ELSE GetThisReg (PLO.EDI)
+		END;
+		PLO.GenMOV (PLO.RegReg, PLO.EDI, dest, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm);
+		IF ~(dest IN {PLO.ESP, PLO.EBP}) THEN regTab [dest] := free END;
+	END;
+	FindLoadReg (instr.src1, src);
+	ASSERT (src IN {PLO.EAX..PLO.EDI});
+	IF src # PLO.ESI THEN
+		IF instr.src1 >= 0 THEN AssignThisReg (instr.src1, PLO.ESI)
+		ELSE GetThisReg (PLO.ESI)
+		END;
+		PLO.GenMOV (PLO.RegReg, PLO.ESI, src, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm);
+		IF ~(src IN {PLO.ESP, PLO.EBP}) THEN regTab [src] := free END;
+	END;
+	FindLoadReg (instr.src2, nofElem);
+	ASSERT (nofElem IN {PLO.EAX..PLO.EDI});
+	IF nofElem # PLO.ECX THEN
+		IF instr.src2 >= 0 THEN AssignThisReg (instr.src2, PLO.ECX)
+		ELSE GetThisReg (PLO.ECX)
+		END;
+		PLO.GenMOV (PLO.RegReg, PLO.ECX, nofElem, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm);
+		IF ~(nofElem IN {PLO.ESP, PLO.EBP}) THEN regTab [nofElem] := free END;
+	END;
+	IF instr.inx = PLO.AL THEN (*8-bit move*)
+		PLO.GenMOV(PLO.RegReg, PLO.BL, PLO.CL, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm);
+		PLO.GenShiftRot(PLO.SHR, PLO.ImmReg, PLO.ECX, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp, 2);
+		PLO.GenTyp1(PLO.AND, PLO.ImmReg, PLO.BL, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp, 3);
+		PLO.GenRepString(PLO.MOVS, PLO.EAX);
+		PLO.GenMOV(PLO.RegReg, PLO.CL, PLO.BL, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm);
+		PLO.GenRepString(PLO.MOVS, PLO.AL)
+	ELSE
+		PLO.GenRepString (PLO.MOVS, SHORT (instr.inx))
+	END;
+	IF regTab [PLO.ECX] = Occupied THEN FreeReg (PLO.ECX)
+	ELSE DecReg (PLO.ECX) (* nofElem *)
+	END;
+	IF regTab [PLO.ESI] = Occupied THEN FreeReg (PLO.ESI)
+	ELSE DecReg (PLO.ESI) (* src *)
+	END;
+	IF regTab [PLO.EDI] = Occupied THEN FreeReg (PLO.EDI)
+	ELSE DecReg (PLO.EDI) (* dest *)
+	END
+END GenRepMovs;
+
+PROCEDURE GenCmpString (VAR instr: Instruction);
+(* cmpString *)
+	VAR 
+		src, srcAdr, src2Adr: SHORTINT;
+		Lfix, L0, L1: LONGINT;
+BEGIN
+	Lfix := PLO.pc;
+	FindLoadReg (instr.src1, srcAdr); FindLoadReg (instr.src2, src2Adr);
+	GetReg8 (src);
+	PLO.GenMOV (PLO.MemReg, src, srcAdr, PLO.noInx, PLO.noScale, 0, PLO.noImm);
+	PLO.GenTyp1 (PLO.CMP, PLO.MemReg, src, src2Adr, PLO.noInx, PLO.noScale, 0, PLO.noImm);
+	PLO.GenJcc (PLO.JNE, 0); L0 := PLO.pc-1;
+	PLO.GenTyp1 (PLO.CMP, PLO.ImmReg, src, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp, 0);
+	PLO.GenJcc (PLO.JE, 0); L1 := PLO.pc-1;
+	PLO.GenINC (PLO.ImmReg, srcAdr, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp);
+	PLO.GenINC (PLO.ImmReg, src2Adr, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp);
+	PLO.GenJMP (PLO.ImmReg, none, PLO.noBase, PLO.noInx, PLO.noScale, Lfix - (PLO.pc + 2));
+	PLO.PutByteAt (L0, SHORT (PLO.pc - (L0+1))); PLO.PutByteAt (L1, SHORT (PLO.pc - (L1+1)));
+	FreeReg (src);
+	DecReg (srcAdr); DecReg (src2Adr)
+END GenCmpString;
+
+PROCEDURE Setcc (VAR instr: Instruction);
+(* sete, setne, setl, setle, setg, setge, setc, setnc *)
+	VAR dummy: SHORTINT;
+BEGIN
+	dummy := none;
+	AssignReg (instr.dest, dummy, dummy, dummy);
+	PLO.GenSetcc (SetccConvert [(instr.op DIV 32) - Sete], PLO.RegReg, instr.reg, PLO.noInx, PLO.noScale, PLO.noDisp)
+END Setcc;
+
+PROCEDURE GenTrap (trapNr: LONGINT);
+BEGIN
+	PLO.GenMOV (PLO.ImmReg, PLO.EAX, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp, trapNr);
+	(* PLO.PutByte (08DH); PLO.PutByte (0C9H); (* lea ecx, ecx -> illegal instruction *) *)
+	PLO.PutByte(0CCH) (* breakpoint, ejz *)
+END GenTrap;
+
+PROCEDURE GenTrapCC (VAR instr: Instruction);
+	VAR
+		pos: LONGINT;
+		op: SHORTINT;
+BEGIN
+	IF (instr.op DIV 32 = Tae) & (instr.src2 = RangeTrap) THEN (* index trap optimisation *)
+		PLO.PutByte (72H); pos := PLO.pc; PLO.PutByte (00H);
+		GenTrap (instr.src2);
+		PLO.PutByteAt (pos, SHORT(SHORT(PLO.pc-pos-1)));
+		RETURN
+	END;
+	CASE instr.op DIV 32 OF
+		Te: op := PLO.JE
+	  | Tne: op := PLO.JNE
+	  | Tle: op := PLO.JLE
+	  | Ta: op := PLO.JA
+	  | Tae: op := PLO.JAE
+	  | To: op := PLO.JO
+	ELSE HALT (BUG)
+	END;
+	PLO.GenJcc (op, -2 - trapFixupTab [instr.src2 - WithTrap] - 10000H); (* always 32 bit jump *)
+	trapFixupTab [instr.src2 - WithTrap] := PLO.pc - 4
+END GenTrapCC;
+
+PROCEDURE FixupAndGenTrap;
+	VAR i, fixuppos, pos, next: LONGINT;
+BEGIN
+	i := 0;
+	WHILE i < nofTrapFixups DO
+		IF trapFixupTab [i] # Nil THEN
+			fixuppos := PLO.pc;
+			pos := trapFixupTab [i];
+			REPEAT
+				PLO.GetDWord (pos, next);
+				PLO.PutDWordAt (pos, fixuppos - (pos + 4));
+				pos := -2 - next - 10000H
+			UNTIL pos = Nil;
+			GenTrap (i + WithTrap)
+		END;
+		INC (i)
+	END
+END FixupAndGenTrap;
+
+PROCEDURE GenShort (VAR instr: Instruction);
+	VAR src, reg, hint: SHORTINT;
+BEGIN
+	FindReg (instr.src1, src);
+	hint := SHORT (SHORT (instr.hint));
+	ASSERT (LastUse (src));
+	IF (instr.op MOD 8) * 8 = PLO.Bit16 THEN
+		ASSERT (src IN {PLO.EAX..PLO.EDI});
+		IF (hint IN useReg) & (src # hint) THEN
+			AssignThisReg (instr.dest, hint + PLO.AX);
+			PLO.GenMOV (PLO.RegReg, instr.reg, src, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm);
+			FreeReg (src)
+		ELSE 
+			FreeReg (src);
+			AssignThisReg (instr.dest, src + PLO.AX)
+		END
+	ELSE
+		ASSERT (((instr.op MOD 8) * 8 = PLO.Bit8) & (src IN {PLO.EAX..PLO.DI}));
+		IF (hint IN useReg) & (src MOD 8 # hint) THEN
+			ASSERT (hint IN {PLO.EAX, PLO.ECX, PLO.EDX, PLO.EBX});
+			AssignThisReg (instr.dest, hint + PLO.AL);
+			IF src IN SplittableReg THEN 
+				PLO.GenMOV (PLO.RegReg, instr.reg, (src MOD 8) + PLO.AL, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm)
+			ELSE (* 16/32 bit register must be copied *)
+				GetThisReg8 (instr.reg + 4); FreeReg (instr.reg + 4);
+				PLO.GenMOV (PLO.RegReg, instr.reg MOD 4, src, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm)
+			END;
+			FreeReg (src) 
+		ELSIF src IN SplittableReg THEN
+			FreeReg (src);
+			AssignThisReg (instr.dest, src MOD 8 + PLO.AL)
+		ELSE
+			GetSplittableReg (reg);
+			PLO.GenMOV (PLO.RegReg, reg, src, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm);
+			FreeReg (src); FreeReg (reg);
+			AssignThisReg (instr.dest, reg MOD 8 + PLO.AL)
+		END
+	END;
+END GenShort;
+
+PROCEDURE GenPhi (VAR instr: Instruction);
+	VAR src1, src2: SHORTINT;
+BEGIN
+	ASSERT ((Instr [instr.src2].reg >= 0) & (Instr [instr.src1].reg # none));
+	IF Instr [instr.src1].reg < 0 THEN src1 := -2 - Instr [instr.src1].reg
+	ELSE
+		src1 := Instr [instr.src1].reg;
+		FreeReg (src1)
+	END;
+	src2 := Instr [instr.src2].reg;
+	IF src1 # src2 THEN (* src1, src2 must be the same register *)
+		AssignThisReg (instr.src2, src1); 
+		PLO.GenMOV (PLO.RegReg, src1, src2, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm);
+		IF src2 >= PLO.AL THEN
+			DEC (src2, PLO.AL);
+			sregTab [src2] := free;
+			IF src2 < 4 THEN
+				IF sregTab [src2 + 4] = free THEN regTab [src2] := free END
+			ELSIF sregTab [src2 - 4] = free THEN regTab [src2 MOD 4] := free
+			END
+		ELSE regTab [src2 MOD 8] := free
+		END
+	END
+END GenPhi;
+
+(* i387 Register *)
+
+PROCEDURE GetFreg (VAR freg: SHORTINT);
+(* returns any free floating point register *)
+BEGIN
+	ftop := (ftop -1) MOD 8;
+	IF fregTab [ftop] # free THEN
+		PLO.Err (216); RegErr := TRUE;
+		freg := ftop;
+		RETURN
+	END;
+	fregTab [ftop] := Occupied;
+	freg := ftop
+END GetFreg;
+
+PROCEDURE FreeFreg (freg: SHORTINT);
+BEGIN
+	IF freg > none THEN
+		IF fregTab [freg] > free THEN Instr [fregTab [freg]].reg := -2-freg END;
+		fregTab [freg] := free;
+		IF freg = ftop THEN
+			ftop := (ftop + 1) MOD 8;
+			WHILE (FreeRegDisp > 0) & (fregTab [ftop] = free) DO
+				ftop := (ftop + 1) MOD 8;
+				DEC (FreeRegDisp)
+			END
+		ELSE PLO.GenFFREE ((freg-ftop) MOD 8); INC (FreeRegDisp)
+		END
+	END
+END FreeFreg;
+
+PROCEDURE ReleaseFreg (freg: SHORTINT);
+BEGIN
+	IF freg > none THEN
+		IF fregTab [freg] > free THEN Instr [fregTab [freg]].reg := -2-freg END;
+		fregTab [freg] := free;
+		ftop := (ftop + 1) MOD 8
+	END
+END ReleaseFreg;
+
+PROCEDURE AssignFreg (pReg: LONGINT);
+	VAR freg: SHORTINT;
+BEGIN
+	GetFreg (freg);
+	fregTab [freg] := pReg;
+	Instr [pReg].reg := freg
+END AssignFreg;
+
+PROCEDURE TakeFreg (pReg: LONGINT; freg: SHORTINT);
+BEGIN
+	ASSERT (fregTab[freg] = free);
+	fregTab [freg] := pReg; Instr [pReg].reg := freg
+END TakeFreg;
+	
+PROCEDURE FindFreg (pReg: LONGINT; VAR freg: SHORTINT);
+BEGIN
+	ASSERT ((pReg >= 0) & (Instr [pReg].reg >= 0));
+	freg := Instr [pReg].reg;
+END FindFreg;
+
+PROCEDURE LastUseF (freg: SHORTINT): BOOLEAN;
+BEGIN
+	ASSERT ((freg IN {0..7}) & (fregTab [freg] >= 0));
+	RETURN Instr[fregTab [freg]].used = 1
+END LastUseF;
+
+PROCEDURE DecCheckFreg (freg: SHORTINT);
+	VAR pReg: LONGINT;
+BEGIN
+	IF freg > none THEN
+		pReg := fregTab [freg];
+		DEC (Instr [pReg].used);
+		IF Instr [pReg].used = 0 THEN FreeFreg (freg) END
+	END
+END DecCheckFreg;
+
+(* Risc Code -> i387 Code *)
+
+PROCEDURE Fload (VAR instr: Instruction);
+	VAR
+		mode, scale, size, base, inx: SHORTINT;
+		disp: LONGINT;
+BEGIN
+	FindMemReg (instr, mode, scale, size, base, inx, disp); size := ((size DIV 8)-3)*2;
+	ASSERT (mode # PLO.RegReg);
+	AssignFreg (instr.dest);
+	IF instr.op DIV 32 = Fild THEN PLO.GenFLD (mode, PLO.sInt, base, inx, scale, disp)
+	ELSE PLO.GenFLD (mode, size, base, inx, scale, disp)
+	END;
+	DecReg (base); DecReg (inx)
+END Fload;
+
+PROCEDURE Fstore (VAR instr: Instruction);
+	VAR
+		mode, scale, size, base, inx, src: SHORTINT;
+		disp: LONGINT;
+BEGIN
+	FindMemReg (instr, mode, scale, size, base, inx, disp); size := ((size DIV 8)-3)*2;
+	IF instr.op DIV 32 = Fist THEN size := PLO.sInt END;
+	FindFreg (instr.dest, src);
+	ASSERT (LastUseF (src) & (src = ftop));
+	PLO.GenFSTP (mode, size, base, inx, scale, disp);
+	DecCheckFreg (src); DecReg (base); DecReg (inx);
+	PLO.PutByte (PLO.WAIT)
+END Fstore;
+
+PROCEDURE FloatGen1 (VAR instr: Instruction);
+	VAR src: SHORTINT;
+BEGIN
+	FindFreg (instr.src1, src);
+	ASSERT (LastUseF (src) & (src = ftop));
+	ReleaseFreg (src); AssignFreg (instr.dest);
+	IF instr.op DIV 32 = Fabs THEN PLO.GenFop1 (PLO.FABS)
+	ELSE
+		ASSERT (instr.op DIV 32 = Fchs);
+		PLO.GenFop1 (PLO.FCHS)
+	END;
+END FloatGen1;
+(*
+PROCEDURE FloatGen3 (VAR instr: Instruction);
+	VAR
+		size, src, src1, src2: SHORTINT;
+		reverse: BOOLEAN;
+BEGIN
+	size := SHORT (((instr.op MOD 8) -3) *2);
+	FindFreg (instr.src1, src1); FindFreg (instr.src2, src2);
+	IF src1 = ftop THEN
+		reverse := FALSE; src := src2;
+		IF ~LastUseF (src1) THEN
+			AssignFreg (instr.dest);
+			PLO.GenFLD (PLO.RegReg, size, (src1 - ftop) MOD 8, PLO.noInx, PLO.noScale, PLO.noDisp)
+		ELSE
+			ReleaseFreg (src1); src1 := none; AssignFreg (instr.dest)
+		END
+	ELSIF src2 = ftop THEN
+		reverse := TRUE; src := src1;
+		IF ~LastUseF (src2) THEN
+			AssignFreg (instr.dest);
+			PLO.GenFLD (PLO.RegReg, size, (src2 - ftop) MOD 8, PLO.noInx, PLO.noScale, PLO.noDisp)
+		ELSE
+			 ReleaseFreg (src2); src2 := none; AssignFreg (instr.dest)
+		END
+	ELSE
+		reverse := FALSE; src := src2;
+		AssignFreg (instr.dest);
+		PLO.GenFLD (PLO.RegReg, size, (src1 - ftop) MOD 8, PLO.noInx, PLO.noScale, PLO.noDisp)
+	END;
+	CASE instr.op DIV 32 OF
+		Fadd: PLO.GenFADD (PLO.RegSt, size, (src - ftop) MOD 8, PLO.noInx, PLO.noScale, PLO.noDisp)
+	  | Fsub:
+			IF reverse THEN PLO.GenFSUBR (PLO.RegSt, size, (src - ftop) MOD 8, PLO.noInx, PLO.noScale, PLO.noDisp)
+			ELSE PLO.GenFSUB (PLO.RegSt, size, (src - ftop) MOD 8, PLO.noInx, PLO.noScale, PLO.noDisp)
+			END
+	  | Fmul: PLO.GenFMUL (PLO.RegSt, size, (src - ftop) MOD 8, PLO.noInx, PLO.noScale, PLO.noDisp)
+	  | Fdiv:
+			IF reverse THEN PLO.GenFDIVR (PLO.RegSt, size, (src - ftop) MOD 8, PLO.noInx, PLO.noScale, PLO.noDisp)
+			ELSE PLO.GenFDIV (PLO.RegSt, size, (src - ftop) MOD 8, PLO.noInx, PLO.noScale, PLO.noDisp)
+			END
+	ELSE HALT (BUG)
+	END;
+	DecCheckFreg (src1); DecCheckFreg (src2);
+END FloatGen3;
+*)
+PROCEDURE FloatGen3 (VAR instr: Instruction);
+VAR
+	mode, size, src, src1, src2: SHORTINT;
+	reverse, r2: BOOLEAN;
+BEGIN
+	size := SHORT (((instr.op MOD 8) -3) *2);
+	FindFreg (instr.src1, src1); FindFreg (instr.src2, src2);
+	r2 := FALSE;
+	IF ~LastUseF (src1) & ~ LastUseF (src2) THEN
+		(* copy src1->ST *)
+		PLO.GenFLD (PLO.RegReg, size, (src1 - ftop) MOD 8, PLO.noInx, PLO.noScale, PLO.noDisp);
+		(* src := src2, ST := src1 *)
+		src := src2;
+		mode := PLO.RegSt;
+		reverse := FALSE;
+	ELSIF src1 = ftop THEN
+		reverse := TRUE;
+		IF LastUseF (src1) THEN
+			IF LastUseF (src2) THEN mode := PLO.StRegP ELSE mode := PLO.RegSt; reverse := FALSE END
+		ELSE mode := PLO.StReg
+		END;
+		(* src := src2, ST := src1 *)
+		src := src2;
+	ELSIF src2 = ftop THEN
+		(* REVERSE *)
+		reverse := FALSE; r2 := TRUE;
+		IF LastUseF (src2) THEN
+			IF LastUseF (src1) THEN mode := PLO.StRegP ELSE mode := PLO.RegSt; reverse := TRUE END
+		ELSE mode := PLO.StReg
+		END;
+		(* src := src1, ST := src2 *)
+		src := src1
+	ELSE
+		(* copy src1->ST *)
+		PLO.GenFLD (PLO.RegReg, size, (src1 - ftop) MOD 8, PLO.noInx, PLO.noScale, PLO.noDisp);
+		IF LastUseF (src1) THEN FreeFreg (src1); src1 := none END;
+		IF LastUseF (src2) THEN mode := PLO.StRegP; reverse := TRUE ELSE mode := PLO.RegSt; reverse := FALSE END;
+		(* src := src2, ST := src1 *)
+		src := src2
+	END;
+	CASE instr.op DIV 32 OF
+		Fadd: PLO.GenFADD (mode, size, (src - ftop) MOD 8, PLO.noInx, PLO.noScale, PLO.noDisp)
+	  | Fsub:
+			IF reverse THEN PLO.GenFSUBR (mode, size, (src - ftop) MOD 8, PLO.noInx, PLO.noScale, PLO.noDisp)
+			ELSE PLO.GenFSUB (mode, size, (src - ftop) MOD 8, PLO.noInx, PLO.noScale, PLO.noDisp)
+			END
+	  | Fmul: PLO.GenFMUL (mode, size, (src - ftop) MOD 8, PLO.noInx, PLO.noScale, PLO.noDisp)
+	  | Fdiv:
+			IF reverse THEN PLO.GenFDIVR (mode, size, (src - ftop) MOD 8, PLO.noInx, PLO.noScale, PLO.noDisp)
+			ELSE PLO.GenFDIV (mode, size, (src - ftop) MOD 8, PLO.noInx, PLO.noScale, PLO.noDisp)
+			END
+	ELSE HALT (BUG)
+	END;
+	IF r2 THEN DecCheckFreg (src2); DecCheckFreg (src1) ELSE DecCheckFreg (src1); DecCheckFreg (src2) END;
+	IF mode = PLO.RegSt THEN AssignFreg (instr.dest)
+	ELSIF (mode = PLO.StRegP) & ((src+1)MOD 8 = ftop) THEN AssignFreg (instr.dest)
+	ELSE TakeFreg (instr.dest, src) END
+END FloatGen3;
+
+PROCEDURE FloatCmp (VAR instr: Instruction);
+	VAR size, src1, src2, reg: SHORTINT; stackOK: BOOLEAN;
+BEGIN
+	size := SHORT (((instr.op MOD 8) -3)*2);
+	FindFreg (instr.src1, src1); FindFreg (instr.src2, src2);
+	ASSERT (LastUseF (src1) & LastUseF (src2));
+	IF src1 = ftop THEN
+		IF src2 = (ftop + 1) MOD 8 THEN
+			PLO.GenFop1 (PLO.FCOMPP); stackOK := TRUE
+		ELSE
+			PLO.GenFCOMP (PLO.RegReg, size, (src2 - ftop) MOD 8, PLO.noInx, PLO.noScale, PLO.noDisp);
+			stackOK := FALSE
+		END
+	ELSE
+		stackOK := FALSE;
+		GetFreg (reg);
+		PLO.GenFLD (PLO.RegReg, size, (src1-ftop-1) MOD 8, PLO.noInx, PLO.noScale, PLO.noDisp);
+		PLO.GenFCOMP (PLO.RegReg, size, (src2-ftop) MOD 8, PLO.noInx, PLO.noScale, PLO.noDisp);
+		ReleaseFreg (reg)
+	END;
+	GetThisReg (PLO.EAX);
+	PLO.GenFop1 (PLO.FSTSW); (* flags into AX *)
+	PLO.PutByte (PLO.SAHF); (* store ah into flags *);
+	IF stackOK THEN
+		DecCheckFreg (src1); DecCheckFreg (src2)
+	ELSE
+		DecCheckFreg (src1); DecCheckFreg (src2);
+		PLO.GenFFREE (0)
+	END;
+	FreeReg (PLO.EAX)
+END FloatCmp;
+
+PROCEDURE GenEntier (VAR instr: Instruction);
+	VAR dest, src, reg, dummy: SHORTINT;
+BEGIN
+	FindFreg (instr.src1, src);
+	dummy := none; AssignReg (instr.dest, dummy, dummy, dummy);
+	dest := instr.reg;
+	ASSERT (dest  IN {PLO.EAX..PLO.EDI});
+	PLO.GenTyp1 (PLO.SUB, PLO.ImmReg, PLO.ESP, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp, 8);
+	PLO.GenFSTCW (PLO.ESP, PLO.noInx, PLO.noScale, 0);
+	PLO.PutByte (PLO.WAIT);
+	PLO.GenMOV (PLO.MemReg, dest, PLO.ESP, PLO.noInx, PLO.noScale, 0, PLO.noImm);
+	(*PLO.GenTyp1 (PLO.AND, ImmReg, dest, noBase, noInx, noScale, noDisp, 0F3FFH);*)	(*prk removed*)
+	PLO.GenTyp1 (PLO.Or, PLO.ImmReg, dest, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp, 0400H);
+	PLO.GenMOV (PLO.RegMem, dest, PLO.ESP, PLO.noInx, PLO.noScale, 4, PLO.noImm);
+	PLO.GenFLDCW (PLO.ESP, PLO.noInx, PLO.noScale, 4);
+	IF ~LastUseF (src) THEN 
+		IF src # ftop THEN (* can only store ftop *)
+			GetFreg (reg);
+			PLO.GenFLD (PLO.RegReg, reg, src, PLO.noInx, PLO.noScale, PLO.noDisp);
+			PLO.GenFSTP (PLO.RegMem, PLO.sInt, PLO.ESP, PLO.noInx, PLO.noScale, 4);
+			ReleaseFreg (reg)
+		ELSE PLO.GenFST (PLO.RegMem, PLO.sInt, PLO.ESP, PLO.noInx, PLO.noScale, 4)
+		END
+	ELSE PLO.GenFSTP (PLO.RegMem, PLO.sInt, PLO.ESP, PLO.noInx, PLO.noScale, 4)
+	END;
+	PLO.PutByte (PLO.WAIT);
+(*	(*prk removed*)
+	PLO.GenFSTCW (PLO.ESP, PLO.noInx, PLO.noScale, 0);
+	PLO.PutByte (PLO.WAIT);
+	PLO.GenTyp1 (PLO.AND, PLO.ImmMem, PLO.Bit32, PLO.ESP, PLO.noInx, PLO.noScale, 0, 0F3FFH);
+*)
+	PLO.GenFLDCW (PLO.ESP, PLO.noInx, PLO.noScale, 0);
+	PLO.GenMOV (PLO.MemReg, dest, PLO.ESP, PLO.noInx, PLO.noScale, 4, PLO.noImm);
+	PLO.GenTyp1 (PLO.ADD, PLO.ImmReg, PLO.ESP, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp, 8);
+	DecCheckFreg (src)
+END GenEntier;
+
+(* general *)
+
+PROCEDURE GenEnter (locSize: LONGINT);
+	VAR i, L: LONGINT;
+BEGIN
+	ASSERT (locSize MOD 4 = 0);
+	PLO.GenPUSH (PLO.RegReg, PLO.EBP, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm);
+	PLO.GenMOV (PLO.RegReg, PLO.EBP, PLO.ESP, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm);
+	IF locSize # 0 THEN
+		IF ~ptrinit THEN PLO.GenTyp1 (PLO.SUB, PLO.ImmReg, PLO.ESP, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp, locSize)
+		ELSE (* pointer initialization *)
+			i := locSize DIV 4;
+			PLO.GenMOV (PLO.ImmReg, PLO.EAX, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp, 0);
+			IF i < 8 THEN
+				WHILE i > 0 DO
+					PLO.GenPUSH (PLO.RegReg, PLO.EAX, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noInx);
+					DEC (i)
+				END
+			ELSE
+				PLO.GenMOV (PLO.ImmReg, PLO.ECX, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp, i);
+				L := PLO.pc;
+				PLO.GenPUSH (PLO.RegReg, PLO.EAX, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noInx);
+				PLO.GenDEC (PLO.ImmReg, PLO.ECX, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp);
+				PLO.GenJcc (PLO.JNZ, L - (PLO.pc + 2))
+			END
+		END
+	END
+END GenEnter;
+
+PROCEDURE PushRegs;
+	VAR i: SHORTINT; disp: LONGINT;
+BEGIN
+	IF nofSavedLevel > MaxSaveLevel THEN PLO.Err (251)
+	ELSE
+		i := 0;
+		WHILE i < 8 DO
+			savedRegs [nofSavedLevel].sreg [i] := SHORT (sregTab [i]);
+			savedRegs [nofSavedLevel].reg [i] := SHORT (regTab [i]);
+			IF (regTab [i] # free) & ~(i IN {PLO.ESP, PLO.EBP}) THEN
+				PLO.GenPUSH (PLO.RegReg, i, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm);
+				regTab [i] := free
+			END;
+			INC (i)
+		END;
+		disp := 0; i := 0;
+		WHILE i < 8 DO
+			IF fregTab [i] # free THEN INC (disp, 8) END;
+			INC (i)
+		END;
+		i := 0;
+		IF disp > 0 THEN
+			PLO.GenTyp1 (PLO.SUB, PLO.ImmReg, PLO.ESP, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp, disp);
+			disp := disp - 8;
+			WHILE disp >= 0 DO
+				IF fregTab [ftop] # free THEN
+					PLO.GenFSTP (PLO.RegMem, PLO.lReal, PLO.ESP, PLO.noInx, PLO.noScale, disp);
+					savedRegs [nofSavedLevel].freg [i] := SHORT (fregTab [ftop]);
+					INC (i);
+					fregTab [ftop] := free;
+					DEC (disp, 8);
+				ELSE PLO.GenFop1(PLO.FINCSTP) (* increment stack top *)
+				END;
+				ftop := (ftop + 1) MOD 8;
+			END;
+			PLO.PutByte (PLO.WAIT);
+		END;
+		WHILE i < 8 DO
+			savedRegs [nofSavedLevel].freg [i] := free;
+			INC (i)
+		END;
+		INC (nofSavedLevel)
+	END
+END PushRegs;
+
+PROCEDURE PopRegs (VAR instr: Instruction);
+	VAR 
+		i, j, size, freg: SHORTINT; 
+		Eax: INTEGER;
+		disp: LONGINT;
+BEGIN
+	DEC (nofSavedLevel);
+	IF instr.hint # noHint THEN
+		size := SHORT ((instr.op MOD 8) * 8) (* procedure with result *)
+	ELSE size := -1;
+	END;
+	i := 7;
+	WHILE (i >= 0) & (savedRegs [nofSavedLevel].freg[i] = free) DO DEC (i) END;
+	IF (instr.hint = useST) & (i >= 0) THEN (* save result *)
+		disp := 8;
+		PLO.GenTyp1 (PLO.SUB, PLO.ImmReg, PLO.ESP, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp,  8);
+		PLO.GenFSTP (PLO.RegMem, PLO.lReal, PLO.ESP, PLO.noInx, PLO.noScale, 0);
+		PLO.PutByte (PLO.WAIT);
+		fregTab [ftop] := free;
+		ftop := (ftop + 1) MOD 8
+	ELSE disp := 0
+	END;
+	j := i;
+	WHILE j >= 0 DO
+		GetFreg (freg); PLO.GenFLD (PLO.Mem, PLO.lReal, PLO.ESP, PLO.noInx, PLO.noScale, disp);
+		fregTab [freg] := savedRegs [nofSavedLevel].freg [j];
+		Instr [fregTab [freg]].reg := freg;
+		INC (disp, 8);
+		DEC (j) 
+	END;
+	IF instr.hint = useST THEN
+		size := -1;
+		IF i >= 0 THEN (* load result *)
+			GetFreg (freg); PLO.GenFLD (PLO.Mem, PLO.lReal, PLO.ESP, PLO.noInx, PLO.noScale, 0);
+			fregTab [freg] := instr.dest; instr.reg := freg;
+		ELSE
+			fregTab [ftop] := instr.dest;
+			instr.reg := ftop (* result already on the stack *)
+		END
+	END;
+	IF disp > 0 THEN PLO.GenTyp1 (PLO.ADD, PLO.ImmReg, PLO.ESP, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp, disp) END;
+	i := PLO.EDI;
+	WHILE i > PLO.EAX DO
+		sregTab [i] := savedRegs [nofSavedLevel].sreg[i];
+		regTab [i] := savedRegs [nofSavedLevel].reg [i];
+		IF (regTab [i] # free) & ~(i IN {PLO.ESP, PLO.EBP}) THEN PLO.GenPOP (PLO.RegReg, i, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp) END;
+		DEC (i)
+	END;
+	sregTab [0] := savedRegs [nofSavedLevel].sreg[0];
+	Eax := savedRegs [nofSavedLevel].reg [PLO.EAX];
+	IF size # -1 THEN (* procedure with integer result *)
+		IF Eax # free THEN (* conflict with the pushed EAX *)
+			IF Eax = Splitted THEN
+				regTab [PLO.EAX] := Splitted;
+				i := PLO.EBX; WHILE (i > PLO.EAX) & (regTab [i] # free) DO DEC (i) END;
+				IF i = PLO.EAX THEN
+					i := PLO.EBX; WHILE (i > PLO.EAX) & (regTab [i] # Splitted) DO DEC (i) END;
+					IF i = PLO.EAX THEN
+						PLO.Err (215); RegErr := TRUE;
+						RETURN
+					END
+				END;
+				GetThisReg (i);
+				PLO.GenPOP (PLO.RegReg, i, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp);
+				regTab [i] := Splitted;
+				sregTab [i] := sregTab [0];
+				IF sregTab [0] >= 0 THEN Instr [sregTab [0]].reg := i + PLO.AL END;
+				INC (i, 4);
+				sregTab [i] := sregTab [4];
+				IF sregTab [4] >= 0 THEN Instr [sregTab [4]].reg := i + PLO.AL END;
+			ELSE
+				regTab [PLO.EAX] := Eax;
+				AssignNewReg (Eax);
+				PLO.GenPOP (PLO.RegReg, Instr [regTab [PLO.EAX]].reg MOD 8, PLO.noBase, PLO.noScale, PLO.noInx, PLO.noDisp)
+			END
+		END;
+		IF size = PLO.Bit8 THEN
+			regTab [PLO.EAX] := Splitted; sregTab [0] := instr.dest; sregTab [4] := free
+		ELSE regTab [PLO.EAX] := instr.dest
+		END;
+		instr.reg := PLO.EAX + size (* result in EAX, AX, AL *)
+	ELSE
+		regTab [PLO.EAX] := Eax;
+		IF Eax # free THEN PLO.GenPOP (PLO.RegReg, PLO.EAX, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp) END
+	END
+END PopRegs;
+
+PROCEDURE FixupJcc (label: LONGINT);
+	VAR pos, nextLabel: LONGINT;
+BEGIN
+	WHILE label # Nil DO
+		IF Instr [label].op = jmp THEN pos := Instr [label].pc + 1
+		ELSE (* jcc *) pos := Instr [label].pc + 2
+		END;
+		PLO.GetDWord (pos, nextLabel);
+		PLO.PutDWordAt (pos, PLO.pc - (pos + 4));
+		label := -2 - nextLabel - 10000H
+	END
+END FixupJcc;
+
+PROCEDURE FixupCaseTab (VAR instr: Instruction);
+	VAR elseLabel, from, to, val: LONGINT;
+BEGIN
+	elseLabel := Instr [instr.src2].pc;
+	from := instr.src1; to := instr.src1 + instr.inx - 4; (* instr.inx = length *)
+	WHILE from <= to DO
+		PLO.GetConsDWord (from, val);
+		IF val = Nil THEN val := elseLabel
+		ELSE val := Instr [val].pc
+		END;
+		val := val + PLO.codeBase;
+		PLO.PutConsDWord (from, val);
+		from := from + 4
+	END
+END FixupCaseTab;
+
+PROCEDURE GenCode* (pSize: INTEGER);
+	VAR 
+		obj: PLT.Object; ret: SHORTINT;
+		i, k: LONGINT;
+		op, reg: SHORTINT;
+		node: Node;
+BEGIN
+	ftop := 7; FreeRegDisp := 0;
+	i := 0;
+	WHILE i < nofTrapFixups DO
+		trapFixupTab [i] := Nil;
+		INC (i)
+	END;
+	i := 0;
+	WHILE i < 8 DO
+		regTab [i] := free; sregTab [i] := free; fregTab [i] := free;
+		INC (i)
+	END;
+	regTab [PLO.ESP] := Occupied; regTab [PLO.EBP] := Occupied; (* stack and base pointer are always used *)
+	RegErr := FALSE;
+	i := 0;
+	WHILE ~PLO.CodeErr & ~RegErr & (i < pSize) DO
+		FixupJcc (Instr [i].pc);
+		Instr [i].pc := PLO.pc;
+		op := SHORT (Instr [i].op DIV 32);
+		IF op > 0 THEN (* no dead code *)
+			CASE op OF
+				NewStat: (* OPM.errpos := Instr [i].src1 *)
+			  | Ld, Lea, Ldbdw, Ldwdw, Ldbw, Ldbdwu, Ldwdwu, Ldbwu, PUTreg: Load(Instr [i])
+			  | LdProc, LdXProc: LoadProc (Instr [i])
+			  | Sto, GETreg: Store (Instr [i])
+			  | Push: GenPush (Instr [i])
+			  | Pop: GenPop (Instr [i])
+			  | Add, Sub, oR..Rol: Gen3 (Instr [i])
+			  | Div, Mod: GenDivMod (Instr [i])
+			  | Mul: GenMul (Instr [i])
+			  | Neg, Not: Gen2 (Instr [i])
+			  | Abso: GenAbs (Instr [i])
+			  | Cmp, Bt: Flags (Instr [i])
+			  | Sete..Setnc: Setcc (Instr [i])
+			  | Je..JmpReg: Gen1 (Instr [i], i)
+			  | Te..Ta, To, Tae, Tle: GenTrapCC (Instr [i])
+			  | Trap: GenTrap (Instr[i].src2)
+			  | Call:
+					node := SYSTEM.VAL (Node, Instr [i].node);
+					obj := node.left.obj;
+					node := NIL; (* << jm *)
+					IF obj.mode = CProc THEN (* code procedure, inline exppansion *)
+						HALT(91);
+					ELSE (* IF Instr [i].src2 >= 0 THEN *) (* backward call *)
+						IF obj.linkadr = -1 THEN
+							Instr[i].src2 := obj.lim + 5 + PLO.pc + PLO.codeBase;
+							obj.lim := Instr[i].pc + 1;
+						END;
+						PLO.GenCALL (PLO.ImmReg, none, PLO.noBase, PLO.noInx, PLO.noScale, Instr[i].src2 - PLO.codeBase - PLO.pc - 5)
+					END
+			  | Xcall:
+					PLO.GenCALL (PLO.ImmReg, none, PLO.noBase, PLO.noInx, PLO.noScale, Instr[i].src2 - PLO.codeBase - PLO.pc - 5)
+			  | CallReg: (* !!later optimize *)
+					FindReg (Instr [i].src2, reg);
+					PLO.GenCALL (PLO.RegReg, reg, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp);
+					DecReg (reg)
+			  | Enter: GenEnter (Instr [i].src2)
+			  | Leave: (* !!later optmize if ESP = EBP *)
+					PLO.GenMOV (PLO.RegReg, PLO.ESP, PLO.EBP, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm);
+					PLO.GenPOP (PLO.RegReg, PLO.EBP, PLO.noBase, PLO.noInx, PLO.noScale, PLO.noDisp)
+			  | Ret:
+					k := PLO.EAX; ret := -1;
+					WHILE k <= PLO.EDI DO
+						IF ~(k IN {PLO.ESP, PLO.EBP}) & (regTab [k] # free) THEN
+							IF ret = -1 THEN ret := SHORT(SHORT(k))
+							ELSE PLO.Err (200);
+							END
+						END;
+						INC (k)
+					END;
+					IF ret # -1 THEN (* copy from ret to AX, free ret *)
+						IF ret # PLO.EAX THEN PLO.GenMOV(PLO.RegReg, PLO.EAX, ret, PLO.noInx, PLO.noScale, PLO.noDisp, PLO.noImm) END;
+						IF regTab[ret] = Splitted THEN FreeReg (ret + PLO.Bit8); FreeReg (ret + PLO.Bit8 + 4)
+						ELSIF regTab [ret] # free THEN FreeReg (ret)
+						END
+					END;
+					IF fregTab [ftop] # free THEN FreeFreg (ftop) END;
+					k := 0;
+					WHILE k < 8 DO 
+						IF fregTab[k] # free THEN PLO.Err (-1001); 
+							(* PLM.LogWStr ("  "); PLM.LogWNum (k, 6); PLM.LogWNum (fregTab [k], 8) *)
+						END; 
+						INC (k)
+					END;
+					IF FreeRegDisp # 0 THEN (* PLM.LogWLn; PLM.LogWStr ("Error FreeReg"); PLM.LogWLn *) END;
+
+					PLO.GenRET (Instr [i].src2);
+			  | RepMovs: GenRepMovs (Instr [i])
+			  | CmpString: GenCmpString (Instr [i])
+			  | Cld: PLO.PutByte (PLO.CLD)
+			  | PushReg: PushRegs 
+			  | PopReg: PopRegs (Instr [i]) 
+			  | Case: FixupCaseTab (Instr [i])
+			  | Phi: GenPhi (Instr [i])
+			  | Short: GenShort (Instr [i])
+			  | Entier: GenEntier (Instr [i])
+			  | Label: (* only used for jumps *)
+			  | FLoad, Fild: Fload (Instr [i])
+			  | FStore, Fist: Fstore (Instr [i])
+			  | Fabs, Fchs: FloatGen1 (Instr [i])
+			  | Fadd, Fsub, Fmul, Fdiv: FloatGen3 (Instr [i])
+			  | Fcmp: FloatCmp (Instr [i])
+			ELSE HALT (BUG)
+			END
+		END;
+		INC (i)
+	END;
+	FixupAndGenTrap; (* fixups traps and generate code for them *)
+END GenCode;
+
+(* fixups *)
+
+PROCEDURE FixupLocalProcCall* (proc: PLT.Object);
+	VAR L, L1, entryNr: LONGINT;
+BEGIN
+	proc.linkadr := PLO.pc + PLO.codeBase;
+	IF proc.lim # 0 THEN
+		L := proc.lim;
+		WHILE L # 0 DO
+			PLO.GetDWord(L, L1);
+			IF L1 < 0 THEN 
+				PLO.PutDWordAt(L, proc.linkadr); L := -L1
+			ELSE
+				PLO.PutDWordAt(L, proc.linkadr - L - 4 - PLO.codeBase); L := L1
+			END
+		END
+	END;
+
+	IF (proc.mode = XProc) OR (proc.mode = TProc) THEN
+		IF proc.mode = TProc THEN entryNr := proc.adr MOD 10000H
+		ELSE entryNr := proc.adr
+		END;
+		
+		IF PLO.pc > 32767 THEN
+			entry[entryNr] := SHORT (PLO.pc - 65536)
+		ELSE entry [entryNr] := SHORT (PLO.pc)
+		END
+		
+	END
+END FixupLocalProcCall;
+	
+	PROCEDURE AllocCaseTab* (low, high: LONGINT; VAR tab: LONGINT);
+		VAR len, i: LONGINT;
+	BEGIN
+		IF ~ConstErr THEN
+			len := 4 * (high - low + 1);
+			tab := PLO.dsize;
+			PLO.dsize := PLO.dsize + len;
+			IF PLO.dsize > PLO.ConstLength + PLO.DataLength THEN
+				PLO.Err (230);
+				ConstErr := TRUE
+			ELSE
+				i := tab; WHILE i < PLO.dsize DO PLO.data [i] := CHR (255); (* = -1 *) INC (i) END
+			END
+		ELSE tab := 0
+		END;
+	END AllocCaseTab;
+	
+	PROCEDURE CaseJump* (Label, tab, from, to: LONGINT);
+	BEGIN
+		IF ~ConstErr THEN
+			from := tab + 4 * from; to := tab + 4 * to;
+			WHILE from <= to DO
+				(* !!later use this:  SYSTEM.MOVE (SYSTEM.ADR (Label), SYSTEM.ADR (PLO.constant [from]), 4); *)
+				PLO.PutConsDWord (from, Label);
+				from := from + 4
+			END
+		END
+	END CaseJump;
+
+
+(* references *)
+
+PROCEDURE RefW(ch: CHAR);
+BEGIN
+	refs[refSize] := ch; INC(refSize)
+END RefW;
+
+PROCEDURE RefWNum(x: LONGINT);
+BEGIN
+	WHILE (x < - 64) OR (x > 63) DO RefW(CHR(x MOD 128 + 128)); x := x DIV 128 END;
+	RefW(CHR(x MOD 128))
+END RefWNum;
+
+PROCEDURE OutRefPoint*(proc: PLT.Object; level: LONGINT); (* ejz *)
+	VAR n: LONGINT;
+BEGIN
+	IF proc = NIL THEN (* Module Body *)
+		RefW(0F8X);
+		RefWNum(entry[0]) (* offset *)
+	ELSE (* procedure *)
+		RefW(0F9X);
+		RefWNum(proc.linkadr - PLO.codeBase); (* offset *)
+		RefW(CHR(proc.nofpar));
+		n := proc.typ.form;
+		IF n IN {Undef, NilTyp, NoTyp} THEN n := 0 END;
+		RefW(CHR(n));
+		RefW(CHR(level));
+		RefW(1X)
+	END
+END OutRefPoint;
+
+PROCEDURE OutRefName*(name: ARRAY OF CHAR);
+VAR ch: CHAR; i: INTEGER;
+BEGIN
+	i := 0;
+	REPEAT
+		ch := name [i]; RefW(ch);
+		INC(i)
+	UNTIL ch = 0X
+END OutRefName;
+
+PROCEDURE OutRefs*(obj: PLT.Object); (* ejz *)
+VAR f: INTEGER;
+BEGIN
+	WHILE obj # NIL DO
+		IF obj.mode IN {Var, Par, VarPar} THEN
+			f := obj.typ.form;
+			IF (f IN {Byte..Set, Pointer, ProcTyp}) OR (obj.typ.comp = Record) OR
+				(obj.typ.comp IN {Array, DynArr}) & (obj.typ.BaseTyp.form IN {Byte..Set, Pointer, ProcTyp}) THEN
+				IF ((obj.mode = Var) OR (obj.mode = Par)) & (obj.typ.comp # DynArr) THEN RefW(1X)	(* direct *)
+				ELSE RefW(3X)	(* indirect *)
+				END;
+				IF obj.typ.comp = Array THEN
+					RefW(CHR(80H + obj.typ.BaseTyp.form));
+					RefWNum(obj.typ.n)
+				ELSIF obj.typ.comp = DynArr THEN
+					RefW (CHR(80H + obj.typ.BaseTyp.form));
+					RefWNum(0)
+				ELSIF obj.typ.comp = Record THEN
+					RefW(CHR(10H+Record));
+					RefWNum(obj.typ.tdadr)
+				ELSIF (f = Pointer) & (obj.typ.BaseTyp # NIL) & (obj.typ.BaseTyp.comp = Record) THEN
+					RefW(CHR(10H+Pointer));
+					RefWNum(obj.typ.BaseTyp.tdadr)
+				ELSE
+					RefW(CHR(f))
+				END;
+				IF obj.level <= 0 THEN RefWNum(obj.linkadr-PLO.sb) ELSE RefWNum(obj.linkadr) END;
+				OutRefName(obj.name)
+			END
+		END;
+		obj := obj.nxtobj
+	END
+END OutRefs;
+
+(* pointers *)
+
+PROCEDURE Open*();
+BEGIN
+	nofrecs := 0; nofSavedLevel := 0; nofEntries := 1; noftyp := 0;
+	refSize := 0; 
+	ConstErr := FALSE;
+	PLO.dsize := 0; PLO.pc := 0; PLO.CodeErr := FALSE
+END Open;
+
+PROCEDURE Close*;
+	VAR i: INTEGER;
+BEGIN
+	FixTypeDescs;
+	i := 0; WHILE i < MaxRecs DO recTab[i] := NIL; INC(i) END
+END Close;
+
+BEGIN
+	JmpConvert [0] := PLO.JE; JmpConvert [1] := PLO.JNE; JmpConvert [2] := PLO.JL; JmpConvert [3] := PLO.JLE;
+	JmpConvert [4] := PLO.JG; JmpConvert [5] := PLO.JGE; JmpConvert [6] := PLO.JA; JmpConvert [7] := PLO.JAE;
+	JmpConvert [8] := PLO.JB; JmpConvert [9] := PLO.JBE; JmpConvert [10] := PLO.JC; JmpConvert [11] := PLO.JNC;
+	SetccConvert [0] := SETE; SetccConvert [1] := SETNE; SetccConvert [2] := SETL; SetccConvert [3] := SETLE;
+	SetccConvert [4] := SETG; SetccConvert [5] := SETGE; SetccConvert [6] := SETA; SetccConvert [7] := SETAE;
+	SetccConvert [8] := SETB; SetccConvert [9] := SETBE; SetccConvert [10] := SETB; SetccConvert [11] := SETNB;
+	NEW(Instr, RiscCodeLen);
+END OPLL.

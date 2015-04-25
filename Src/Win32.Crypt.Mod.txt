@@ -1,0 +1,1375 @@
+﻿(* OBERON System 3, Release 2.3.
+
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE Crypt; (** portable / source: Win32.Crypt.Mod *)	(*  *)
+
+(** jm 23.8.95.
+		tk 5.12.95 some small compatibility changes
+
+References:
+	IDEA, Massey.
+	
+	MD5 derived from the RSA Data Security, Inc. MD5 Message digest algorithm. RFC 1321.
+	
+	Modular multiplication without trial division, Peter L. Montgomery
+	Mathematics of Computation,
+	Volume 44, Number 170, April 1985, pages 519-521.
+*)
+
+IMPORT S := SYSTEM, MD5, Files, Input, Fonts, Texts, Display, Display3, Effects, Oberon, Kernel32, User32, Win32, Out;
+
+CONST
+	Ok* = 0; InvalidPassword* = 1; (** RSADecrypt result codes *)
+	chinese = TRUE;
+	
+(* ---- IDEA ---- *)
+
+CONST
+	maxim = 65537; fuyi = 65536; one = 65535;
+	
+TYPE
+	CipherKey* = ARRAY 8 OF INTEGER; (** Symmetric IDEA Encryption/decryption key *)
+	CipherText* = ARRAY 4 OF INTEGER; 
+	IDEAKeyBlock = ARRAY 7, 10 OF INTEGER;
+
+VAR
+	keyBlock: IDEAKeyBlock; (* current active key block *)
+
+(* ---- MD5 ---- *)
+	
+VAR
+	md5: MD5.Context;
+
+(* ---- Multiprecision Integers ----- *)
+
+CONST topbit = 80000000H;
+
+TYPE
+	RegisterPtr* = POINTER TO Register;	(** Multiprecision Integers *)
+	Register* = ARRAY OF LONGINT;
+
+VAR
+	acc: ARRAY 64 OF LONGINT;	(* used for fast mult *)
+
+VAR (* Montgomery *)
+	Mrwords, Mrbits: LONGINT; (* number of LONGINT words of , number of bits of R *)
+	Mn0, Mn, Mr, Mtmp: RegisterPtr;
+
+(* ---- RSA ---- *)
+
+CONST
+	NPrimes = 1028;
+
+TYPE
+	Certificate* = POINTER TO CertificateDesc;
+	CertificateDesc* = RECORD
+		authority*: ARRAY 128 OF CHAR;  (** Certifying authority.  *)
+		signature*: RegisterPtr;	(** Signature of key. *)
+		next*: Certificate;
+	END;
+	
+	Key* = POINTER TO KeyDesc;
+	KeyDesc* = RECORD
+		name-: ARRAY 128 OF CHAR;  (** Owner of this key. *)
+		private-: BOOLEAN;	(** Is this a private key? then the exponent has been encrypted *)
+		size-: INTEGER; (* size in bits of the modulus *)
+		exponent-, modulus-: RegisterPtr;
+		p, q, u: RegisterPtr; (* for chinese remainder theorem *)
+		check-: LONGINT;	(* least significant LONGINT of unencrypted exponent *)
+		time-, date-: LONGINT;
+		certificates*: Certificate;
+		next: Key;
+	END;
+
+VAR
+	prime, remainder: POINTER TO ARRAY NPrimes OF INTEGER;
+	Z: LONGINT;
+
+(* ---- Keyrings ---- *)
+
+TYPE
+	Enumerator* = PROCEDURE(K: Key);
+	Keyring* = POINTER TO KeyringDesc;
+	KeyringDesc* = RECORD
+		name-: ARRAY 64 OF CHAR;
+		keys: Key;
+	END;
+	
+(** ---- IDEA ---- *)
+
+	PROCEDURE XOR(a, b: INTEGER): INTEGER;	(* decent type cast *)
+	BEGIN RETURN SHORT(S.VAL(LONGINT, S.VAL(SET, LONG(a)) / S.VAL(SET, LONG(b))))
+	END XOR;
+
+	PROCEDURE LAND(a, b: LONGINT): LONGINT;
+	BEGIN RETURN S.VAL(LONGINT, S.VAL(SET, a) * S.VAL(SET, b))
+	END LAND;
+	
+	(* ILSH replaces LSH(INTEGER, x) - may cause troubles on RISC processors *)
+	PROCEDURE ILSH(a, s: INTEGER): INTEGER;
+		VAR al: LONGINT;
+	BEGIN 
+		al := S.VAL(LONGINT, S.VAL(SET, LONG(a)) * S.VAL(SET, 0FFFFH));
+		RETURN SHORT(S.VAL(LONGINT, S.VAL(SET, S.LSH(al, s)) * S.VAL(SET, 0FFFFH)));
+	END ILSH;
+
+	PROCEDURE Mul(a, b: INTEGER): INTEGER;
+	VAR p, q: LONGINT;
+	BEGIN
+		IF a = 0 THEN p := maxim - LAND(b, one)
+		ELSIF b = 0 THEN p := maxim - LAND(a, one)
+		ELSE
+			q := LAND(a, one) * LAND(b, one); (* << statement below is not portable *)
+			(* q := S.VAL(LONGINT, S.VAL(SET, a) * {0..15}) * S.VAL(LONGINT, S.VAL(SET, b) * {0..15}); *)
+			p := LAND(q, one) - S.LSH(q, -16); (* << statement below is not portable *)
+			(* p := S.VAL(LONGINT, S.VAL(SET, q) * {0..15}) - S.LSH(q, -16); *)
+			IF p <= 0 THEN INC(p, maxim) END
+		END;
+		RETURN SHORT(p);
+	END Mul;
+	
+	PROCEDURE Inv(xin: INTEGER): INTEGER;
+	VAR n1, n2, q, r, b1, b2, t: LONGINT;
+	BEGIN
+		IF xin = 0 THEN b2 := 0
+		ELSE
+			n1 := maxim; n2 := LAND(xin, one); b2 := 1; b1 := 0;
+			REPEAT
+				r := n1 MOD n2; q := (n1 - r) DIV n2;
+				IF r = 0 THEN
+					IF b2 < 0 THEN INC(b2, maxim) END
+				ELSE
+					n1 := n2; n2 := r; t := b2; b2 := b1 - q * b2; b1 := t
+				END
+			UNTIL r = 0
+		END;
+		RETURN SHORT(b2)
+	END Inv;
+
+	PROCEDURE CalcEncryptionKeys(VAR key: CipherKey; VAR Z: IDEAKeyBlock);
+	VAR s: ARRAY 55 OF INTEGER; i, j, r: INTEGER;
+	BEGIN
+		FOR i := 0 TO 7 DO s[i] := key[i] END;
+		FOR i := 8 TO 54 DO
+			IF (i + 2) MOD 8 = 0 THEN s[i] := XOR(ILSH(s[i-7], 9), ILSH(s[i-14], -7)) 	(* use ILSH in this procedure *)
+			ELSIF (i + 1) MOD 8 = 0 THEN s[i] := XOR(ILSH(s[i-15], 9), ILSH(s[i-14], -7))
+			ELSE s[i] := XOR(ILSH(s[i-7], 9), ILSH(s[i-6], -7))
+			END
+		END;
+		FOR r := 1 TO 9 DO
+			FOR j := 1 TO 6 DO
+				Z[j, r] := s[6*(r-1) + j - 1]
+			END
+		END
+	END CalcEncryptionKeys;
+	
+	PROCEDURE CalcDecryptionKeys(VAR Z, DK: IDEAKeyBlock);
+	VAR j: INTEGER;
+	BEGIN
+		FOR j := 1 TO 9 DO
+			DK[1, 8-j+2] := Inv(Z[1][j]);
+			DK[2, 8-j+2] := Inv(Z[2][j]);
+			DK[3, 8-j+2] := SHORT(fuyi - LAND(Z[3][j], one));
+			DK[4, 8-j+2] := SHORT(fuyi - LAND(Z[4][j], one));
+		END;
+		FOR j := 1 TO 9 DO
+			DK[5][9-j] := Z[5][j];
+			DK[6][9-j] := Z[6][j];
+		END;
+	END CalcDecryptionKeys;
+
+	(** Start encoding process *)
+	PROCEDURE IDEAInitEncoding*(VAR key: CipherKey);
+	BEGIN CalcEncryptionKeys(key, keyBlock)
+	END IDEAInitEncoding;
+	
+	(** Start decoding process *)
+	PROCEDURE IDEAInitDecoding*(VAR key: CipherKey);
+	VAR Z: IDEAKeyBlock;
+	BEGIN CalcEncryptionKeys(key, Z); CalcDecryptionKeys(Z, keyBlock);
+	END IDEAInitDecoding;
+	
+	(** IDEA Encode/decode. *)
+	PROCEDURE IDEACipher*(VAR inout: CipherText);
+	VAR r, x1, x2, x3, x4, kk, t1, t2, a: INTEGER;
+	BEGIN
+		x1 := inout[0]; x2 := inout[1]; x3 := inout[2]; x4 := inout[3];
+		FOR r := 1 TO 8 DO
+			x1 := Mul(x1, keyBlock[1, r]);
+			x2 := Mul(x2, keyBlock[2, r]);
+			INC(x3, keyBlock[3, r]);
+			INC(x4, keyBlock[4, r]);
+			kk := Mul(keyBlock[5, r], XOR(x1, x3));
+			t1 := Mul(keyBlock[6, r], kk + XOR(x2, x4));
+			t2 := kk + t1;
+			a := XOR(x1, t1);
+			x1 := XOR(x3, t1);
+			x3 := a;
+			a := XOR(x2, t2);
+			x2 := XOR(x4, t2);
+			x4 := a
+		END;
+		inout[0] := Mul(x1, keyBlock[1, 9]);
+		inout[1] := Mul(x2, keyBlock[2, 9]);
+		inout[2] := x3 + keyBlock[3, 9];
+		inout[3] := x4 + keyBlock[4, 9]
+	END IDEACipher;
+	
+(** ---- MD5 ---- *)
+	
+	PROCEDURE MD5Init*;
+	BEGIN
+		md5 := MD5.New()
+	END MD5Init;
+
+	PROCEDURE MD5Write*(ch: CHAR);
+	BEGIN
+		MD5.Write(md5, ch)
+	END MD5Write;
+
+	PROCEDURE MD5WriteInt*(x: INTEGER);
+	BEGIN
+		MD5Write(CHR(x MOD 256)); x := x DIV 256;
+		MD5Write(CHR(x MOD 256))
+	END MD5WriteInt;
+
+	PROCEDURE MD5WriteLInt*(x: LONGINT);
+	BEGIN
+		MD5Write(CHR(x MOD 256)); x := x DIV 256;
+		MD5Write(CHR(x MOD 256)); x := x DIV 256;
+		MD5Write(CHR(x MOD 256)); x := x DIV 256;
+		MD5Write(CHR(x MOD 256))
+	END MD5WriteLInt;
+
+	PROCEDURE MD5WriteString*(s: ARRAY OF CHAR);
+	VAR i: INTEGER;
+	BEGIN
+		i := 0; WHILE s[i] # 0X DO MD5Write(s[i]); INC(i) END
+	END MD5WriteString;
+
+	PROCEDURE MD5WriteKey*(K: Key);
+	VAR i: LONGINT;
+	BEGIN
+		ASSERT(K # NIL, 100);
+		MD5WriteString(K.name);
+		IF K.private THEN MD5Write(1X) ELSE MD5Write(0X) END;
+		MD5WriteInt(K.size);
+		FOR i := 0 TO LEN(K.exponent^) - 1 DO MD5WriteLInt(K.exponent[i]) END;
+		FOR i := 0 TO LEN(K.modulus^) - 1 DO MD5WriteLInt(K.modulus[i]) END;
+		MD5WriteLInt(K.check); MD5WriteLInt(K.time); MD5WriteLInt(K.date);
+	END MD5WriteKey;
+	
+	PROCEDURE MD5Close*(VAR digest: CipherKey);
+		VAR
+			dig: MD5.Digest;
+			i: LONGINT;
+	BEGIN
+		MD5.Close(md5, dig); md5 := NIL;
+		FOR i := 0 TO 7 DO
+			digest[i] := ORD(dig[2*i]) + 256*ORD(dig[2*i+1])
+		END
+	END MD5Close;
+
+(** ---- Multiprecision Integers ---- *)
+
+PROCEDURE Invert(x: LONGINT): LONGINT;
+BEGIN RETURN S.VAL(LONGINT, -S.VAL(SET, x))
+END Invert;
+	
+(* unsigned comparison (Oberon language does not support this) *)
+PROCEDURE - Less(x, y: LONGINT): BOOLEAN
+	8BH, 0FCH, (* mov edi, esp *)
+	8BH,  5FH,  0H, 	(* mov ebx, 0[edi] *)
+	8BH, 57H, 04H,	(* mov edx, 4[edi] *)
+	3BH, 0DAH,		(* cmp ebx, edx *)
+	0FH, 92H, 0C0H;  (* setb al *)
+	
+(* unsigned comparison (portable version) 	
+PROCEDURE Less(x, y: LONGINT): BOOLEAN;
+	VAR a, b: LONGINT;
+BEGIN
+	a := S.LSH(x, -1); b := S.LSH(y, -1);
+	IF a-b = 0 THEN RETURN x MOD 2 < y MOD 2 ELSE RETURN a < b END
+END Less;	
+*)
+
+(* unsigned comparison (Oberon language does not support this) *)
+PROCEDURE - LessEq(x, y: LONGINT): BOOLEAN
+	8BH, 0FCH, (* mov edi, esp *)
+	8BH,  5FH,  0H, 	(* mov ebx, 0[edi] *)
+	8BH, 57H, 04H,	(* mov edx, 4[edi] *)
+	3BH, 0DAH,		(* cmp ebx, edx *)
+	0FH, 96H, 0C0H;  (* setb al *)
+
+(* unsigned or comparison (portable version)
+PROCEDURE LessEq(x, y: LONGINT): BOOLEAN;
+BEGIN RETURN (x = y) OR Less(x, y)
+END LessEq;
+*)
+
+PROCEDURE Zero*(VAR r: Register): BOOLEAN;
+VAR i: LONGINT;
+BEGIN
+	FOR i := 0 TO LEN(r) - 1 DO
+		IF r[i] # 0 THEN RETURN FALSE END
+	END;
+	RETURN TRUE
+END Zero;
+
+PROCEDURE Add*(VAR r1, r2: Register; carry: LONGINT): LONGINT;
+VAR len, i, x: LONGINT;
+BEGIN
+	len := LEN(r1); ASSERT(len = LEN(r2));
+	FOR i := 0 TO len - 1 DO
+		x := r1[i] + r2[i];
+		IF carry # 0 THEN INC(x);
+			IF LessEq(Invert(r1[i]), r2[i]) THEN carry := 1 ELSE carry := 0 END
+		ELSIF Less(x, r2[i]) THEN carry := 1
+		ELSE carry := 0
+		END;
+		r1[i] := x
+	END;
+	RETURN carry
+END Add;
+
+PROCEDURE Sub*(VAR r1, r2: Register; borrow: LONGINT): LONGINT;
+VAR len, i, x: LONGINT;
+BEGIN
+	len := LEN(r1); ASSERT(len = LEN(r2));
+	FOR i := 0 TO len - 1 DO
+		x := r1[i] - r2[i];
+		IF borrow # 0 THEN
+			DEC(x);
+			IF LessEq(r1[i], r2[i]) THEN borrow := 1 ELSE borrow := 0 END
+		ELSIF Less(r1[i], r2[i]) THEN borrow := 1
+		ELSE borrow := 0
+		END;
+		r1[i] := x
+	END;
+	RETURN borrow
+END Sub;
+
+PROCEDURE RotateLeft*(VAR r: Register; carry: LONGINT): LONGINT;
+VAR i, nextcarry: LONGINT;
+BEGIN
+	FOR i := 0 TO LEN(r) - 1 DO
+		IF r[i] < 0 (* signed compare*) THEN nextcarry := 1 ELSE nextcarry := 0 END;
+		r[i] := r[i] * 2 + carry;
+		carry := nextcarry
+	END;
+	RETURN carry
+END RotateLeft;
+
+PROCEDURE ShiftRight*(VAR r: Register; bits: LONGINT);
+VAR i, mask, nextcarry, carry, unbits, one: LONGINT;
+BEGIN
+	ASSERT((bits >= 0) & (bits <= 32));
+	IF bits = 0 THEN RETURN END;
+	
+	IF bits = 32 THEN
+		carry := 0;
+		FOR i := LEN(r) - 1 TO 0 BY -1 DO
+			nextcarry := r[i];
+			r[i] := carry;
+			carry := nextcarry
+		END
+	ELSE
+		one := 1; carry := 0; mask := S.LSH(one, bits); unbits := 32 - bits;
+		FOR i := LEN(r) - 1 TO 0 BY -1 DO
+			nextcarry := S.LSH(r[i] MOD mask, unbits);
+			r[i] := S.LSH(r[i], -bits) + carry;
+			carry := nextcarry
+		END
+	END
+END ShiftRight;
+
+PROCEDURE Compare*(VAR r1, r2: Register): LONGINT;
+VAR i: LONGINT;
+BEGIN
+	ASSERT(LEN(r1) = LEN(r2));
+	FOR i := LEN(r1) - 1 TO 0 BY -1 DO
+		IF Less(r1[i], r2[i]) THEN RETURN -1 END;
+		IF Less(r2[i], r1[i]) THEN RETURN 1 END
+	END;
+	RETURN 0;
+END Compare;
+
+PROCEDURE Inc*(VAR r: Register): LONGINT;
+VAR i: LONGINT;
+BEGIN
+	FOR i := 0 TO LEN(r) - 1 DO
+		INC(r[i]);
+		IF r[i] # 0 THEN RETURN 0 END
+	END;
+	RETURN 1
+END Inc;
+
+PROCEDURE Dec*(VAR r: Register): LONGINT;
+VAR i: LONGINT;
+BEGIN
+	FOR i := 0 TO LEN(r) - 1 DO
+		DEC(r[i]);
+		IF r[i] # -1 THEN RETURN 0 END
+	END;
+	RETURN 1
+END Dec;
+
+PROCEDURE Neg*(VAR r: Register);
+VAR i, borrow: LONGINT;
+BEGIN
+	borrow := Dec(r);
+	FOR i := 0 TO LEN(r) - 1 DO r[i] := Invert(r[i]) END
+END Neg;
+
+PROCEDURE Move*(VAR dst, src: Register);
+VAR i: LONGINT;
+BEGIN
+	ASSERT(LEN(dst) >= LEN(src));
+	FOR i := 0 TO LEN(src) - 1 DO dst[i] := src[i] END;
+	IF LEN(dst) > LEN(src) THEN
+		FOR i := LEN(src) TO LEN(dst) - 1 DO dst[i] := 0 END
+	END
+END Move;
+
+PROCEDURE Init*(VAR r: Register; val: LONGINT);
+VAR i: LONGINT;
+BEGIN
+	FOR i := 0 TO LEN(r) - 1 DO r[i] := 0 END;
+	r[0] := val
+END Init;
+
+PROCEDURE Significance*(VAR r: Register): LONGINT;
+VAR i: LONGINT;
+BEGIN
+	FOR i := LEN(r) - 1 TO 0 BY -1 DO
+		IF r[i] # 0 THEN RETURN i END
+	END;
+	RETURN -1
+END Significance;
+
+PROCEDURE SniffBit(mask, adr: LONGINT): LONGINT;
+VAR i: SET;
+BEGIN
+	S.GET(adr, i);
+	IF S.VAL(SET, mask) * i # {} THEN RETURN 1 ELSE RETURN 0 END
+END SniffBit;
+
+PROCEDURE InitSniffer(VAR mask, adr, bits: LONGINT);
+BEGIN
+	mask := topbit;
+	WHILE SniffBit(mask, adr) # 1 DO mask := S.LSH(mask, -1); DEC(bits) END;
+END InitSniffer;
+
+PROCEDURE BumpSniffer(VAR mask, adr: LONGINT);
+BEGIN
+	mask := S.LSH(mask, -1);
+	IF mask = 0 THEN mask := topbit; DEC(adr, 4) END;
+END BumpSniffer;
+
+PROCEDURE Bump2Sniffer(VAR mask, adr1, adr2: LONGINT);
+BEGIN
+	mask := S.LSH(mask, -1);
+	IF mask = 0 THEN mask := topbit; DEC(adr1, 4); DEC(adr2, 4) END;
+END Bump2Sniffer;
+
+PROCEDURE StuffBit(adr, bits: LONGINT);
+VAR i: SET;
+BEGIN S.GET(adr, i); i := i + S.VAL(SET, bits); S.PUT(adr, i);
+END StuffBit;
+
+(* Bit-wise russian peasant implementation, slow. *)
+PROCEDURE UnsignedDiv*(VAR remainder, quotient, dividend, divisor: Register);
+VAR prec, bits, mask, carry: LONGINT; q, d: LONGINT;
+BEGIN
+	IF Zero(divisor) THEN HALT(99) END;
+	
+	Init(remainder, 0);
+	Init(quotient, 0);
+	
+	prec := Significance(dividend);
+	bits := (prec + 1) * 32; d := S.ADR(dividend[prec]);
+	InitSniffer(mask, d, bits);
+	
+	q := S.ADR(quotient[prec]);
+	WHILE bits # 0 DO
+		carry := RotateLeft(remainder, SniffBit(mask, d));
+		IF Compare(remainder, divisor) >= 0 THEN
+			carry := Sub(remainder, divisor, 0);
+			StuffBit(q, mask)
+		END;
+		Bump2Sniffer(mask, d, q);
+		DEC(bits)
+	END
+END UnsignedDiv;
+
+(* Portable Oberon version
+PROCEDURE LongMult(VAR high, low: LONGINT; b, c: LONGINT);
+(* high | low := b * c *)
+VAR bh, bl, ch, cl, u, t: LONGINT;
+BEGIN
+	bh := S.LSH(b, -16); bl := b MOD 10000H;
+	ch := S.LSH(c, -16); cl := c MOD 10000H;
+
+	low := bl * cl; t := ch * bl; u := cl * bh; high := bh * ch;
+	
+	INC(t, u); IF Less(t, u) THEN INC(high, 10000H) END;
+	u := t * 10000H;
+	INC(low, u); IF Less(low, u) THEN INC(high) END;
+	INC(high, S.LSH(t, -16))
+END LongMult;
+*)
+
+(* Intel 80x86 *)
+PROCEDURE- LongMult(VAR high, low: LONGINT; b, c: LONGINT) (* high | low := b * c*)
+(* mov  edi, esp *)						8BH, 0FCH, 
+(* mov eax, b[edi] *)					8BH, 47H, 8H,
+(* mul c[edi] *)							0F7H, 67H, 0CH,
+(* mov esi, low[edi] *)					8BH, 77H, 4,
+(* mov 0[esi], eax *)					89H, 46H, 0H,
+(* mov esi, high[edi] *)					8BH, 77H, 0H,
+(* mov 0[esi], edx *)					89H, 56H, 0H;
+
+(* res[offset] := acc[offset] + multiplicand * m *)
+PROCEDURE MultAdd(VAR res, acc, multiplicand: Register; m, offset: LONGINT): LONGINT;
+VAR i, j, carry, high, low, tmp: LONGINT;
+BEGIN carry := 0;
+	IF m # 0 THEN
+		j := offset;
+		FOR i := 0 TO LEN(multiplicand) - 1 DO
+			LongMult(high, low, multiplicand[i], m);
+			tmp := acc[j] + carry;
+			IF Less(tmp, carry) THEN carry := 1 ELSE carry := 0 END;
+			
+			INC(tmp, low);
+			IF Less(tmp, low) THEN INC(carry) END;
+			INC(carry, high);
+			res[j] := tmp;
+			INC(j)
+		END
+	END;
+	RETURN carry
+END MultAdd;
+
+PROCEDURE Mult*(VAR prod, multiplicand, multiplier: Register); (* prod := multiplicand * multiplier *)
+VAR i, j: LONGINT;
+BEGIN
+	j := LEN(multiplier);
+	Init(acc, 0);
+	FOR i := 0 TO LEN(multiplier)-1 DO
+		INC(acc[j], MultAdd(acc, acc, multiplicand, multiplier[i], i));
+		INC(j)
+	END;
+	FOR i := 0 TO LEN(prod) - 1 DO prod[i] := acc[i] END;
+END Mult;
+
+(* Slow Russian Peasant version of multiplication, slow
+PROCEDURE Mult*(VAR prod, multiplicand, multiplier: Register);
+VAR prec, bits, mask, mp, carry: LONGINT;
+BEGIN
+	Init(prod, 0);
+	prec := Significance(multiplier);
+	bits := (prec + 1) * 32; mp := S.ADR(multiplier[prec]);
+	InitSniffer(mask, mp, bits);
+	WHILE bits # 0 DO
+		carry := RotateLeft(prod, 0);
+		IF SniffBit(mask, mp) = 1 THEN
+			carry := Add(prod, multiplicand, 0)
+		END;
+		BumpSniffer(mask, mp);
+		DEC(bits)
+	END
+END Mult;
+*)
+
+PROCEDURE ShortDiv*(VAR quotient, dividend: Register; divisor: INTEGER): INTEGER;
+VAR remainder: INTEGER; prec, bits, mask, d, q: LONGINT;
+BEGIN
+	IF divisor = 0 THEN HALT(99) END;
+	
+	remainder := 0;
+	Init(quotient, 0);
+	
+	prec := Significance(dividend);
+	bits := (prec + 1) * 32; d := S.ADR(dividend[prec]);
+
+	InitSniffer(mask, d, bits);
+	q := S.ADR(quotient[prec]);
+	WHILE bits # 0 DO
+		remainder := remainder * 2;
+		IF SniffBit(mask, d) = 1 THEN INC(remainder) END;
+		IF LessEq(divisor, remainder) THEN
+			DEC(remainder, divisor);
+			StuffBit(q, mask)
+		END;
+		Bump2Sniffer(mask, d, q);
+		DEC(bits)
+	END;
+	RETURN remainder
+END ShortDiv;
+
+(* Russian peasant implementation, thus slow. *)
+PROCEDURE Mod*(VAR remainder, dividend, divisor: Register);
+VAR prec, bits, mask, d, carry: LONGINT;
+BEGIN
+	IF Zero(divisor) THEN HALT(99) END;
+	Init(remainder, 0);
+	
+	prec := Significance(dividend);
+	bits := (prec + 1) * 32; d := S.ADR(dividend[prec]);
+
+	InitSniffer(mask, d, bits);
+	WHILE bits # 0 DO
+		carry := RotateLeft(remainder, SniffBit(mask, d));
+		IF Compare(remainder, divisor) >= 0 THEN
+			carry := Sub(remainder, divisor, 0)
+		END;
+		BumpSniffer(mask, d);
+		DEC(bits)
+	END
+END Mod;
+
+PROCEDURE ShortMod*(VAR dividend: Register; divisor: INTEGER): INTEGER;
+VAR remainder: INTEGER; prec, bits, mask, d: LONGINT;
+BEGIN
+	IF divisor = 0 THEN HALT(99) END;
+	
+	prec := Significance(dividend);
+	bits := (prec + 1) * 32; d := S.ADR(dividend[prec]);
+	InitSniffer(mask, d, bits);
+
+	remainder := 0;
+	WHILE bits # 0 DO
+		remainder := remainder * 2;
+		IF SniffBit(mask, d) = 1 THEN INC(remainder) END;
+		IF LessEq(divisor, remainder) THEN DEC(remainder, divisor) END;
+		BumpSniffer(mask, d);
+		DEC(bits)
+	END;
+	RETURN remainder
+END ShortMod;
+
+(* Because of Mod, even slower than than russian peasant.
+PROCEDURE ModMult*(VAR prod, multiplicand, multiplier, modulus: Register); (* prod := multiplicand * multiplier *)
+VAR i, j, carry: LONGINT;
+BEGIN
+	j := LEN(multiplier);
+	Init(acc, 0); Init(mod, 0); 
+	FOR i := 0 TO LEN(modulus) - 1 DO mod[i] := modulus[i] END;
+	 
+	FOR i := 0 TO LEN(multiplier) - 1 DO
+		INC(acc[j], MultAdd(acc, acc, multiplicand, multiplier[i], i));
+		INC(j)
+	END;
+	IF Compare(acc, mod) >= 0 THEN
+		Mod(tmp, acc, mod); Move(acc, tmp)
+	END;
+	FOR i := 0 TO LEN(prod) - 1 DO prod[i] := acc[i] END;
+END ModMult;
+*)
+
+(* Slow russian peasant *)
+PROCEDURE ModMult*(VAR prod, multiplicand, multiplier, modulus: Register);
+VAR prec, bits, mask, mp, carry: LONGINT;
+BEGIN
+	Init(prod, 0);
+	IF Zero(multiplicand) THEN RETURN END;
+	
+	prec := Significance(multiplier);
+	bits := (prec + 1) * 32; mp := S.ADR(multiplier[prec]);
+	InitSniffer(mask, mp, bits);
+
+	WHILE bits # 0 DO
+		carry := RotateLeft(prod, 0);
+		IF Compare(prod, modulus) >= 0 THEN
+			carry := Sub(prod, modulus, 0);
+		END;
+		IF SniffBit(mask, mp) = 1 THEN
+			carry := Add(prod, multiplicand, 0);
+			IF Compare(prod, modulus) >= 0 THEN
+				carry := Sub(prod, modulus, 0)
+			END
+		END;
+		BumpSniffer(mask, mp);
+		DEC(bits)
+	END
+END ModMult;
+
+PROCEDURE Negative*(VAR r: Register): BOOLEAN;
+BEGIN RETURN r[LEN(r)-1] < 0
+END Negative;
+
+(** expout = (expin^exponent) mod modulus, Russian peasant. *)
+PROCEDURE ModExp*(VAR expout, expin, exponent, modulus: Register);
+VAR prec, bits, mask, e: LONGINT;
+	product: RegisterPtr;
+BEGIN
+	Init(expout, 1);
+	IF Zero(exponent) THEN
+		IF Zero(expin) THEN HALT(100) END;
+		RETURN (* expout = 1*)
+	END;
+	IF Zero(modulus) THEN HALT(101) END;
+	IF Negative(modulus) THEN HALT(105) END;
+	IF Compare(expin, modulus) >= 0 THEN HALT(102) END;
+	IF Compare(exponent, modulus) >= 0 THEN HALT(103) END;
+	
+	NEW(product, LEN(expout));
+	prec := Significance(exponent);
+	bits := (prec + 1) * 32; e := S.ADR(exponent[prec]);
+	InitSniffer(mask, e, bits);
+
+	DEC(bits); BumpSniffer(mask, e);
+	Move(expout, expin);
+	WHILE bits # 0 DO
+		ModMult(product^, expout, expout, modulus);
+		IF SniffBit(mask, e) = 1 THEN ModMult(expout, product^, expin, modulus)
+		ELSE Move(expout, product^)
+		END;
+		BumpSniffer(mask, e);
+		DEC(bits)
+	END;
+	IF ~(Compare(expout, modulus) <= 0) THEN HALT(106) END
+END ModExp;
+
+(** Return x so that x * a mod modulus = 1 *)
+PROCEDURE ModInverse*(VAR x, a, modulus: Register);
+VAR y, t: RegisterPtr; g, v: ARRAY 3 OF RegisterPtr; i, carry: LONGINT;
+BEGIN
+	NEW(y, LEN(a)); NEW(t, LEN(a));
+	FOR i := 0 TO 2 DO
+		NEW(g[i], LEN(a)); NEW(v[i], LEN(a))
+	END;
+	
+	Move(g[0]^, modulus); Move(g[1]^, a);
+	Init(v[0]^, 0); Init(v[1]^, 1);
+	
+	i := 1;
+	WHILE ~Zero(g[i]^) DO
+		UnsignedDiv(g[(i+1) MOD 3]^, y^, g[(i-1) MOD 3]^, g[i]^);
+		Mult(t^, y^ , v[i]^); Move(v[(i+1) MOD 3]^, v[(i-1) MOD 3]^); carry := Sub(v[(i+1) MOD 3]^, t^, 0);
+		i := (i+1) MOD 3
+	END;
+	Move(x, v[(i-1) MOD 3]^);
+	IF Negative(x) THEN carry := Add(x, modulus, 0) END
+END ModInverse;
+
+PROCEDURE GCD*(VAR result, a, n: Register);
+VAR g: ARRAY 3 OF RegisterPtr; i: LONGINT;
+BEGIN
+	FOR i := 0 TO 2 DO NEW(g[i], LEN(result)) END;
+	Move(g[0]^, n); Move(g[1]^, a);
+	i := 1;
+	WHILE ~Zero(g[i]^) DO
+		Mod(g[(i+1) MOD 3]^, g[(i-1) MOD 3]^, g[i]^);
+		i := (i+1) MOD 3
+	END;
+	Move(result, g[(i-1) MOD 3]^)
+END GCD;
+
+(** ---- Modular multiplication/exponentiation without trial division (Montgomery) ---- *)
+
+PROCEDURE MAlloc(VAR r: RegisterPtr; val: LONGINT);
+BEGIN NEW(r, Mrwords * 2); Init(r^, val);
+END MAlloc;
+
+PROCEDURE MAllocReg(VAR r: RegisterPtr; VAR val: Register);
+VAR i: LONGINT;
+BEGIN NEW(r, Mrwords * 2); Init(r^, 0); FOR i := 0 TO Mrwords * 2 - 1 DO r[i] := val[i] END;
+END MAllocReg;
+
+PROCEDURE MInit(VAR n: Register);
+VAR i, carry: LONGINT;
+BEGIN
+	Mrwords := Significance(n) + 1; Mrbits := Mrwords * 32;
+	MAlloc(Mn, 0);  FOR i := 0 TO Mrwords-1 DO Mn[i] := n[i] END; (* Mn := n *)
+	MAlloc(Mr, 0); Mr[Mrwords] := 1;	(* Mr := R *)
+	
+	MAlloc(Mn0, 0); Move(Mn0^, Mr^);
+	MAlloc(Mtmp, 0);
+	ModInverse(Mtmp^, Mn^, Mr^);	(* can be done faster ! *)
+	carry := Sub(Mn0^, Mtmp^, 0);	(* Mn0 := R - (1/n)  (mod R) *)
+END MInit;
+
+(* result := result ^ R mod Mn *)
+PROCEDURE MConvert(VAR result: Register);
+VAR i, carry: LONGINT;
+BEGIN
+	FOR i := 0 TO Mrbits-1 DO
+		carry := RotateLeft(result, 0);
+		IF Compare(result, Mn^) >= 0 THEN
+			carry := Sub(result, Mn^, 0)
+		END
+	END
+END MConvert;
+
+(* Fast calculation of r MOD Mr *)
+PROCEDURE ModR(VAR r: Register);
+VAR i: LONGINT;
+BEGIN FOR i := Mrwords TO LEN(r) - 1 DO r[i] := 0 END
+END ModR;
+
+(* Fast calculation of r DIV Mr *)
+PROCEDURE DivR(VAR r: Register);
+VAR i, j: LONGINT;
+BEGIN
+	j := 0; FOR i := Mrwords TO LEN(r) - 1 DO r[j] := r[i]; INC(j) END;
+	WHILE j < LEN(r) DO r[j] := 0; INC(j) END
+END DivR;
+
+(* value := value ^ (1/R) mod Mn *)
+PROCEDURE MReduce(VAR value: Register);
+VAR carry: LONGINT;
+BEGIN
+	Move(Mtmp^, value); ModR(Mtmp^);
+	Mult(Mtmp^, Mtmp^, Mn0^); ModR(Mtmp^);
+	Mult(Mtmp^, Mtmp^, Mn^);
+	carry := Add(Mtmp^, value, 0);
+	DivR(Mtmp^);
+	IF Compare(Mtmp^, Mn^) >= 0 THEN carry := Sub(Mtmp^, Mn^, 0) END;
+	Move(value, Mtmp^)
+END MReduce;
+
+(* multiplication step
+PROCEDURE MModMult*(VAR prod, multiplicand, multiplier: Register);
+BEGIN Mult(prod, multiplicand, multiplier); MReduce(prod);
+END MModMult;
+*)
+
+(** Fast expout = (expin^exponent) mod modulus *)
+PROCEDURE MModExp*(VAR expout, expin, exponent, modulus: Register);
+VAR prec, bits, mask, e: LONGINT;
+	product, expout0, expin0: RegisterPtr;
+BEGIN
+	Init(expout, 1);
+	IF Zero(exponent) THEN
+		IF Zero(expin) THEN HALT(100) END;
+		RETURN (* expout = 1*)
+	END;
+	IF Zero(modulus) THEN HALT(101) END;
+	IF Negative(modulus) THEN HALT(105) END;
+	IF Compare(expin, modulus) >= 0 THEN HALT(102) END;
+	IF Compare(exponent, modulus) >= 0 THEN HALT(103) END;
+	
+	MInit(modulus);
+	MAlloc(product, 0); MAlloc(expout0, 0);
+	MAllocReg(expin0, expin); MConvert(expin0^);
+	
+	prec := Significance(exponent);
+	bits := (prec + 1) * 32; e := S.ADR(exponent[prec]);
+	InitSniffer(mask, e, bits);
+
+	DEC(bits); BumpSniffer(mask, e);
+	Move(expout0^, expin0^);
+	WHILE bits # 0 DO
+		Mult(product^, expout0^, expout0^); MReduce(product^);
+		IF SniffBit(mask, e) = 1 THEN Mult(expout0^, product^, expin0^); MReduce(expout0^)
+		ELSE Move(expout0^, product^)
+		END;
+		BumpSniffer(mask, e);
+		DEC(bits)
+	END;
+	MReduce(expout0^); Move(expout, expout0^);
+	IF ~(Compare(expout, modulus) <= 0) THEN HALT(106) END
+END MModExp;
+
+(** ---- Misc ---- *)
+
+PROCEDURE WriteDec*(VAR W: Texts.Writer; VAR r: Register);
+VAR q, x: RegisterPtr; rem: INTEGER; buf: ARRAY 512 OF CHAR; p: INTEGER;
+
+	PROCEDURE Wr(n: INTEGER);
+	BEGIN buf[p] := CHR(ORD("0") + n); INC(p)
+	END Wr;
+	
+BEGIN p := 0;
+	NEW(q, LEN(r)); NEW(x, LEN(r));
+	
+	Move(x^, r);
+	WHILE ~Zero(x^) DO
+		rem := ShortDiv(q^, x^, 10);
+		Wr(rem);
+		Move(x^, q^);
+	END;
+	IF p = 0 THEN Texts.Write(W, "0")
+	ELSE REPEAT DEC(p); Texts.Write(W, buf[p]); UNTIL p <= 0
+	END
+END WriteDec;
+
+(** ---- RSA ---- *)
+
+PROCEDURE Uniform(): REAL;
+CONST a = 16807; m = 2147483647; q = m DIV a; r = m MOD a;
+VAR g: LONGINT;
+BEGIN
+	g := a*(Z MOD q) - r*(Z DIV q);
+	IF g > 0 THEN Z := g ELSE Z := g + m END;
+	RETURN Z*(1.0/m)
+END Uniform;
+
+PROCEDURE NextPrime*(VAR result: Register);
+VAR a, one, r, t: RegisterPtr; prim: BOOLEAN; i, delta: INTEGER; carry, count: LONGINT;
+
+	PROCEDURE MakePrimeTable;
+	CONST SieveSize = 8192;
+	VAR i, j: INTEGER;
+		p: POINTER TO ARRAY SieveSize OF BOOLEAN;
+	BEGIN
+		NEW(p);
+		FOR i := 0 TO SieveSize - 1 DO p[i] := TRUE END;
+		p[0] := FALSE; p[1] := FALSE; 
+		i := 0;
+		LOOP
+			WHILE (i < SieveSize) & ~p[i] DO INC(i) END;
+			IF i >= SieveSize THEN EXIT END;
+			j := i + i;
+			WHILE j < SieveSize DO
+				p[j] := FALSE;
+				j := j + i
+			END;
+			INC(i)
+		END;
+		j := 0;
+		FOR i := 0 TO SieveSize - 1 DO
+			IF p[i] THEN
+				prime[j] := i; INC(j);
+			END
+		END;
+		p := NIL
+	END MakePrimeTable;
+
+	PROCEDURE PrimeTest(VAR p: Register): BOOLEAN;
+	VAR borrow: LONGINT;
+	BEGIN
+		Init(a^, prime[ENTIER(Uniform() * NPrimes)]);
+		Move(t^, p); borrow := Dec(t^);
+		ModExp(r^, a^, t^, p);
+		RETURN Compare(r^, one^) = 0
+	END PrimeTest;
+
+	PROCEDURE InitFastSieve(VAR r: Register);
+	VAR i: INTEGER;
+	BEGIN
+		FOR i := 0 TO NPrimes - 1 DO
+			remainder[i] := ShortMod(r, prime[i])
+		END
+	END InitFastSieve;
+	
+	PROCEDURE FastSieve(VAR r: Register; delta: INTEGER): BOOLEAN;
+	VAR i: INTEGER;
+	BEGIN
+		FOR i := 0 TO NPrimes - 1 DO
+			IF (delta + remainder[i]) MOD prime[i] = 0 THEN RETURN FALSE END;
+		END;
+		RETURN TRUE
+	END FastSieve;
+	
+BEGIN
+	IF (prime = NIL) OR (remainder = NIL) THEN
+		NEW(prime); NEW(remainder);
+		MakePrimeTable
+	END;
+	
+	NEW(one, LEN(result)); Init(one^, 1);
+	NEW(r, LEN(result)); NEW(t, LEN(result)); NEW(a, LEN(result));
+
+	IF ~ODD(result[0]) THEN INC(result[0]) END;
+	delta := 0; count := 0;
+	InitFastSieve(result);
+	REPEAT
+		prim := FastSieve(result, delta);
+		IF prim THEN
+			INC(count);
+			Out.Char(".");
+			
+			i := 0;
+			WHILE prim & (i < 5) DO
+				IF Input.Available() > 0 THEN HALT(99) END;
+				IF PrimeTest(result) THEN Out.Char("!"); ELSE prim := FALSE END;
+				INC(i)
+			END
+		END;
+		IF ~prim THEN (* try next number *)
+			carry := Inc(result); INC(delta);
+			carry := Inc(result); INC(delta)
+		ELSE Out.Ln;
+		END
+	UNTIL prim;
+END NextPrime;
+
+PROCEDURE Split(x: LONGINT; VAR a, b: INTEGER);
+BEGIN a := SHORT(x); b := SHORT(x DIV 10000H)
+END Split;
+
+PROCEDURE Combine(a, b: INTEGER; VAR x: LONGINT);
+BEGIN x := LAND(a, one) + S.LSH(LONG(b), 16);
+END Combine;
+
+PROCEDURE CipherRegister*(VAR r: Register);
+VAR i, len: LONGINT; text: CipherText;
+BEGIN
+	i := 0;
+	len := LEN(r); ASSERT(~ODD(len));
+	WHILE i < len DO
+		Split(r[i], text[0], text[1]);
+		Split(r[i+1], text[2], text[3]);
+		
+		IDEACipher(text);
+		
+		Combine(text[0], text[1], r[i]);
+		Combine(text[2], text[3], r[i+1]);
+		INC(i, 2)
+	END
+END CipherRegister;
+
+(** Make public and private keys out of the large primes p and q *)
+PROCEDURE MakeKeys*(VAR p, q: Register; name, password: ARRAY OF CHAR; public, private: Key);
+VAR len, t: LONGINT; n, p1, q1, x, d, e, one, gcd: RegisterPtr; digest: CipherKey;
+BEGIN
+	ASSERT(LEN(p) = LEN(q));
+	len := LEN(p) * 2;
+	NEW(n, len); NEW(p1, len); NEW(q1, len); NEW(x, len); NEW(d, len); NEW(e, len); NEW(one, len); NEW(gcd, len);
+	Init(one^, 1);
+	Move(p1^, p); Move(q1^, q);
+	
+	Mult(n^, p1^, q1^);
+	t := Dec(p1^); t := Dec(q1^);
+	Mult(x^, p1^, q1^);
+	
+	Init(e^, 3);
+	LOOP
+		GCD(gcd^, e^, x^);
+		IF Compare(gcd^, one^) = 0 THEN EXIT END;
+		t := Inc(e^); t := Inc(e^)
+	END;
+	
+	ModInverse(d^, e^, x^);
+	
+	public.modulus := n; private.modulus := n;
+	public.exponent := e; private.exponent := d;
+	public.size := SHORT(len) * 32; private.size := SHORT(len) * 32;
+	
+	(* encrypt private key *)
+	public.private := FALSE; private.private := TRUE;
+	private.check := private.exponent[0]; (* remember LSL for checking pw *)
+	MD5Init; MD5WriteString(password); MD5Close(digest);
+	
+	IDEAInitEncoding(digest); CipherRegister(private.exponent^);
+	
+	(* Add stuff needed for the chinese remainder theorem to the private key *)
+	NEW(private.p, len); NEW(private.q, len); NEW(private.u, len);
+	IF Compare(p, q) < 0 THEN	(* p < q *)
+		Move(private.p^, p); Move(private.q^, q); ModInverse(private.u^, private.p^, private.q^);
+		CipherRegister(private.p^); CipherRegister(private.q^); CipherRegister(private.u^);
+	ELSE
+		Move(private.p^, q); Move(private.q^, p); ModInverse(private.u^, private.p^, private.q^);
+		CipherRegister(private.p^); CipherRegister(private.q^); CipherRegister(private.u^);
+	END;
+	
+	Oberon.GetClock(public.time, public.date); private.time := public.time; private.date := public.date;
+	COPY(name, public.name); COPY(name, private.name);
+END MakeKeys;
+
+(* d is the secret exponent, p, q the prime factors of n, and u = (1/p)  (mod q). Pre: p < q *)
+PROCEDURE ChineseRemainder(VAR result, msg, d, p, q, u: Register);
+VAR temp1, temp2, p2, q2: RegisterPtr; carry: LONGINT;
+BEGIN
+	ASSERT(Compare(p, q) < 0, 100);
+	NEW(temp1, LEN(d)); NEW(temp2, LEN(d));
+	NEW(p2, LEN(d)); NEW(q2, LEN(d));
+	
+	(* p2 := [(msg mod p) ^ (d mod (p-1))] mod p *)
+	Move(temp1^, p); carry := Dec(temp1^); (* temp1 := p - 1 *)
+	Mod(temp2^, d, temp1^); 	(* temp2 := d mod (p-1)) *)
+	Mod(temp1^, msg, p); 	(* temp1 := msg mod p *)
+	MModExp(p2^, temp1^, temp2^, p);
+	
+	(* q2 := [(msg mod q) ^ (d mod (q-1))] mod q *)
+	Move(temp1^, q); carry := Dec(temp1^); (* temp1 := q - 1 *)
+	Mod(temp2^, d, temp1^); 	(* temp2 := d mod (q-1)) *)
+	Mod(temp1^, msg, q); 	(* temp1 := msg mod q *)
+	MModExp(q2^, temp1^, temp2^, q);
+	
+	IF Compare(p2^, q2^) = 0 THEN (* if msg < p *)
+		Move(result, p2^)
+	ELSE
+		IF Sub(q2^, p2^, 0) = 1 THEN carry := Add(q2^, q, 0) END;
+		Mult(temp1^, q2^, u);
+		Mod(temp2^, temp1^, q);
+		Mult(temp1^, p, temp2^);
+		carry := Add(temp1^, p2^, 0);
+		Move(result, temp1^)
+	END
+END ChineseRemainder;
+
+PROCEDURE RSAEncrypt*(publickey: Key; VAR msg, result: Register);
+BEGIN
+	ASSERT(~publickey.private);
+	(* use russian peasant as public exponents are normally small. *)
+	ModExp(result, msg, publickey.exponent^, publickey.modulus^)
+END RSAEncrypt;
+
+PROCEDURE RSADecrypt*(privatekey: Key; password: ARRAY OF CHAR; VAR msg, result: Register; VAR res: INTEGER);
+VAR d, p, q, u: RegisterPtr; digest: CipherKey; len: LONGINT;
+BEGIN
+	ASSERT(privatekey.private);
+	len := privatekey.size DIV 32;
+	NEW(d, len); Move(d^, privatekey.exponent^);
+		
+	MD5Init; MD5WriteString(password); MD5Close(digest);
+	IDEAInitDecoding(digest); CipherRegister(d^);
+	IF d[0] = privatekey.check THEN
+		IF ~chinese THEN 
+				(** Use modular exponention without division as private exponents are large. *)
+				MModExp(result, msg, d^, privatekey.modulus^);
+		ELSE
+			(* Using chinese remainder: *)
+			NEW(p, len); Move(p^, privatekey.p^); CipherRegister(p^);
+			NEW(q, len); Move(q^, privatekey.q^); CipherRegister(q^);
+			NEW(u, len); Move(u^, privatekey.u^); CipherRegister(u^);
+			ChineseRemainder(result, msg, d^, p^, q^, u^)
+		END;
+		(* *)
+		res := 0
+	ELSE res := 1
+	END
+END RSADecrypt;
+
+PROCEDURE RSASignDigest*(privatekey: Key; password: ARRAY OF CHAR; VAR digest: CipherKey;
+	VAR signature: RegisterPtr; VAR res: INTEGER);
+VAR msg: RegisterPtr; i: LONGINT;
+BEGIN
+	NEW(msg, privatekey.size DIV 32); NEW(signature, privatekey.size DIV 32);
+	FOR i := 0 TO 3 DO Combine(digest[i*2], digest[i*2 + 1], msg[i]) END;
+	RSADecrypt(privatekey, password, msg^, signature^, res);
+END RSASignDigest;
+
+PROCEDURE RSAVerifySignature*(publickey: Key; VAR digest: CipherKey; VAR signature: RegisterPtr; VAR res: INTEGER);
+VAR msg: RegisterPtr; i: LONGINT; a, b: INTEGER;
+BEGIN res := 0;
+	NEW(msg, publickey.size DIV 32);
+	RSAEncrypt(publickey, signature^, msg^);
+	FOR i := 0 TO 3 DO
+		Split(msg[i], a, b);
+		IF (a # digest[i*2]) OR (b # digest[i*2 + 1]) THEN res := 1 END
+	END
+END RSAVerifySignature;
+
+(** ---- Keyrings ---- *)
+
+PROCEDURE ReadRegister*(VAR R: Files.Rider; VAR r: RegisterPtr);
+VAR l, i: INTEGER;
+BEGIN
+	Files.ReadInt(R, l);
+	NEW(r, l); FOR i := 0 TO l - 1 DO Files.ReadLInt(R, r[i]) END;
+END ReadRegister;
+
+PROCEDURE WriteRegister*(VAR R: Files.Rider; VAR r: RegisterPtr);
+VAR l, i: INTEGER;
+BEGIN
+	l := SHORT(LEN(r^));
+	Files.WriteInt(R, l);
+	FOR i := 0 TO l - 1 DO Files.WriteLInt(R, r[i]) END;
+END WriteRegister;
+
+PROCEDURE ReadKey*(VAR R: Files.Rider; K: Key);
+VAR s: ARRAY 128 OF CHAR; c, l: Certificate;
+BEGIN
+	Files.ReadString(R, K.name);
+	Files.ReadBool(R, K.private);
+	Files.ReadInt(R, K.size);
+	ReadRegister(R, K.exponent); ReadRegister(R, K.modulus);
+	Files.ReadLInt(R, K.check);
+	Files.ReadLInt(R, K.time); Files.ReadLInt(R, K.date);
+	IF K.private THEN
+		ReadRegister(R, K.p); ReadRegister(R, K.q); ReadRegister(R, K.u)
+	END;
+	l := NIL;
+	Files.ReadString(R, s);
+	WHILE s # "" DO
+		NEW(c); COPY(s, c.authority);
+		ReadRegister(R, c.signature);
+		IF l = NIL THEN K.certificates := c ELSE l.next := c END;
+		l := c;
+		Files.ReadString(R, s)
+	END
+END ReadKey;
+
+PROCEDURE WriteKey*(VAR R: Files.Rider; K: Key);
+VAR c: Certificate;
+BEGIN
+	Files.WriteString(R, K.name);
+	Files.WriteBool(R, K.private);
+	Files.WriteInt(R, K.size);
+	WriteRegister(R, K.exponent); WriteRegister(R, K.modulus);
+	Files.WriteLInt(R, K.check);
+	Files.WriteLInt(R, K.time); Files.WriteLInt(R, K.date);
+	IF K.private THEN
+		WriteRegister(R, K.p); WriteRegister(R, K.q); WriteRegister(R, K.u)
+	END;
+	c := K.certificates;
+	WHILE c # NIL DO
+		Files.WriteString(R, c.authority);
+		WriteRegister(R, c.signature);
+		c := c.next
+	END;
+	Files.WriteString(R, "")
+END WriteKey;
+
+PROCEDURE OpenKeyring*(name: ARRAY OF CHAR): Keyring;
+VAR R: Keyring; F: Files.File; r: Files.Rider; ch0, ch1: CHAR; s: ARRAY 128 OF CHAR;
+	K, last: Key;
+BEGIN
+	ASSERT(name # "", 100);
+	R := NIL;
+	F := Files.Old(name);
+	IF F # NIL THEN
+		NEW(R); COPY(name, R.name);
+		last := NIL;
+		Files.Set(r, F, 0);
+		Files.Read(r, ch0); Files.Read(r, ch1);
+		IF (ch0 = 0EFX) & (ch1 = 1X) THEN
+			Files.ReadString(r, s);
+			WHILE s # "" DO
+				NEW(K); ReadKey(r, K);
+				IF last = NIL THEN R.keys := K ELSE last.next := K END; last := K;
+				Files.ReadString(r, s)
+			END;
+		ELSE HALT(99)
+		END
+	ELSE
+		NEW(R); COPY(name, R.name)
+	END;
+	RETURN R
+END OpenKeyring;
+
+PROCEDURE EnumKeys*(R: Keyring; enum: Enumerator);
+VAR k: Key;
+BEGIN
+	k := R.keys;
+	WHILE k # NIL DO
+		enum(k); k := k.next
+	END
+END EnumKeys;
+
+PROCEDURE InsertKey*(R: Keyring; K: Key);
+VAR k, last: Key;
+BEGIN
+	ASSERT(K.name # "", 100);
+	k := R.keys; last := NIL;
+	WHILE (k # NIL) & (k.name # K.name) DO last := k; k := k.next END;
+	IF k # NIL THEN (* already in list *)
+		K.next := k.next;
+		IF last # NIL THEN last.next := K
+		ELSE R.keys := K
+		END
+	ELSE
+		K.next := R.keys; R.keys := K
+	END
+END InsertKey;
+
+PROCEDURE DeleteKey*(R: Keyring; K: Key);
+VAR k, last: Key;
+BEGIN
+	k := R.keys; last := NIL;
+	WHILE (k # NIL) & (k # K) DO last := k; k := k.next END;
+	IF k = K THEN
+		IF last = NIL THEN R.keys := K.next
+		ELSE last.next := K.next
+		END
+	ELSE HALT(99)
+	END
+END DeleteKey;
+
+PROCEDURE FindKey*(R: Keyring; name: ARRAY OF CHAR; VAR K: Key);
+BEGIN
+	K := R.keys;
+	WHILE (K # NIL) & (K.name # name) DO K := K.next END
+END FindKey;
+
+PROCEDURE CloseKeyring*(R: Keyring);
+VAR k: Key; F: Files.File; r: Files.Rider;
+BEGIN
+	F := Files.New(R.name);
+	Files.Set(r, F, 0);
+	Files.Write(r, 0EFX); Files.Write(r, 1X);
+	k := R.keys;
+	WHILE k # NIL DO
+		Files.WriteString(r, "k"); WriteKey(r, k);
+		k := k.next
+	END;
+	Files.WriteString(r, "");
+	Files.Register(F)
+END CloseKeyring;
+
+(** ---- Password prompting ---- *)
+
+PROCEDURE GetPassword*(msg, msg1, msg2: ARRAY OF CHAR; fnt: Fonts.Font; VAR pw: ARRAY OF CHAR; readable: BOOLEAN);
+CONST TickSize = 6; TickSpace = 4; ESC = 1BX; Col = 9; TextCol = 0;
+VAR X, Y, x, y, T, pos, tmp, BoxW, BoxH, w1, w2, w3, h: INTEGER; keys: SET;
+	fin: BOOLEAN; ch: CHAR; M: Display3.Mask; rect: User32.Rect;
+	PROCEDURE Feedback(count: INTEGER);
+		VAR len, x: INTEGER;
+	BEGIN
+		IF readable THEN
+			pw[pos] := 0X;
+			Display3.ReplConst(M, Col, X+1, (Y + BoxH DIV 4)-2*TickSize, BoxW-2, 4*TickSize, Display.replace);
+			Display3.CenterString(M, TextCol, X, (Y + BoxH DIV 4)-2*TickSize, BoxW, 4*TickSize, fnt, pw, Display.paint)
+		ELSE
+			Display3.ReplConst(M, Col, X + 2, Y + BoxH DIV 4, BoxW - 4, TickSize, Display.replace);
+			len := count * (TickSize + TickSpace); x := X + BoxW DIV 2 - len DIV 2; y := Y + BoxH DIV 4;
+			WHILE count > 0 DO
+				Display3.ReplConst(M, TextCol, x, y, TickSize, TickSize, Display.paint);
+				DEC(count); INC(x, TickSize + TickSpace)
+			END
+		END
+	END Feedback;
+BEGIN
+	(* Calculate size of the message box *)
+	Display3.StringSize(msg, fnt, w1, h, tmp); BoxW := w1;
+	Display3.StringSize(msg1, fnt, w2, h, tmp); IF w2 > BoxW THEN BoxW := w2 END;
+	Display3.StringSize(msg2, fnt, w3, h, tmp); IF w3 > BoxW THEN BoxW := w3 END;
+	BoxW := BoxW * 15 DIV 10; BoxH := h * 4 * 15 DIV 10;
+	X := Display.Width DIV 2 - BoxW DIV 2; Y := Display.Height DIV 2 - BoxH DIV 2;
+	NEW(M); Display3.Open(M); Display3.Add(M, X+2, Y+2, BoxW-4, BoxH-4);
+	rect.left := X; rect.right := X+BoxW;
+	rect.bottom := Win32.DispH-Y; rect.top := rect.bottom-BoxH;
+	Display3.FilledRect3D(NIL, TextCol, TextCol, Col, X, Y, BoxW, BoxH, 2, Display.paint);
+	T := Y + BoxH * 3 DIV 4;
+	Display3.String(M, TextCol, X + BoxW DIV 2 - w1 DIV 2, T, fnt, msg, Display.paint); DEC(T, h);
+	Display3.String(M, TextCol, X + BoxW DIV 2 - w2 DIV 2, T, fnt, msg1, Display.paint); DEC(T, h);
+	Display3.String(M, TextCol, X + BoxW DIV 2 - w3 DIV 2, T, fnt, msg2, Display.paint);
+	fin := FALSE; pos := 0;
+	REPEAT
+		Input.Mouse(keys, x, y); 
+		Oberon.DrawCursor(Oberon.Mouse, Effects.Arrow, x, y);
+		IF Input.Available() > 0 THEN
+			Input.Read(ch);
+			CASE ch OF
+				ESC: fin := TRUE; pos := 0;
+				| 0DX: fin := TRUE;
+				| 7FX: IF pos > 0 THEN DEC(pos); Feedback(pos) END
+			ELSE
+				IF pos < LEN(pw) - 1 THEN pw[pos] := ch; INC(pos); Feedback(pos) END
+			END
+		END
+	UNTIL fin;
+	pw[pos] := 0X;
+	User32.InvalidateRect(Win32.Display, S.ADR(rect), Kernel32.False)
+END GetPassword;
+
+BEGIN
+	(* ---- RSA ---- *)
+	Z := 1246
+END Crypt.

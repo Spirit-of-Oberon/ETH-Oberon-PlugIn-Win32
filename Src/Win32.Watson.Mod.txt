@@ -1,20 +1,19 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE Watson;	(** PS/tk  *)
+MODULE Watson; (** portable, except where noted / source: Win32.Watson.Mod *)	(** PS/tk  *)
 
 	IMPORT
 		Files, Objects, Fonts, Display, Texts, Oberon, Gadgets, TextGadgets0, TextGadgets, 
@@ -78,15 +77,18 @@ MODULE Watson;	(** PS/tk  *)
 
 		(* symbol values *)
 		times = 0; plus = 1; minus = 2; eql = 3; arrow = 4; period = 5;
-		comma = 6; colon = 7; rparen = 8; rbrak = 9; of = 10; 
-		to = 11; lparen = 12; lbrak = 13; lbrace = 14; becomes = 15;
-		number = 16; string = 17; ident = 18; assert = 19; semicolon = 20; 
-		end = 21; array = 22; record = 23; pointer = 24; begin = 25; 
-		const = 26; type = 27; var = 28; proc = 29; import = 30; module = 31;
-		eot = 32; none = 99;
+		and = 6; comma = 7; colon = 8; rparen = 9; rbrak = 10; of = 11; 
+		to = 12; lparen = 13; lbrak = 14; lbrace = 15; becomes = 16;
+		number = 17; string = 18; ident = 19; assert = 20; semicolon = 21; 
+		end = 22; array = 23; record = 24; pointer = 25; begin = 26; 
+		const = 27; type = 28; var = 29; proc = 30; import = 31; module = 32;
+		eot = 33; none = 99;
 		
 		(* visibility of objects *)
 		internal = 0; external = 1; externalR = 2;
+
+		(* sysflag or proc^.conval^.realval *) (* ejz *)
+		notag = 1; stdcall = 2; cdecl = 3;
 
 	TYPE
 	(* Type defs for Mod-Scanner *)
@@ -245,6 +247,28 @@ MODULE Watson;	(** PS/tk  *)
 		msgPrinted:= TRUE
 	END PrintMsg;
 
+	PROCEDURE PrintSysFlag(sysflag: SHORTINT; pre, suf: CHAR); (* ejz *)
+	BEGIN
+		IF sysflag # 0 THEN
+			IF pre # 0X THEN
+				Char(pre)
+			END;
+			Char("[");
+			IF sysflag = stdcall THEN
+				Str("stdcall")
+			ELSIF sysflag = cdecl THEN
+				Str("cdecl")
+			ELSIF sysflag = notag THEN
+				Str("notag")
+			ELSE
+				Int(sysflag)
+			END;
+			Char("]");
+			IF suf # 0X THEN
+				Char(suf)
+			END
+		END
+	END PrintSysFlag;
 
 	(* ---------------------- history procedure ----------------------- *)
 
@@ -276,11 +300,11 @@ MODULE Watson;	(** PS/tk  *)
 			h.cmd[i]:= " "; INC(i);
 			j:= 0; WHILE mod[j] # 0X DO h.cmd[i]:= mod[j]; INC(j); INC(i) END;
 			REPEAT DEC(i) UNTIL h.cmd[i] = ".";
-			h.cmd[i]:= "."; INC(i);
+			INC(i);
 			IF obj # "" THEN
 				j:= 0; WHILE obj[j] # 0X DO h.cmd[i]:= obj[j]; INC(j); INC(i) END
 			ELSE
-				h.cmd[i] := "M"; h.cmd[i] := "o"; h.cmd[i] := "d"; INC(i, 3)
+				h.cmd[i] := "M"; INC(i); h.cmd[i] := "o"; INC(i); h.cmd[i] := "d"; INC(i)
 			END;
 			h.cmd[i]:= 0X
 		END
@@ -728,6 +752,7 @@ MODULE Watson;	(** PS/tk  *)
 			IF ("A" <= ch0) & (ch0 <= "Z") THEN s:= ident; Ident ELSE GetCh END;
 			CASE ch0 OF   (* ch0 > " " *)
 				| 22X, 27X: String(ch0); GetCh; s:= string
+				| "&"  : s :=  and
 				| "("  : IF ch = "*" THEN GetCh; Comment(oLine) ELSE s:= lparen END
 				| ")" : s:= rparen
 				| "{" : s:= lbrace
@@ -829,8 +854,13 @@ MODULE Watson;	(** PS/tk  *)
 	BEGIN beg:= wPos; curErr:= errConst;
 		IF sym = lbrace THEN follow:= {rbrak, of} ELSE follow:= {comma, rbrak, of} END;
 		LOOP
-			WHILE ~(sym IN follow)  & (sym < ident) DO Sym END;
-			IF sym = ident THEN Copy(beg, begPos); Char(" "); qualident(beg) ELSE EXIT END
+			WHILE ~(sym IN follow) & (sym < ident) DO Sym END;
+			IF sym = ident THEN
+				Copy(beg, begPos); Char(" "); qualident(beg);
+				IF sym = lparen THEN
+					WHILE (sym # rparen) & (sym # eot) DO Sym() END
+				END
+			ELSE EXIT END
 		END;	(* LOOP *)
 		Copy(beg, begPos)
 	END ConstExpression;
@@ -847,7 +877,7 @@ MODULE Watson;	(** PS/tk  *)
 				IF (sym = eql) OR (sym = becomes) THEN Sym; ConstExpression ELSE err(errConst) END;
 				Char(";");
 			ELSE
-				InsertIdent(id, const, obj); obj.beg:= Pos()+1;
+				InsertIdent(id, const, obj); obj.beg:= Pos()(*+1*);
 				REPEAT Sym UNTIL sym >= semicolon;
 				obj.end:= begPos
 			END;
@@ -857,19 +887,37 @@ MODULE Watson;	(** PS/tk  *)
 
 	(* ----------------parse types ----------------- *)
 
-	PROCEDURE CheckSysFlags;	(* parses and writes a system flag definition *)
+	PROCEDURE CheckSysFlag(VAR sysflag: SHORTINT; default: SHORTINT);	(* parses and writes a system flag definition *) (* ejz *)
+		VAR sf: LONGINT;
 	BEGIN
-		IF sym = minus THEN Str(" -"); Sym END;	(* Macintosh *)
+		(* IF sym = minus THEN Str(" -"); Sym END;	(* Macintosh *)
 		IF sym = lbrak THEN Str(" [");
 			Sym; ConstExpression;
 			Char("]"); CheckSym(rbrak)
-		END
-	END CheckSysFlags;
+		END *)
+		sf := default;
+		IF sym = lbrak THEN
+			Sym;
+			IF sym = ident THEN
+				IF id = "cdecl" THEN
+					sf := cdecl
+				ELSIF id = "stdcall" THEN
+					sf := stdcall
+				ELSIF id = "notag" THEN
+					sf := notag
+				END;
+				Sym
+			END;
+			CheckSym(rbrak)
+		END;
+		sysflag := SHORT(SHORT(sf))
+	END CheckSysFlag;
 
 	PROCEDURE RecordType;	(* parses and writes a record definition *)
-		VAR endPos: LONGINT; vis: SHORTINT; first, ln: BOOLEAN;
+		VAR endPos: LONGINT; vis, sysflag: SHORTINT; first, ln: BOOLEAN;
 	BEGIN
-		Keywords(cmnts.next, "RECORD", FALSE, FALSE); Sym; CheckSysFlags;
+		Keywords(cmnts.next, "RECORD", FALSE, FALSE); Sym; CheckSysFlag(sysflag, 0);
+		PrintSysFlag(sysflag, " ", 0X);
 		IF sym = lparen THEN Sym;	(* base type *)
 			Str("( ");
 			IF sym = ident THEN qualident(endPos) ELSE err(errTypeDef) END;
@@ -904,12 +952,16 @@ MODULE Watson;	(** PS/tk  *)
 	END RecordType;
 
 	PROCEDURE ArrayType;	(* parses and writes an array type *)
+		VAR sysflag: SHORTINT;
 	BEGIN
 		Str("ARRAY");
 		IF sym = of THEN	(* either dynamic or constant one dimensional *)
+			CheckSysFlag(sysflag, 0);
+			PrintSysFlag(sysflag, " ", 0X);
 			ConstExpression
 		ELSE
-			LOOP CheckSysFlags;
+			LOOP CheckSysFlag(sysflag, 0);
+				PrintSysFlag(sysflag, " ", 0X);
 				ConstExpression;
 				IF sym = of THEN EXIT END;
 				Sym; Char(",")
@@ -919,8 +971,9 @@ MODULE Watson;	(** PS/tk  *)
 	END ArrayType;
 
 	PROCEDURE PointerType;	(* parses and writes a pointer type *)
+		VAR sysflag: SHORTINT;
 	BEGIN
-		Str("POINTER"); CheckSysFlags;
+		Str("POINTER"); CheckSysFlag(sysflag, 0); PrintSysFlag(sysflag, " ", 0X);
 		Str(" TO "); CheckSym(to);
 		ShowType
 	END PointerType;
@@ -964,7 +1017,7 @@ MODULE Watson;	(** PS/tk  *)
 	END SkipFormalParameters;
 
 	PROCEDURE ShowType;	(* parses and writes any type declaration *)
-		VAR fix: Fixup;
+		VAR fix: Fixup; sysflag: SHORTINT;
 	BEGIN curErr:= errTypeDef; wasRecord:= FALSE;
 		IF sym < lparen THEN REPEAT Sym UNTIL sym >= lparen END;
 		IF sym = ident THEN	(* remeber type so we can fix it later *)
@@ -985,7 +1038,7 @@ MODULE Watson;	(** PS/tk  *)
 			CheckSym(end); DEC(recLevel); wasRecord:= TRUE
 		ELSIF sym = pointer THEN Sym; PointerType
 		ELSIF sym = proc THEN Str("PROCEDURE");
-			Sym; CheckSysFlags;
+			Sym; CheckSysFlag(sysflag, 0); PrintSysFlag(sysflag, " ", 0X);
 			IF sym = lparen THEN Sym; FormalParameters END
 		ELSE err(errType)
 		END;
@@ -996,8 +1049,8 @@ MODULE Watson;	(** PS/tk  *)
 		END	(* LOOP *)
 	END ShowType;
 
-	PROCEDURE SkipType;	(* skips any type declaration *)
-		VAR lev: INTEGER;
+	PROCEDURE SkipType;	(* skips any type declaration *) (* ejz *)
+		VAR lev: INTEGER; sysflag: SHORTINT;
 	BEGIN
 		IF sym = ident THEN Sym;
 			IF sym = period THEN Sym; IF sym = ident THEN Sym END END
@@ -1013,7 +1066,7 @@ MODULE Watson;	(** PS/tk  *)
 			REPEAT Sym UNTIL sym = of; Sym; SkipType
 		ELSIF sym = pointer THEN
 			REPEAT Sym UNTIL sym = to; Sym; SkipType
-		ELSIF sym = proc THEN Sym;
+		ELSIF sym = proc THEN Sym; CheckSysFlag(sysflag, 0);
 				IF sym = lparen THEN SkipFormalParameters END
 		END;	(* IF *)
 		LOOP
@@ -1073,19 +1126,18 @@ MODULE Watson;	(** PS/tk  *)
 
 	(* ---------------- parse procedure definition----------------- *)
 
-	PROCEDURE ProcedureDeclaration;
+	PROCEDURE ProcedureDeclaration; (* ejz *)
 		(* parses and writes/skips one procedure declaration. *)
 		CONST LProc = 0; XProc = 1; IProc = 2; CProc = 3;
-		VAR procId, self, typId: Name; vis, mode: SHORTINT; fwd, varPar: BOOLEAN;
-	BEGIN fwd:= FALSE; mode:= LProc;
+		VAR procId, self, typId: Name; vis, mode, sysflag: SHORTINT; fwd, varPar: BOOLEAN;
+	BEGIN fwd:= FALSE; mode:= LProc; sysflag := 0;
 		IF (sym # ident) & (sym # lparen) THEN
-			IF sym = times THEN	(* not needed anymore *)
-			ELSIF sym = arrow THEN fwd:= TRUE
-			ELSIF sym = minus THEN mode:= CProc
-			ELSIF sym = plus THEN mode:= IProc
-			ELSE err(errProc)
-			END;	(* IF *)
-			Sym;
+			IF sym = lbrak THEN CheckSysFlag(sysflag, 0) END;
+			IF sym = times THEN Sym (* not needed anymore *)
+			ELSIF sym = arrow THEN fwd := TRUE; Sym
+			ELSIF sym = minus THEN mode := CProc; Sym
+			ELSIF sysflag = 0 THEN err(errProc)
+			END	(* IF *)
 		END;	(* IF *)
 		IF sym = lparen THEN	(* type bound procedure *)
 			Sym; varPar:= (sym = var); IF varPar THEN Sym END;
@@ -1102,7 +1154,7 @@ MODULE Watson;	(** PS/tk  *)
 					Identifier(procId);
 					IF sym = lparen THEN Sym; FormalParameters END;
 					Char(";")
-				ELSIF (vis = internal) & (sym = lparen) THEN Sym; SkipFormalParameters
+				ELSIF (vis = internal) & (sym = lparen) THEN SkipFormalParameters
 				END;
 				CheckSym(semicolon);
 				IF ~fwd THEN Block(procId, vis # internal) END;
@@ -1115,7 +1167,9 @@ MODULE Watson;	(** PS/tk  *)
 			IF (level > 0) & (mode # LProc) THEN err(errProc); vis:= internal END;
 			INC(level);
 			IF (vis # internal) & (mode IN {XProc, CProc}) THEN
-				Ln; Indent(1); Str("PROCEDURE "); Identifier(procId);
+				Ln; Indent(1); Str("PROCEDURE ");
+				PrintSysFlag(sysflag, 0X, " ");
+				Identifier(procId);
 				IF sym = lparen THEN Sym; FormalParameters END;
 				Char(";");
 			ELSE	(* skip parameters *)
@@ -1732,7 +1786,7 @@ MODULE Watson;	(** PS/tk  *)
 
 	(*L Watson.CHECK *)
 	(** user command to check consistency of a given set of modules *)
-	PROCEDURE Check*;	(** param: { mod[*] } | "all" *)
+	PROCEDURE Check*;	(** param: { mod[*] } | "all" *)	(** non-portable *)
 		VAR S: Texts.Scanner; mod, dummy: ARRAY 32 OF CHAR; deep: BOOLEAN; obj: Objects.Object; 
 			BM: Objects.BindMsg; oldfnt: Objects.Library; OL: Objects.Library; h: History;
 	BEGIN	
@@ -1787,7 +1841,7 @@ MODULE Watson;	(** PS/tk  *)
 
 	(*L Watson.SHOWIMPORTS *)
 	(** user command to get best information about imported objects *)
-	PROCEDURE ShowImports*;	(** param: ["\"options] mod *)
+	PROCEDURE ShowImports*;	(** param: ["\"options] mod *)	(** non-portable *)
 		VAR S: Texts.Scanner; T: Texts.Text; mod, dummy: ARRAY 32 OF CHAR; h: History;
 	BEGIN
 		GetArgs(S, mod); QualIdent(mod, dummy);
@@ -1800,7 +1854,7 @@ MODULE Watson;	(** PS/tk  *)
 
 	(*L Watson.SHOWEXPORTS *)
 	(** user command to get best information about exported objects *)
-	PROCEDURE ShowExports*;	(** param: ["\"options] mod *)
+	PROCEDURE ShowExports*;	(** param: ["\"options] mod *)	(** non-portable *)
 		VAR S: Texts.Scanner; T: Texts.Text; mod, dummy: ARRAY 32 OF CHAR; title: ARRAY 32 OF CHAR; 
 		h: History;
 	BEGIN
@@ -1868,7 +1922,7 @@ MODULE Watson;	(** PS/tk  *)
 	(*L Watson.MAKEDEFS *)
 	(** user command to make definition files of given modules (if 'c' in options -> converts defs to HTML docs) *)
 	PROCEDURE MakeDefs*;	(** param: ["\"options] mods *)
-		VAR S: Texts.Scanner; T, HT: Texts.Text; F: Files.File; mod: ARRAY 32 OF CHAR;
+		VAR S: Texts.Scanner; T, HT: Texts.Text; F: Files.File; mod: ARRAY 64 OF CHAR;
 				l: LONGINT; conv: BOOLEAN;
 	BEGIN
 		GetArgs(S, mod);
@@ -1918,7 +1972,7 @@ MODULE Watson;	(** PS/tk  *)
 	PROCEDURE GetPublicObjects;	(* set public opjects (creates new if not found) *)
 		VAR obj: Objects.Object; string: ARRAY 64 OF CHAR; A: Objects.AttrMsg;
 		
-		PROCEDURE GetObj(name: ARRAY 32 OF CHAR; VAR obj: Objects.Object);
+		PROCEDURE GetObj(name: ARRAY OF CHAR; VAR obj: Objects.Object);
 			VAR L: Objects.LinkMsg;
 		BEGIN
 			obj:= Gadgets.FindPublicObj(name);

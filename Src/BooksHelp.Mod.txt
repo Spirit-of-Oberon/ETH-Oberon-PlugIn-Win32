@@ -1,20 +1,19 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE BooksHelp;
+MODULE BooksHelp; (** portable *)
 	IMPORT Texts, Display, Objects, Effects, Gadgets, Oberon, Display3;
 	
 	CONST
@@ -25,7 +24,6 @@ MODULE BooksHelp;
 		(* the help icon gadget *)
 		Frame = POINTER TO FrameDesc;
 		FrameDesc = RECORD (Gadgets.FrameDesc)
-			col: INTEGER;
 		END;
 	
 	VAR
@@ -311,7 +309,7 @@ MODULE BooksHelp;
 	END RestoreFrame;
 
 	(* mouse tracking, on execute checks for the tutorial attribute of Gadgets.ThisFrame *)
-	PROCEDURE Track(F: Frame; M: Oberon.InputMsg);
+	PROCEDURE Track(VAR M: Oberon.InputMsg);
 		VAR
 			keysum: SET;
 			u, v: INTEGER;
@@ -394,7 +392,7 @@ MODULE BooksHelp;
 					ELSIF M IS Oberon.InputMsg THEN
 						WITH M: Oberon.InputMsg DO
 							IF (M.id = Oberon.track) & Gadgets.InActiveArea(F, M) & (M.keys = {1}) THEN
-								Track(F, M);
+								Track(M);
 								M.res := 0
 							ELSE Gadgets.framehandle(F, M)
 							END
@@ -414,7 +412,6 @@ MODULE BooksHelp;
 		NEW(F);
 		F.handle := FrameHandler;
 
-		F.col := Display3.green;
 		F.W := 32; F.H := 32;
 
 		INCL(F.state, Gadgets.lockedsize);

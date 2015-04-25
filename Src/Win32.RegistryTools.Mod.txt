@@ -1,0 +1,349 @@
+﻿(* OBERON System 3, Release 2.3.
+
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE RegistryTools; (** non-portable / source: Win32.RegistryTools.Mod *)	(* ejz  *)
+	IMPORT SYSTEM, Kernel, Kernel32, Registry, FileDir, Files, Strings, Texts, Oberon;
+
+	VAR
+		GetFileVersionInfo: PROCEDURE (file, handle, len, data: LONGINT): LONGINT;
+		GetFileVersionInfoSize: PROCEDURE (file: LONGINT; VAR handle: LONGINT): LONGINT;
+		VerQueryValue: PROCEDURE (data, name: LONGINT; VAR value, len: LONGINT): LONGINT;
+		curPath: ARRAY 256 OF CHAR;
+		W: Texts.Writer;
+		R: Files.Rider;
+
+	PROCEDURE WriteString(VAR R: Files.Rider; str: ARRAY OF CHAR; esc: BOOLEAN);
+		VAR i: LONGINT;
+	BEGIN
+		i := 0;
+		WHILE str[i] # 0X DO
+			IF esc THEN
+				IF str[i] = "\" THEN
+					Files.Write(R, "\"); Files.Write(R, "\")
+				ELSIF str[i] = '"' THEN
+					Files.Write(R, "\"); Files.Write(R, '"')
+				ELSE
+					Files.Write(R, str[i])
+				END
+			ELSE
+				Files.Write(R, str[i])
+			END;
+			INC(i)
+		END
+	END WriteString;
+
+	PROCEDURE WriteLn(VAR R: Files.Rider);
+	BEGIN
+		Files.Write(R, Strings.CR); Files.Write(R, Strings.LF)
+	END WriteLn;
+
+	PROCEDURE ReadLine(VAR R: Files.Rider; VAR line: ARRAY OF CHAR);
+		VAR
+			i: LONGINT;
+			ch: CHAR;
+	BEGIN
+		Files.Read(R, ch);
+		WHILE ~R.eof & (ch <= " ") DO
+			Files.Read(R, ch)
+		END;
+		i := 0;
+		WHILE ~R.eof & (ch >= " ") DO
+			line[i] := ch; INC(i);
+			Files.Read(R, ch)
+		END;
+		line[i] := 0X
+	END ReadLine;
+
+	PROCEDURE GetFileDescription(VAR software: ARRAY OF CHAR);
+		VAR
+			file: FileDir.FileName;
+			buf: POINTER TO ARRAY OF CHAR;
+			ret, disp, len: LONGINT;
+	BEGIN
+		ret := Kernel32.GetModuleFileName(Kernel.hInstance, SYSTEM.ADR(file[0]), LEN(file));
+		len := GetFileVersionInfoSize(SYSTEM.ADR(file[0]), disp);
+		NEW(buf, len);
+		ret := GetFileVersionInfo(SYSTEM.ADR(file[0]), disp, len, SYSTEM.ADR(buf[0]));
+		file := "\StringFileInfo\040904e4\FileDescription";
+		ret := VerQueryValue(SYSTEM.ADR(buf[0]), SYSTEM.ADR(file[0]), disp, len);
+		IF ret # Kernel32.False THEN
+			IF len >= LEN(software) THEN
+				len := LEN(software)-1
+			END;
+			SYSTEM.MOVE(disp, SYSTEM.ADR(software[0]), len)
+		ELSE
+			HALT(99)
+		END
+	END GetFileDescription;
+
+	PROCEDURE GetFileVersion(VAR version: ARRAY OF CHAR);
+		VAR
+			file: FileDir.FileName;
+			buf: POINTER TO ARRAY OF CHAR;
+			ret, disp, len: LONGINT;
+	BEGIN
+		ret := Kernel32.GetModuleFileName(Kernel.hInstance, SYSTEM.ADR(file[0]), LEN(file));
+		len := GetFileVersionInfoSize(SYSTEM.ADR(file[0]), disp);
+		NEW(buf, len);
+		ret := GetFileVersionInfo(SYSTEM.ADR(file[0]), disp, len, SYSTEM.ADR(buf[0]));
+		file := "\StringFileInfo\040904e4\FileVersion";
+		ret := VerQueryValue(SYSTEM.ADR(buf[0]), SYSTEM.ADR(file[0]), disp, len);
+		IF ret # Kernel32.False THEN
+			IF len >= LEN(version) THEN
+				len := LEN(version)-1
+			END;
+			SYSTEM.MOVE(disp, SYSTEM.ADR(version[0]), len)
+		ELSE
+			HALT(99)
+		END
+	END GetFileVersion;
+
+	PROCEDURE *EnumKeyValue(key, value: ARRAY OF CHAR);
+	BEGIN
+		IF key = "" THEN
+			Files.Write(R, "@")
+		ELSE
+			Files.Write(R, 022X); WriteString(R, key, TRUE); Files.Write(R, 022X)
+		END;
+		Files.Write(R, "=");
+		Files.Write(R, 022X); WriteString(R, value, TRUE); Files.Write(R, 022X);
+		WriteLn(R)
+	END EnumKeyValue;
+
+	PROCEDURE WriteKeyValues();
+	BEGIN
+		WriteString(R, "[HKEY_CURRENT_USER\", FALSE);
+		WriteString(R, curPath, FALSE); Files.Write(R, "]"); WriteLn(R);
+		Registry.EnumerateKeyValue(Registry.CurrentUser, curPath, EnumKeyValue);
+		WriteLn(R)
+	END WriteKeyValues;
+
+	PROCEDURE *EnumPath(path: ARRAY OF CHAR);
+		VAR bakPath: ARRAY 256 OF CHAR;
+	BEGIN
+		COPY(curPath, bakPath);
+		Strings.AppendCh(curPath, "\"); Strings.Append(curPath, path);
+		WriteKeyValues();
+		Registry.EnumeratePath(Registry.CurrentUser, curPath, EnumPath);
+		COPY(bakPath, curPath)
+	END EnumPath;
+
+(** RegistryTools.Store [ \V version ] regfile
+		Stores all entries in [HKEY_CURRENT_USER\Software\<software>\<version>] to regfile.
+
+		Note: regfile is in regedit format, if you want to edit it with oberon use EditTools.OpenAscii
+		to open it and EditTools.StoreAscii to store it.
+
+		By default the registry of the currently running version is stored. To store entries of another
+		version use the V option. e.g. RegistryTools.Store \V "Release 2.21" old.reg ~ *)
+	PROCEDURE Store*;
+		VAR
+			S: Texts.Scanner;
+			software, version: ARRAY 64 OF CHAR;
+			F: Files.File;
+	BEGIN
+		GetFileDescription(software);
+		GetFileVersion(version);
+		Texts.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos);
+		Texts.Scan(S);
+		WHILE (S.class = Texts.Char) & (S.c = Oberon.OptionChar) DO
+			Texts.Scan(S);
+			IF CAP(S.s[0]) = "S" THEN
+				Texts.Scan(S); COPY(S.s, software)
+			ELSIF CAP(S.s[0]) = "V" THEN
+				Texts.Scan(S); COPY(S.s, version)
+			END;
+			Texts.Scan(S)
+		END;
+		IF S.class IN {Texts.Name, Texts.String} THEN
+			Texts.WriteString(W, "RegistryTools.Store: ");
+			Texts.WriteString(W, software);
+			Texts.WriteString(W, ", ");
+			Texts.WriteString(W, version);
+			Texts.WriteString(W, " to ");
+			Texts.WriteString(W, S.s);
+			Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf);
+			F := Files.New(S.s); Files.Set(R, F, 0);
+			WriteString(R, "REGEDIT4", FALSE); WriteLn(R); WriteLn(R);
+			COPY(Registry.oberonRoot, curPath);
+			WriteKeyValues();
+			Registry.EnumeratePath(Registry.CurrentUser, Registry.oberonRoot, EnumPath);
+			Files.Register(F);
+			Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf);
+			Files.Set(R, NIL, 0)
+		END
+	END Store;
+
+(** RegistryTools.Load [ \V version ] regfile
+		Write the registry entires in regfile to [HKEY_CURRENT_USER\Software\<software>\<version>].
+
+		Note: regfile is in regedit format, if you want to edit it with oberon use EditTools.OpenAscii
+		to open it and EditTools.StoreAscii to store it.
+
+		By default the registry of the currently running version is overwritten. To overwrite entries of 
+		another version use the V option. e.g. RegistryTools.Load \V "Release 2.3" old.reg ~ *)
+	PROCEDURE Load*;
+		VAR
+			S: Texts.Scanner;
+			software, version: ARRAY 64 OF CHAR;
+			section, name, value: ARRAY 256 OF CHAR;
+			F: Files.File;
+			R: Files.Rider;
+			buf: ARRAY 256 OF CHAR;
+			i, j: LONGINT;
+	BEGIN
+		GetFileDescription(software);
+		GetFileVersion(version);
+		Texts.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos);
+		Texts.Scan(S);
+		WHILE (S.class = Texts.Char) & (S.c = Oberon.OptionChar) DO
+			Texts.Scan(S);
+			IF CAP(S.s[0]) = "S" THEN
+				Texts.Scan(S); COPY(S.s, software)
+			ELSIF CAP(S.s[0]) = "V" THEN
+				Texts.Scan(S); COPY(S.s, version)
+			END;
+			Texts.Scan(S)
+		END;
+		IF S.class IN {Texts.Name, Texts.String} THEN
+			Texts.WriteString(W, "RegistryTools.Load: ");
+			Texts.WriteString(W, software);
+			Texts.WriteString(W, ", ");
+			Texts.WriteString(W, version);
+			Texts.WriteString(W, " from ");
+			Texts.WriteString(W, S.s);
+			F := Files.Old(S.s); Files.Set(R, F, 0);
+			ReadLine(R, buf); ASSERT(buf = "REGEDIT4", 101);
+			ReadLine(R, buf); section := "";
+			WHILE ~R.eof DO
+				IF (buf[0] = "[") & Strings.Prefix("[HKEY_CURRENT_USER\Software\", buf) THEN
+					i := 19; j := 0;
+					WHILE buf[i] # "]" DO
+						section[j] := buf[i];
+						INC(j); INC(i)
+					END;
+					section[j] := 0X
+				ELSIF (buf[0] = '"') OR (buf[0] = "@") THEN
+					IF buf[0] = '"' THEN
+						i := 1; j := 0;
+						WHILE (buf[i] # 0X) & (buf[i] # '"') DO
+							IF buf[i] = "\" THEN
+								INC(i)
+							END;
+							name[j] := buf[i]; INC(j);
+							INC(i)
+						END;
+						name[j] := 0X;
+						ASSERT(buf[i] = '"', 103); INC(i)
+					ELSE
+						i := 1; name := ""
+					END;
+					ASSERT(buf[i] = "=", 104); INC(i);
+					ASSERT(buf[i] = '"', 105); INC(i);
+					j := 0;
+					WHILE (buf[i] # 0X) & (buf[i] # '"') DO
+						IF buf[i] = "\" THEN
+							INC(i)
+						END;
+						value[j] := buf[i]; INC(j);
+						INC(i)
+					END;
+					value[j] := 0X;
+					Registry.SetKeyValue(Registry.CurrentUser, section, name, value);
+					ASSERT(Registry.res = Registry.Done, 107)
+				ELSE
+					HALT(106)
+				END;
+				ReadLine(R, buf)
+			END;
+			Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
+		END
+	END Load;
+
+(** RegistryTools.Delete \S Software \V version
+		Deletes all keys & values in [HKEY_CURRENT_USER\Software\<software>\<version>]. *)
+	PROCEDURE Delete*;
+		VAR
+			S: Texts.Scanner;
+			software, version: ARRAY 64 OF CHAR;
+			path: ARRAY 128 OF CHAR;
+	BEGIN
+		software := ""; version := "";
+		Texts.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos);
+		Texts.Scan(S);
+		WHILE (S.class = Texts.Char) & (S.c = Oberon.OptionChar) DO
+			Texts.Scan(S);
+			IF CAP(S.s[0]) = "S" THEN
+				Texts.Scan(S); COPY(S.s, software)
+			ELSIF CAP(S.s[0]) = "V" THEN
+				Texts.Scan(S); COPY(S.s, version)
+			END;
+			Texts.Scan(S)
+		END;
+		IF (software # "") & (version # "") THEN
+			Texts.WriteString(W, "RegistryTools.Delete Software\");
+			Texts.WriteString(W, software); Texts.Write(W, "\"); Texts.WriteString(W, version);
+			COPY("Software\", path); Strings.Append(path, software);
+			Strings.AppendCh(path, "\"); Strings.Append(path, version);
+			Registry.DeletePath(Registry.CurrentUser, path);
+			IF Registry.res # Registry.Done THEN
+				Texts.WriteString(W, " failed")
+			ELSE
+				Texts.WriteString(W, " done")
+			END;
+			Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
+		END
+	END Delete;
+
+(** RegistryTools.Version
+		Display version information for the currently running version. *)
+	PROCEDURE Version*;
+		VAR software, version: ARRAY 64 OF CHAR;
+	BEGIN
+		GetFileDescription(software);
+		GetFileVersion(version);
+		Texts.WriteString(W, "Software: "); Texts.WriteString(W, software); Texts.WriteLn(W);
+		Texts.WriteString(W, "Version: "); Texts.WriteString(W, version);
+		Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
+	END Version;
+
+	PROCEDURE InitAPI();
+		VAR mod: LONGINT;
+	BEGIN
+		mod := Kernel32.LoadLibrary("Version.DLL");
+		Kernel32.GetAdr(mod, "GetFileVersionInfoSizeA", SYSTEM.VAL(LONGINT, GetFileVersionInfoSize));
+		Kernel32.GetAdr(mod, "GetFileVersionInfoA", SYSTEM.VAL(LONGINT, GetFileVersionInfo));
+		Kernel32.GetAdr(mod, "VerQueryValueA", SYSTEM.VAL(LONGINT, VerQueryValue))
+	END InitAPI;
+
+BEGIN
+	InitAPI(); Texts.OpenWriter(W)
+END RegistryTools.
+
+RegistryTools.Version
+
+RegistryTools.Store xxx.reg
+
+RegistryTools.Delete \S "Oberon System 3" \V "Release 2.3" ~
+
+RegistryTools.Load xxx.reg
+
+EditTools.OpenAscii ^
+EditTools.StoreAscii *
+
+escapes:
+	\ -> \\
+	" --> \"
+	@ --> default (empty key)

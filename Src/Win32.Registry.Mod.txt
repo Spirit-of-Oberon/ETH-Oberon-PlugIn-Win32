@@ -1,171 +1,247 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE Registry; (* MH 27.1.93 *)
+MODULE Registry; (** non-portable / source: Win32.Registry.Mod *)	(* ejz  *)
+	IMPORT S := SYSTEM, Kernel32, Kernel, ADVAPI32;
 
-(**The registry provides a consistent interface for programs to store configuration data. The data is organized in a two-level hierarchy. The first level is called "section", the second level is called "key". The registry serves to associate a value with a (section, key) pair. The Registry is mostly of use to modules low in the module hierarchy, and its extensive use is discouraged.
-	The registry data is kept in the file "oberon.ini". The registry file can be edited directly with a ASCII text editor. The module System exports commands (Set and Get) to influence the registry directly from Oberon. The registry file has the format:
-
-	[section]
-	Key1=Value1;
-	Key2=Value;
-	
-	[Section2]
-	Key1=Value;
-	...
-	
-*)
-
-(*
-	22.2.96 ejz - settable SystemInfo section
-*)
-
-	IMPORT S := SYSTEM, Kernel, Kernel32;
+(** This module provides an easy to use interface to the Windows registry. To read Oberon configuration data
+	stored in the registry use Oberon.OpenScanner and the commands System.Set and System.Get . *)
 
 	CONST
-		Done* = 0; RegistryNotFound* = 1; NotFound* = 2;
+		(** root keys *)
+		ClassesRoot* = ADVAPI32.HKEYClassesRoot; CurrentUser* = ADVAPI32.HKEYCurrentUser;
+		(** result codes *)
+		Done* = 0; NotFound* = 2;
 
 	TYPE
-		EntryHandler* = PROCEDURE (key, value: ARRAY OF CHAR);
-		SysSect = POINTER TO SysSectDesc;
-		SysSectDesc = RECORD
-			key: ARRAY 32 OF CHAR;
-			value: ARRAY 64 OF CHAR;
-			next: SysSect
-		END;
+		PathEnumerator* = PROCEDURE (path: ARRAY OF CHAR);
+		KeyValueEnumerator* = PROCEDURE (key, value: ARRAY OF CHAR);
 
 	VAR
-		Inifile: ARRAY 128 OF CHAR;
-		sysSects: SysSect;
-		res-: INTEGER;
+		GetFileVersionInfo: PROCEDURE (file, handle, len, data: LONGINT): LONGINT;
+		GetFileVersionInfoSize: PROCEDURE (file: LONGINT; VAR handle: LONGINT): LONGINT;
+		VerQueryValue: PROCEDURE (data, name: LONGINT; VAR value, len: LONGINT): LONGINT;
+		oberonRoot*, oberonSystem*: ARRAY 128 OF CHAR;
+		res*: LONGINT; (** Done, NotFound *)
+		stamp*: LONGINT; (** Time stamp of last modification to the registry. *)
 
-	(** Associates a value with a (section, key) pair. *)
-	PROCEDURE Set*(section, key, value: ARRAY OF CHAR);
-		VAR val: LONGINT; psys, sys: SysSect;
+	PROCEDURE Append(VAR to: ARRAY OF CHAR; this: ARRAY OF CHAR);
+		VAR i, j, l: LONGINT;
 	BEGIN
-		res := Done;
-		IF section = "SystemInfo" THEN
-			psys := NIL; sys := sysSects;
-			WHILE (sys # NIL) & (sys.key # key) DO
-				psys := sys; sys := sys.next
-			END;
-			IF sys = NIL THEN
-				NEW(sys); COPY(key, sys.key);
-				IF psys # NIL THEN
-					sys.next := psys.next; psys.next := sys
-				ELSE
-					sys.next := NIL; sysSects := sys
-				END
-			END;
-			COPY(value, sys.value)
-		ELSIF Inifile # "" THEN
-			IF value = "" THEN val := Kernel32.NULL ELSE val := S.ADR(value) END;
-			IF Kernel32.WritePrivProfileString(S.ADR(section), S.ADR(key), val, S.ADR(Inifile)) = Kernel32.False THEN
+		i := 0;
+		WHILE to[i] # 0X DO
+			INC(i)
+		END;
+		l := LEN(to)-1; j := 0;
+		WHILE (i < l) & (this[j] # 0X) DO
+			to[i] := this[j]; INC(i); INC(j)
+		END;
+		to[i] := 0X
+	END Append;
+
+	PROCEDURE AppendCh(VAR to: ARRAY OF CHAR; this: CHAR);
+		VAR i: LONGINT;
+	BEGIN
+		i := 0;
+		WHILE to[i] # 0X DO
+			INC(i)
+		END;
+		IF i < (LEN(to)-1) THEN
+			to[i] := this; to[i+1] := 0X
+		END
+	END AppendCh;
+
+	(** Get the full path to Oberon settings stored under key.
+		Note: Oberon settings use CurrentUser as root key. *)
+	PROCEDURE OberonPath*(path: ARRAY OF CHAR; VAR fullPath: ARRAY OF CHAR);
+	BEGIN
+		COPY(oberonRoot, fullPath); AppendCh(fullPath, "\"); Append(fullPath, path)
+	END OberonPath;
+
+	(** Set a key/value pair, key = "" sets the default value for path. *)
+	PROCEDURE SetKeyValue*(root: LONGINT; path, key, value: ARRAY OF CHAR);
+		VAR hKey, disp, ret: LONGINT;
+	BEGIN
+		ret := ADVAPI32.RegCreateKeyEx(root, S.ADR(path), 0, Kernel32.NULL, ADVAPI32.RegOptionNonVolatile, Kernel32.LongOr(ADVAPI32.KeySetValue, ADVAPI32.KeyCreateSubKey), Kernel32.NULL, hKey, disp);
+		IF ret # ADVAPI32.Success THEN
+			res := NotFound; RETURN
+		END;
+		disp := 0; WHILE value[disp] # 0X DO INC(disp) END; INC(disp);
+		ret := ADVAPI32.RegSetValueEx(hKey, S.ADR(key), 0, ADVAPI32.RegSZ, S.ADR(value), disp);
+		ret := ADVAPI32.RegCloseKey(hKey);
+		INC(stamp); res := Done
+	END SetKeyValue;
+
+	(** Retrieve the value stored under key. use key = "" to retrieve the default value for path. *)
+	PROCEDURE GetKeyValue*(root: LONGINT; path, key: ARRAY OF CHAR; VAR value: ARRAY OF CHAR);
+		VAR hKey, type, len, ret: LONGINT; buf: POINTER TO ARRAY OF CHAR;
+	BEGIN
+		ret := ADVAPI32.RegOpenKeyEx(root, S.ADR(path), 0, ADVAPI32.KeyQueryValue, hKey);
+		IF ret # ADVAPI32.Success THEN
+			res := NotFound; RETURN
+		END;
+		len := LEN(value); type := ADVAPI32.RegSZ;
+		ret := ADVAPI32.RegQueryValueEx(hKey, S.ADR(key), Kernel32.NULL, type, S.ADR(value), len);
+		IF (type # ADVAPI32.RegSZ) OR (ret # ADVAPI32.Success) THEN
+			IF (type = ADVAPI32.RegSZ) & (ret = ADVAPI32.ErrorMoreData) THEN
+				NEW(buf, len+1);
+				ret := ADVAPI32.RegQueryValueEx(hKey, S.ADR(key), Kernel32.NULL, type, S.ADR(buf^), len);
+				COPY(buf^, value); res := Done
+			ELSE
 				res := NotFound
 			END
 		ELSE
-			res := RegistryNotFound
-		END
-	END Set;
+			res := Done
+		END;
+		ret := ADVAPI32.RegCloseKey(hKey)
+	END GetKeyValue;
 
-	(** Retrieves the value associated to a (section, key) pair. *)
-	PROCEDURE Get*(section, key: ARRAY OF CHAR; VAR value: ARRAY OF CHAR);
+	(** Recursive delete all sub-paths, keys and values in path.
+		Note: be very careful when using this procedure!!! *)
+	PROCEDURE DeletePath*(root: LONGINT; path: ARRAY OF CHAR);
 		VAR
-			sys: SysSect;
-			r, len: LONGINT;
-			default: ARRAY 8 OF CHAR;
+			buffer: ARRAY 256 OF CHAR;
+			time: Kernel32.FileTime;
+			ret, size, hKey: LONGINT;
 	BEGIN
-		res := Done;
-		IF section = "SystemInfo" THEN
-			IF key = "OS" THEN COPY("Windows", value)
-			ELSIF key = "Processor" THEN COPY("Intel", value)
-			ELSE
-				sys := sysSects;
-				WHILE (sys # NIL) & (sys.key # key) DO
-					sys := sys.next
-				END;
-				IF sys # NIL THEN
-					COPY(sys.value, value)
-				ELSE		
-					COPY("", value); res := RegistryNotFound
-				END
-			END
-		ELSIF Inifile # "" THEN
-			len := LEN(value); default := "@#$%";
-			r := Kernel32.GetPrivProfileString(S.ADR(section), S.ADR(key), S.ADR(default), S.ADR(value), len, S.ADR(Inifile));
-			IF value = default THEN res := NotFound END
-		ELSE
-			res := RegistryNotFound
-		END
-	END Get;
+		ret := ADVAPI32.RegOpenKeyEx(root, S.ADR(path), 0, ADVAPI32.KeyAllAccess, hKey);
+		IF ret # ADVAPI32.Success THEN
+			res := NotFound; RETURN
+		END;
+		size := 256;
+		WHILE ADVAPI32.RegEnumKeyEx(hKey, 0, S.ADR(buffer), size, Kernel32.NULL, Kernel32.NULL, ret, S.ADR(time)) = ADVAPI32.Success DO
+			DeletePath(hKey, buffer);
+			IF res # Done THEN
+				size := ADVAPI32.RegCloseKey(hKey);
+				RETURN
+			END;
+			size := 256
+		END;
+		ret := ADVAPI32.RegCloseKey(hKey);
+		ret := ADVAPI32.RegDeleteKey(root, S.ADR(path));
+		INC(stamp); res := Done
+	END DeletePath;
 
-	(** Enumerates all keys and their values in a section. *)
-	PROCEDURE Enumerate* (section: ARRAY OF CHAR; handler: EntryHandler);
-		CONST
-			bufLen = 1024;
-		VAR
-			buf: ARRAY bufLen OF CHAR; default: ARRAY 8 OF CHAR;
-			key, value: ARRAY 64 OF CHAR;
-			r: LONGINT;
-			sys: SysSect;
-			i, j: INTEGER;
+	(** Delete key and its value, key = "" deletes the default value for path. *)
+	PROCEDURE DeleteKeyValue*(root: LONGINT; path, key: ARRAY OF CHAR);
+		VAR ret, hKey: LONGINT;
 	BEGIN
-		res := Done; default := "@#$%";
-		IF section = "SystemInfo" THEN
-			sys := sysSects;
-			WHILE sys # NIL DO
-				handler(sys.key, sys.value); sys := sys.next
-			END
-		ELSIF Inifile # "" THEN
-			r := Kernel32.GetPrivProfileString(S.ADR(section), Kernel32.NULL, S.ADR(default), S.ADR(buf), bufLen, S.ADR(Inifile));
-			IF buf # default THEN i := 0;
-				WHILE buf[i] # 0X DO j := 0;
-					WHILE buf[i] # 0X DO key[j] := buf[i]; INC(i); INC(j) END;
-					key[j] := 0X; INC(i);
-					Get(section, key, value);
-					IF res = Done THEN handler(key, value) END;
-				END
-			ELSE res := NotFound
-			END
+		ret := ADVAPI32.RegOpenKeyEx(root, S.ADR(path), 0, ADVAPI32.KeySetValue, hKey);
+		IF ret # ADVAPI32.Success THEN
+			res := NotFound; RETURN
+		END;
+		ret := ADVAPI32.RegDeleteValue(hKey, S.ADR(key));
+		IF ret # ADVAPI32.Success THEN
+			res := NotFound
 		ELSE
-			res := RegistryNotFound
-		END
-	END Enumerate;
+			INC(stamp); res := Done
+		END;
+		ret := ADVAPI32.RegCloseKey(hKey)
+	END DeleteKeyValue;
+
+	(** Enumerate all sub-paths in path. *)
+	PROCEDURE EnumeratePath*(root: LONGINT; path: ARRAY OF CHAR; enum: PathEnumerator);
+		VAR
+			subPath: ARRAY 256 OF CHAR;
+			time: Kernel32.FileTime;
+			ret, i, size, hKey: LONGINT;
+	BEGIN
+		ret := ADVAPI32.RegOpenKeyEx(root, S.ADR(path), 0, ADVAPI32.KeyEnumerateSubKeys, hKey);
+		IF ret # ADVAPI32.Success THEN
+			res := NotFound; RETURN
+		END;
+		i := 0;
+		WHILE ret = ADVAPI32.Success DO
+			size := 256;
+			ret := ADVAPI32.RegEnumKeyEx(hKey, i, S.ADR(subPath), size, Kernel32.NULL, Kernel32.NULL, ret, S.ADR(time));
+			IF ret = ADVAPI32.Success THEN
+				enum(subPath)
+			END;
+			INC(i)
+		END;
+		ret := ADVAPI32.RegCloseKey(hKey);
+		res := Done
+	END EnumeratePath;
+
+	(** Enumerate all key/value pairs in path.*)
+	PROCEDURE EnumerateKeyValue*(root: LONGINT; path: ARRAY OF CHAR; enum: KeyValueEnumerator);
+		VAR
+			key, value: ARRAY 256 OF CHAR;
+			ret, i, type, kLen, vLen, hKey: LONGINT;
+	BEGIN
+		ret := ADVAPI32.RegOpenKeyEx(root, S.ADR(path), 0, ADVAPI32.KeyQueryValue, hKey);
+		IF ret # ADVAPI32.Success THEN
+			res := NotFound; RETURN
+		END;
+		i := 0;
+		WHILE ret = ADVAPI32.Success DO
+			kLen := 256; vLen := 256;
+			ret := ADVAPI32.RegEnumValueEx(hKey, i, S.ADR(key), kLen, Kernel32.NULL, type, S.ADR(value), vLen);
+			IF (ret = ADVAPI32.Success) & (type = ADVAPI32.RegSZ) THEN
+				enum(key, value)
+			END;
+			INC(i)
+		END;
+		ret := ADVAPI32.RegCloseKey(hKey);
+		res := Done
+	END EnumerateKeyValue;
 
 	PROCEDURE Init();
-		VAR InifilePtr: POINTER TO RECORD name: ARRAY 128 OF CHAR END;
+		VAR
+			file: ARRAY 256 OF CHAR;
+			software, version: ARRAY 64 OF CHAR;
+			buf: POINTER TO ARRAY OF S.BYTE;
+			mod, len, disp, ret: LONGINT;
 	BEGIN
-		Kernel.GetAdr(0, "Inifile", S.VAL(LONGINT, InifilePtr)); COPY(InifilePtr.name, Inifile);
-		sysSects := NIL; res := Done;
-		Set("SystemInfo", "OS", "Windows");
-		Set("SystemInfo", "Processor", "Intel")
+		mod := Kernel32.LoadLibrary("Version.DLL");
+		Kernel32.GetAdr(mod, "GetFileVersionInfoSizeA", S.VAL(LONGINT, GetFileVersionInfoSize));
+		Kernel32.GetAdr(mod, "GetFileVersionInfoA", S.VAL(LONGINT, GetFileVersionInfo));
+		Kernel32.GetAdr(mod, "VerQueryValueA", S.VAL(LONGINT, VerQueryValue));
+
+		ret := Kernel32.GetModuleFileName(Kernel.hInstance, S.ADR(file), LEN(file));
+		len := GetFileVersionInfoSize(S.ADR(file), disp); NEW(buf, len);
+		ret := GetFileVersionInfo(S.ADR(file), disp, len, S.ADR(buf[0]));
+		file := "\StringFileInfo\040904e4\FileDescription";
+		ret := VerQueryValue(S.ADR(buf[0]), S.ADR(file), disp, len);
+		IF ret # Kernel32.False THEN
+			IF len >= LEN(software) THEN
+				HALT(99)
+			END;
+			S.MOVE(disp, S.ADR(software), len)
+		ELSE
+			HALT(99)
+		END;
+		file := "\StringFileInfo\040904e4\FileVersion";
+		ret := VerQueryValue(S.ADR(buf[0]), S.ADR(file), disp, len);
+		IF ret # Kernel32.False THEN
+			IF len >= LEN(version) THEN
+				HALT(99)
+			END;
+			S.MOVE(disp, S.ADR(version), len)
+		ELSE
+			HALT(99)
+		END;
+		oberonRoot := "Software\"; Append(oberonRoot, software);
+		AppendCh(oberonRoot, "\"); Append(oberonRoot, version);
+
+		OberonPath("SystemInfo", oberonSystem); stamp := 0;
+		SetKeyValue(CurrentUser, oberonSystem, "OS", "Windows");
+		SetKeyValue(CurrentUser, oberonSystem, "Processor", "Intel");
+		OberonPath("System", oberonSystem)
 	END Init;
 
 BEGIN
 	Init()
 END Registry.
-
-(**
-Remarks:
-
-1. A "hidden" section called [SystemInfo] returns the following details depending on the host operating system:
-
-	Key	Value on Windows	Value on MacOS
-	------------------------------------------------------------
-	OS	Windows	MacOS
-	Processor	Intel	MC680x0 or PowerPC
-
-*)

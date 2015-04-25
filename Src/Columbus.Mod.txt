@@ -1,20 +1,19 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE Columbus;	(* PS  *)
+MODULE Columbus; (** portable *)	(* PS  *)
 
 (**  - an inspector tool for objects and libraries. *)
 
@@ -29,7 +28,8 @@ MODULE Columbus;	(* PS  *)
 *)
 	IMPORT
 		Files, Objects, Fonts, Texts, Strings, Attributes, Links, Display, Oberon, Gadgets, Panels, TextFields,
-		BasicGadgets, BasicFigures, RefGadgets, ScrollViews, TextGadgets, ListRiders, Documents, Desktops;
+		BasicGadgets, BasicFigures, RefGadgets, ScrollViews, TextGadgets, ListRiders, Documents, Desktops,
+		PanelDocs;
 	
 	CONST
 		Version = "1.2";
@@ -184,7 +184,7 @@ END ToLog;
 
 PROCEDURE PrintMsg;	(*  writes program's name and version to the Oberon log *)
 BEGIN
-	Texts.SetFont(W, Fonts.This("Syntax10m.Scn.Fnt"));
+	Texts.SetFont(W, Fonts.This("Default10b.Scn.Fnt"));
 	String("Columbus "); String(Version);
 	Texts.SetFont(W, Fonts.Default);
 	String(" / PS November 95"); Ln; ToLog;
@@ -219,7 +219,7 @@ BEGIN
 END LoadDoc;
 
 PROCEDURE StoreDoc(D: Documents.Document);
-	VAR f: Files.File; R: Files.Rider; filename: ARRAY 64 OF CHAR;
+	VAR f: Files.File; R: Files.Rider;
 BEGIN
 	String("Store "); ToLog;
 	IF D.name # "" THEN
@@ -227,7 +227,7 @@ BEGIN
 		Files.Set(R, f, 0); Files.WriteInt(R, Documents.Id); Files.WriteString(R, "Columbus.NewDoc");
 		Files.WriteInt(R, D.X); Files.WriteInt(R, D.Y); Files.WriteInt(R, D.W); Files.WriteInt(R, D.H);
 		Files.Register(f);
-		Char(22X); String(filename); Char(22X)
+		Char(22X); String(D.name); Char(22X)
 	ELSE String("[Untitled document]")
 	END;
 	Ln; ToLog
@@ -242,17 +242,26 @@ BEGIN
 					IF M.name = "Gen" THEN M.class := Objects.String; M.s := "Columbus.NewDoc"; M.res := 0
 					ELSIF M.name = "Adaptive" THEN M.class := Objects.Bool; M.b := FALSE; M.res := 0
 					ELSIF M.name = "Icon" THEN M.class := Objects.String; M.s := "Columbus.Icon"; M.res := 0
+					ELSE PanelDocs.DocHandle(D, M)
 					END
-				ELSE Documents.Handler(D, M)
+				ELSE PanelDocs.DocHandle(D, M)
 				END
 			END	(* WITH *)
 		ELSIF M IS Objects.LinkMsg THEN
 			WITH M: Objects.LinkMsg DO
-				IF (M.name = "SystemMenu") OR (M.name = "UserMenu") OR (M.name = "DeskMenu") THEN
-					M.obj := Desktops.NewMenu(""); M.res := 0
+				IF (M.id = Objects.get) & (M.name = "DeskMenu") THEN
+					M.obj := Gadgets.CopyPublicObject("Columbus.DeskMenu", TRUE);
+					IF M.obj = NIL THEN M.obj := Desktops.NewMenu("") END; M.res := 0
+				ELSIF (M.id = Objects.get) & (M.name = "UserMenu") THEN
+					M.obj := Gadgets.CopyPublicObject("Columbus.UserMenu", TRUE);
+					IF M.obj = NIL THEN M.obj := Desktops.NewMenu("") END; M.res := 0
+				ELSIF (M.id = Objects.get) & (M.name = "SystemMenu") THEN
+					M.obj := Gadgets.CopyPublicObject("Columbus.SystemMenu", TRUE);
+					IF M.obj = NIL THEN M.obj := Desktops.NewMenu("") END; M.res := 0
+				ELSE PanelDocs.DocHandle(D, M)
 				END
 			END
-		ELSE Documents.Handler(D, M)
+		ELSE PanelDocs.DocHandle(D, M)
 		END
 	END	(* WITH *)
 END DocHandler;
@@ -351,7 +360,7 @@ BEGIN
 	Attributes.StrToTxt(s, F.text);
 	Texts.ChangeLooks(F.text, 0, F.text.len, {1}, NIL, col, 0);
 	IF bold THEN
-		Texts.ChangeLooks(F.text, 0, F.text.len, {0}, Fonts.This("Syntax10b.Scn.Fnt"), 0, 0)
+		Texts.ChangeLooks(F.text, 0, F.text.len, {0}, Fonts.This("Default10b.Scn.Fnt"), 0, 0)
 	END;
 	TextFields.CalcSize(F, F.W, F.H, nolines, TRUE);
 	RETURN F
@@ -740,7 +749,6 @@ BEGIN
 		A.id:= Objects.set; A.class:= Objects.Bool; A.name:= "Locked"; A.b:= FALSE; A.res:= -1;
 		P.handle(P, A)
 	END;
-
 	(* insert new objects in panel *)
 	C.id:= Display.drop; C.F:= P; C.obj:= frames; C.x:= 0; C.y:= 0;
 	C.u:= border; C.v:= -border - h + 1; C.res:= -1; C.dlink:= NIL;
@@ -997,6 +1005,7 @@ END DscViewButton;
 PROCEDURE MakeDscView(obj: Objects.Object; lib: Objects.Library; VAR L: Layout);
 	VAR p: Panels.Panel; v: ScrollViews.View; o: Display.Frame; cnt: INTEGER;
 			subLay: Layout; A: Objects.AttrMsg; M: Display.ModifyMsg;
+			Generator, Name: ARRAY 32 OF CHAR; offset: INTEGER;
 BEGIN
 	(* write objects in library *)
 	OpenLayout(subLay); subLay.align:= middle;
@@ -1005,13 +1014,34 @@ BEGIN
 	o:= obj(Display.Frame).dsc; cnt:= 0;
 	WHILE o # NIL DO
 		A.id:= Objects.get; A.name:= "Gen"; A.res:= -1; o.handle(o, A);
+		COPY(A.s,Generator);
 		WriteCaption(subLay, A.s, Display.FG, FALSE); WriteTab(subLay);
-		WriteFrame(subLay, MakeLink(o, TRUE)); WriteLn(subLay);
+		WriteFrame(subLay, MakeLink(o, TRUE));
+        WriteTab(subLay);
+        offset:= subLay.X;
+        A.id := Objects.get;A.name := "Caption";A.res := -1;o.handle(o,A);
+        COPY(A.s,Name);
+        IF (Name = Generator)OR(Name = "") THEN
+           A.id := Objects.get;A.name := "Name";A.res := -1;o.handle(o,A);COPY(A.s,Name);
+           IF (Name = Generator)OR(Name = "") THEN
+             A.id:= Objects.get;A.name:= "Cmd";A.res:= -1;o.handle(o,A);COPY(A.s,Name);
+              IF (Name = Generator)OR(Name = "") THEN
+                A.id := Objects.get;A.name := "Value";A.res := -1;o.handle(o,A);COPY(A.s,Name)
+              END
+           END
+        END;
+        IF (Name = Generator)OR(Name = "")   THEN
+           Name := " "
+        END;
+        WriteCaption(subLay,Name,Display.FG,FALSE);
+		WriteLn(subLay);
 		o:= o.next; INC(cnt)
 	END;
 
 	IF cnt > 10 THEN
 		WriteHSpace(L, 17); WriteCaption(L, "Generator", Display.FG, TRUE);
+		WriteHSpace(L,offset - 50); (* The 50 was just a guess and seems to work *)
+		WriteCaption(L,"Name/Caption/Cmd/Value",Display.FG,TRUE);
 		WriteLn(L);
 	
 		Panels.NewPanel; p:= Objects.NewObj(Panels.Panel);
@@ -1028,7 +1058,10 @@ BEGIN
 		
 		WriteFrame(L, v)
 	ELSE
-		WriteCaption(L, "Generator", Display.FG, TRUE); WriteLn(L);
+		WriteCaption(L, "Generator", Display.FG, TRUE);
+		WriteHSpace(L,offset - 50); (* The 50 was just a guess and seems to work *)
+		WriteCaption(L,"Name/Caption/Cmd/Value",Display.FG,TRUE);
+		WriteLn(L);
 		WriteLayout(L, subLay)
 	END
 END MakeDscView;
@@ -1353,6 +1386,10 @@ BEGIN
 			END;
 			IF A.class # Objects.Inval THEN
 				obj.handle(obj, A);
+				IF (A.res < 0) & (A.class = Objects.LongReal) THEN
+					A.class := Objects.Real; A.x := SHORT(A.y);
+					obj.handle(obj, A)
+				END;
 				IF A.res < 0 THEN
 					String("Attribute "); String(item.name); String(" could not be set");
 					Ln; ToLog
@@ -1534,6 +1571,17 @@ BEGIN
 END GetViewMode;
 
 	(** ---------------------- columbus inspector commands ----------------------- *)
+
+PROCEDURE InspectObj*(obj: Objects.Object);
+	VAR P: Panel; D: Documents.Document;
+BEGIN
+	InspectThis(P, obj, NIL, ObjAttrView);
+	IF Oberon.Pointer.on THEN Oberon.FadeCursor(Oberon.Pointer) END;
+	NewDoc; D:= Objects.NewObj(Documents.Document);
+	D.W:= P.W; D.H:= P.H; Documents.Init(D, P); D.name:= DocName;
+	Desktops.ShowDoc(D);
+	IF ~msgPrinted THEN PrintMsg END
+END InspectObj;
 
 (** Used in the form:	Columbus.Inspect [<Name>]
 
@@ -1835,6 +1883,12 @@ BEGIN
 			Gadgets.Update(obj)
 		END;
 		obj:= Gadgets.FindObj(Gadgets.context, RNameObj);
+		IF obj # NIL THEN
+			A.id:= Objects.set; A.name:= "Value"; A.class:= Objects.String; A.s:= ""; A.res:= -1;
+			obj.handle(obj, A);
+			Gadgets.Update(obj)
+		END;
+		obj:= Gadgets.FindObj(Gadgets.context, NNameObj);
 		IF obj # NIL THEN
 			A.id:= Objects.set; A.name:= "Value"; A.class:= Objects.String; A.s:= ""; A.res:= -1;
 			obj.handle(obj, A);

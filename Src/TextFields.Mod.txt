@@ -1,20 +1,19 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE TextFields; (* jm 16.11.95 *)
+MODULE TextFields; (** portable *)	(* jm 16.11.95 *)
 
 (**Module TextFields implements text captions and textfields.
 *)
@@ -49,8 +48,6 @@ IMPORT
 CONST
 	MaxLen = 64; CarHeight = 14; CarWidth = 2; Yoffset = 5; Xoffset = 5;
 	
-	DisplayUnit = LONG(10000);
-	
 TYPE
 	(** Captions  for displaying a text. *)
 	Caption* = POINTER TO CaptionDesc;
@@ -84,8 +81,7 @@ TYPE
 VAR
 	W: Texts.Writer;
 	invTF: INTEGER; (* focus & selection color for text fields *)
-	invCP: INTEGER; (* focus color for captions *)
-	
+
 VAR
 	linebuf: ARRAY 32 OF INTEGER;
 	lastfont, lastlib: Fonts.Font;
@@ -110,7 +106,7 @@ PROCEDURE Lookup(L: Fonts.Font; ch: CHAR; VAR minY, maxY, dx: INTEGER);
 VAR obj: Objects.Object; metric: Fonts.Font;
 	
 	PROCEDURE Dev(x: INTEGER): INTEGER;
-	BEGIN RETURN SHORT(LONG(x) * 10000 DIV Printer.Unit)
+	BEGIN RETURN SHORT(LONG(x) * Display.Unit DIV Printer.Unit)
 	END Dev;
 	
 BEGIN
@@ -194,8 +190,8 @@ BEGIN
 		IF plinew > pW THEN pW := plinew END;
 		
 		IF displayspace THEN
-			pW := SHORT(LONG(pW) * Printer.Unit DIV 10000) + 1;
-			pH := SHORT(LONG(pH) * Printer.Unit DIV 10000) + 1;
+			pW := SHORT(LONG(pW) * Printer.Unit DIV Display.Unit) + 1;
+			pH := SHORT(LONG(pH) * Printer.Unit DIV Display.Unit) + 1;
 			IF pW > W THEN W := pW END;
 			IF pH > H THEN H := pH END;
 		ELSE
@@ -327,7 +323,7 @@ VAR Q: Display3.Mask; X, X0, Y, W, H, nolines, i: INTEGER; R: Texts.Reader; ch: 
 	lastfnt: Fonts.Font; lastcol: INTEGER;
 	
 	PROCEDURE P(x: INTEGER): INTEGER;
-	BEGIN RETURN SHORT(x * LONG(10000) DIV Printer.Unit)
+	BEGIN RETURN SHORT(x * Display.Unit DIV Printer.Unit)
 	END P;
 
 	PROCEDURE InitBuf;
@@ -403,7 +399,7 @@ VAR R: Texts.Reader; chr: CHAR;
 BEGIN
 	IF ch = 7FX THEN	(* DEL *)
 		IF F.text.len > 0 THEN Texts.Delete(F.text, F.text.len-1, F.text.len) END
-	ELSIF (ch = 0DX) OR (20X <= ch) & (ch <= 96X) THEN
+	ELSIF (ch >= " ") OR (ch = 09X) OR (ch = 0DX) THEN
 		IF F.text.len > 0 THEN
 			Texts.OpenReader(R, F.text, F.text.len - 1);
 			Texts.Read(R, chr);
@@ -720,7 +716,7 @@ BEGIN
 			DEC(F.carpos); DeleteChar(F.val, F.carpos); beg := F.carpos;
 			IF F.selbeg >= 0 THEN F.selbeg := -1; beg := -1 END; Inval(F, beg);
 			IF F.start > F.carpos THEN DEC(F.start); beg := -1 END;
-			UpdateTextField(F, beg);
+			UpdateTextField(F, beg)
 		END
 	ELSIF ch = 0A1X  THEN (* Delete right *)
 		IF F.val[F.carpos] # 0X THEN
@@ -728,17 +724,6 @@ BEGIN
 			IF F.selbeg >= 0 THEN F.selbeg := -1; beg := -1 END; Inval(F, beg);
 			UpdateTextField(F, beg)
 		END;
-	ELSIF ((20X <= ch) & (ch <= 96X) OR (ch = " ")) & (Length(F.val) < MaxLen-1) THEN
-		beg := F.carpos;
-		InsertChar(F.val, F.carpos, ch);
-		INC(F.carpos);
-		IF F.selbeg >= 0 THEN F.selbeg := -1; beg := -1 END; Inval(F, beg);
-		LocatePos(F, F.carpos, x, y);
-		WHILE (x >= F.W - 3) & (F.val[F.start] # 0X) DO
-			INC(F.start); beg := -1; LocatePos(F, F.carpos, x, y);
-		END;
-		
-		UpdateTextField(F, beg);
 	ELSIF ch = 0DX THEN
 		MakeConsistent(F, dlink);
 		Gadgets.ExecuteAttr(F, "Cmd", dlink, NIL, NIL)
@@ -747,7 +732,7 @@ BEGIN
 			DEC(F.carpos); beg := F.carpos;
 			IF F.start > F.carpos THEN DEC(F.start); beg := -1 END;
 			IF F.selbeg >= 0 THEN F.selbeg := -1; beg := -1 END;
-			UpdateTextField(F, beg);
+			UpdateTextField(F, beg)
 		END
 	ELSIF ch = 0C3X THEN (* right arrow *)
 		IF F.val[F.carpos] # 0X THEN
@@ -757,17 +742,47 @@ BEGIN
 				INC(F.start); beg := -1; LocatePos(F, F.carpos, x, y);
 			END;
 			IF F.selbeg >= 0 THEN F.selbeg := -1; beg := -1 END;
-			UpdateTextField(F, beg);
+			UpdateTextField(F, beg)
+		END
+	ELSIF ch = 0A8X THEN (* home *)
+		IF F.carpos > 0 THEN
+			F.carpos := 0; beg := F.carpos;
+			IF F.start > F.carpos THEN F.start := F.carpos; beg := -1 END;
+			IF F.selbeg >= 0 THEN F.selbeg := -1; beg := -1 END;
+			UpdateTextField(F, beg)
+		END
+	ELSIF ch = 0A9X THEN (* end *)
+		IF F.val[F.carpos] # 0X THEN
+			beg := F.carpos;
+			WHILE F.val[F.carpos] # 0X DO
+				INC(F.carpos)
+			END;
+			LocatePos(F, F.carpos, x, y);
+			WHILE (x >= F.W - 3) & (F.val[F.start] # 0X) DO
+				INC(F.start); beg := -1; LocatePos(F, F.carpos, x, y);
+			END;
+			IF F.selbeg >= 0 THEN F.selbeg := -1; beg := -1 END;
+			UpdateTextField(F, beg)
 		END
 	ELSIF ch = 09X THEN (* TAB *)
 		F.start := 0;
 		MakeConsistent(F, dlink);
 		Gadgets.ExecuteAttr(F, "Cmd", dlink, NIL, NIL);
 		Pass(F, dlink)
-	END;
+	ELSIF (ch >= " ") & (Length(F.val) < MaxLen-1) THEN
+		beg := F.carpos;
+		InsertChar(F.val, F.carpos, ch);
+		INC(F.carpos);
+		IF F.selbeg >= 0 THEN F.selbeg := -1; beg := -1 END; Inval(F, beg);
+		LocatePos(F, F.carpos, x, y);
+		WHILE (x >= F.W - 3) & (F.val[F.start] # 0X) DO
+			INC(F.start); beg := -1; LocatePos(F, F.carpos, x, y)
+		END;
+		UpdateTextField(F, beg)
+	END
 END ConsumeChar;
 
-PROCEDURE LocateChar(F: TextField; x, y, mx, my: INTEGER; VAR pos: INTEGER);
+PROCEDURE LocateChar(F: TextField; x, mx: INTEGER; VAR pos: INTEGER);
 VAR p: INTEGER; r: Objects.Object; X: INTEGER;
 BEGIN
 	p := F.start; X := x + Xoffset;
@@ -813,7 +828,7 @@ BEGIN
 	LOOP
 		Input.Mouse(keys, mx, my); keysum := keysum + keys;
 		IF keys = {} THEN EXIT; END;
-		LocateChar(F, x, y, mx, my, pos);
+		LocateChar(F, x, mx, pos);
 		IF pos # F.carpos THEN
 			Oberon.FadeCursor(Oberon.Mouse);
 			FlipCaret(DR, F, x, y); F.carpos := pos; LocatePos(F, F.carpos, F.carx, F.cary); FlipCaret(DR, F, x, y);
@@ -863,7 +878,7 @@ BEGIN
 	Input.Mouse(keys, mx, my);
 	IF keys = {} THEN RETURN END;
 	keysum := keys; len := Length(F.val);
-	LocateChar(F, x, y, mx, my, spos);
+	LocateChar(F, x, mx, spos);
 	IF spos >= len THEN DEC(spos) END;
 	IF (F.selbeg >= 0) & (F.selbeg = spos) & (F.selend = F.selbeg + 1) THEN
 		RemoveSelection(R, F, x, y);
@@ -876,7 +891,7 @@ BEGIN
 	LOOP
 		Input.Mouse(keys, mx, my); keysum := keysum + keys;
 		IF keys = {} THEN EXIT; END;
-		LocateChar(F, x, y, mx, my, pos);
+		LocateChar(F, x, mx, pos);
 		IF pos >= len THEN DEC(pos) END;
 		IF (pos >= spos) & (pos # epos) THEN
 			Oberon.FadeCursor(Oberon.Mouse);
@@ -1019,7 +1034,7 @@ PROCEDURE PrintTextField(F: TextField; VAR M: Display.DisplayMsg);
 VAR R: Display3.Mask; x, y, w, h: INTEGER;
 
 	PROCEDURE P(x: INTEGER): INTEGER;
-	BEGIN RETURN SHORT(x * DisplayUnit DIV Printer.Unit)
+	BEGIN RETURN SHORT(x * Display.Unit DIV Printer.Unit)
 	END P;
 
 BEGIN
@@ -1054,7 +1069,7 @@ END SetValue;
 PROCEDURE GetValue(obj: Objects.Object; field: ARRAY OF CHAR; VAR value: ARRAY OF CHAR);
 VAR A: Objects.AttrMsg;
 BEGIN
-	A.id := Objects.get; COPY(field, A.name); A.class := Objects.Inval; A.s := "";
+	A.id := Objects.get; COPY(field, A.name); A.class := Objects.Inval; A.s := ""; A.res := -1;
 	obj.handle(obj, A);
 	IF A.res >= 0 THEN
 		IF A.class = Objects.String THEN COPY(A.s, value)
@@ -1078,7 +1093,19 @@ BEGIN
 	to.consistent := TRUE;
 END CopyTextField;
 
-PROCEDURE UpdateMsg(F: TextField; x, y: INTEGER; VAR M: Gadgets.UpdateMsg);
+PROCEDURE Recall(F: TextField; dlink: Objects.Object);
+VAR buf: Texts.Buffer; t: Texts.Text; str: ARRAY MaxLen OF CHAR; i: LONGINT;
+BEGIN
+	NEW(buf); Texts.OpenBuf(buf); Texts.Recall(buf);
+	NEW(t); Texts.Open(t, ""); Texts.Append(t, buf);
+	Attributes.TxtToStr(t, str);
+	i := 0;
+	WHILE (i < MaxLen) & (str[i] # 0X) DO
+		ConsumeChar(F, str[i], dlink); INC(i)
+	END
+END Recall;
+
+PROCEDURE UpdateMsg(F: TextField; VAR M: Gadgets.UpdateMsg);
 VAR field: ARRAY 64 OF CHAR; obj: Objects.Object;
 BEGIN
 	IF F.obj # NIL THEN F.obj.handle(F.obj, M) END;
@@ -1192,7 +1219,7 @@ BEGIN
 					WITH M: PassFocusMsg DO passFocusMsg(F, M);
 					END
 				ELSIF M IS Gadgets.UpdateMsg THEN
-					WITH M: Gadgets.UpdateMsg DO UpdateMsg(F, x, y, M) END
+					WITH M: Gadgets.UpdateMsg DO UpdateMsg(F, M) END
 				ELSIF M IS Display.ControlMsg THEN (*!!! *)
 					WITH M: Display.ControlMsg DO
 						IF F.obj # NIL THEN F.obj.handle(F.obj, M) END;
@@ -1209,8 +1236,14 @@ BEGIN
 					END
 				ELSIF M IS Oberon.ConsumeMsg THEN
 					WITH M: Oberon.ConsumeMsg DO
-						IF F.carpos >= 0 THEN ConsumeText(F, M) END
-					END;
+						IF (F.carpos >= 0) & (F.stamp # M.stamp) THEN 
+							F.stamp := M.stamp; ConsumeText(F, M)
+						END
+					END
+				ELSIF M IS Oberon.RecallMsg THEN
+					IF F.carpos >= 0 THEN
+						Recall(F, M.dlink); M.res := 0
+					END
 				ELSIF M IS Oberon.InputMsg THEN
 					WITH M: Oberon.InputMsg DO
 						IF (M.id = Oberon.track) & Gadgets.InActiveArea(F, M) THEN
@@ -1249,5 +1282,5 @@ BEGIN
 END NewTextField;
 
 BEGIN Texts.OpenWriter(W);
-	invTF := 15 - 14; invCP := Display3.white;
+	invTF := 15 - 14
 END TextFields.

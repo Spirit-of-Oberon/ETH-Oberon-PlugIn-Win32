@@ -1,37 +1,35 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE Viewers; (*JG 4.8.93*)
+MODULE Viewers; (** portable / source: Win32.Viewers.Mod *)	(* JG 4.8.93, ejz  *)
 
 (**
 The module viewers provide the data type for implementing the tiled viewers of the Oberon system. Each track of the Oberon system consists of a number of viewers.
 *)
 
-(* pjm 05.08.96 - recover from handler trap in Broadcast *)
+(*
+	31.1.96 - adapted for Windows 95/NT Threads (ejz)
+	pjm 05.08.96 - recover from handler trap in Broadcast
+*)
 
-    IMPORT Files, Objects, Display;
+    IMPORT Files, Threads, Win32, Objects, Display;
 
     TYPE
 	   Viewer* = POINTER TO ViewerDesc;
 	   ViewerDesc* = RECORD (Display.FrameDesc)
-	       state*: INTEGER;
-	        (** state > 1: displayed
-	  	  state = 1: filler
-	  	  state = 0: closed
-	  	  state < 0: suspended.*)
+	       state*: INTEGER (** state > 1: displayed, state = 1: filler, state = 0: closed, state < 0: suspended.*)
   	 END;
   	 
   	 Track = POINTER TO TrackDesc;
@@ -43,14 +41,17 @@ The module viewers provide the data type for implementing the tiled viewers of t
       curW*: INTEGER;	(** Current width of the logical display. *)
       minH*: INTEGER;	(** Minimum viewer height. *)
       DH: INTEGER;
-      FillerTrack-: Track; FillerViewer, buf: Viewer; (*for closed viewers*)
+      FillerTrack-: Track;	(** non-portable *)
+      FillerViewer, buf: Viewer; (*for closed viewers*)
       bcF: Display.Frame;  bcLev: LONGINT;
 
 	(** Open a new viewer V with top at Y in track X. *)
     PROCEDURE Open* (V: Viewer; X, Y: INTEGER);
 	    VAR T, u, v: Display.Frame; M: Display.ControlMsg; N: Display.ModifyMsg;
     BEGIN
-	    IF (V.state = 0) & (X < MAX(INTEGER)) THEN
+    	IF V = NIL THEN
+    		buf := NIL
+	    ELSIF (V.state = 0) & (X < MAX(INTEGER)) THEN
           IF Y > DH THEN Y := DH END;
 		  T := FillerTrack.next;
 		  WHILE X >= T.X + T.W DO T := T.next END;
@@ -112,7 +113,8 @@ The module viewers provide the data type for implementing the tiled viewers of t
 		    M.F := NIL; M.id := Display.restore;
 		    REPEAT t := t.next;
 			    v := t.dsc;
-			    REPEAT v := v.next; v.handle(v, M);
+			    REPEAT
+			    	v := v.next; v.handle(v, M);
 				    WITH v: Viewer DO v.state := - v.state END
 			    UNTIL v = t.dsc
 		    UNTIL t = T
@@ -139,7 +141,7 @@ The module viewers provide the data type for implementing the tiled viewers of t
             IF (T(Track).under = NIL) OR (U.next # V) THEN
 		        IF safe THEN
 		        	M.F := NIL; M.id := Display.suspend;
-                	V.handle(V, M)
+					V.handle(V, M)
                 END;
                 V.state := 0; buf := V;
                 N.F := U; N.id := Display.extend;
@@ -156,6 +158,9 @@ The module viewers provide the data type for implementing the tiled viewers of t
 		        U.handle(U, M); U(Viewer).state := 0;
 		    	RestoreTrack(T)
             END
+		ELSIF safe THEN
+           M.F := NIL; M.id := Display.restore;
+           V.handle(V, M)
         END
      END Close;
 
@@ -266,9 +271,10 @@ The module viewers provide the data type for implementing the tiled viewers of t
 	    END
     END CloseTrack;
 
-	PROCEDURE Broadcast (VAR M: Display.FrameMsg);
+	PROCEDURE *Broadcast (VAR M: Display.FrameMsg);
 	    VAR F, V: Display.Frame;
 	BEGIN
+		Threads.Lock(Win32.displayMtx);
 		M.res := MIN(INTEGER); Objects.Stamp(M);
         Display.ResetClip; F := FillerTrack.next;
 	    WHILE (F # FillerTrack) & (M.res < 0) DO V := F.dsc;
@@ -278,7 +284,8 @@ The module viewers provide the data type for implementing the tiled viewers of t
            UNTIL (V = F.dsc) OR (M.res >= 0) ;
 		   F := F.next
 	    END;
-	    IF bcLev = 0 THEN bcF := NIL END
+	    IF bcLev = 0 THEN bcF := NIL END;
+	    Threads.Unlock(Win32.displayMtx)
 	END Broadcast;
 
 	PROCEDURE InitPalette();
@@ -300,16 +307,19 @@ The module viewers provide the data type for implementing the tiled viewers of t
 	END InitPalette;
 
 BEGIN
-    DH := Display.Height;
     NEW(FillerViewer);
-    FillerViewer.X := 0; FillerViewer.W := MAX(INTEGER); FillerViewer.Y := 0; FillerViewer.H := DH;
+    FillerViewer.X := 0; FillerViewer.W := MAX(INTEGER); FillerViewer.Y := 0;
     FillerViewer.next := FillerViewer;
     NEW(FillerTrack);
-    FillerTrack.X := 0; FillerTrack.W := MAX(INTEGER); FillerTrack.Y := 0; FillerTrack.H := DH;
+    FillerTrack.X := 0; FillerTrack.W := MAX(INTEGER); FillerTrack.Y := 0;
     FillerTrack.dsc := FillerViewer;
     FillerTrack.next := FillerTrack;
-    buf := NIL; curW := 0; minH := 1; InitPalette();
-    Display.Broadcast := Broadcast; bcF := NIL; bcLev := 0
+    buf := NIL; curW := 0; minH := 1;
+    Display.Broadcast := Broadcast; bcF := NIL; bcLev := 0;
+	Threads.Wait(Threads.win32Event, Threads.Infinite);
+	Display.Init();
+	DH := Display.Height; FillerViewer.H := DH; FillerTrack.H := DH;
+	InitPalette()
 END Viewers.
 
 (** Remarks:

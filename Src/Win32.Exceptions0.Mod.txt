@@ -1,0 +1,117 @@
+﻿(* OBERON System 3, Release 2.3.
+
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE Exceptions0; (** non-portable / source: Win32.Exceptions0.Mod *)	(** ejz  *)
+	IMPORT SYSTEM, Kernel32, Modules;
+
+	TYPE
+		Exception* = RECORD
+			exc*: Kernel32.ExceptionRecord;
+			cont*: Kernel32.Context;
+			t*: PTR; (* Threads.Thread *)
+			desc*: ARRAY 64 OF CHAR
+		END;
+
+		Bytes* = POINTER TO ARRAY OF CHAR;
+
+	VAR
+		displayTrap*: PROCEDURE (VAR e: Exception);
+		hProc: LONGINT;
+
+	(** GetMod - Return the loaded module that contains code address pc. *)
+	PROCEDURE GetMod*(pc: LONGINT): Modules.Module;
+		VAR m: Modules.Module; base: LONGINT;
+	BEGIN
+		m := Modules.modList;
+		WHILE m # NIL DO
+			IF m.code # NIL THEN
+				base := SYSTEM.ADR(m.code[0]);
+				IF (base <= pc) & (pc <= base + LEN(m.code^)) THEN
+					RETURN m
+				END
+			END;
+			IF m.data # NIL THEN
+				base := SYSTEM.ADR(m.data[0]);
+				IF (base <= pc) & (pc <= base + LEN(m.data^)) THEN
+					RETURN m
+				END
+			END;
+			m := m.link
+		END;
+		RETURN NIL
+	END GetMod;
+
+	PROCEDURE Get*(adr: Kernel32.ADDRESS; VAR x: ARRAY OF SYSTEM.BYTE);
+		VAR n, len: LONGINT;
+	BEGIN
+		len := LEN(x);
+		Kernel32.ReadProcessMemory(hProc, adr, SYSTEM.ADR(x), len, n);
+		WHILE n < len DO
+			x[n] := 0X; INC(n)
+		END
+	END Get;
+
+	PROCEDURE GetNum*(refs: Bytes; VAR i, num: LONGINT);
+		VAR n, s: LONGINT; x: CHAR;
+	BEGIN
+		s := 0; n := 0; x := refs[i]; INC(i);
+		WHILE ORD(x) >= 128 DO
+			INC(n, ASH(ORD(x) - 128, s)); INC(s, 7); x := refs[i]; INC(i)
+		END;
+		num := n + ASH(ORD(x) MOD 64 - ORD(x) DIV 64 * 64, s)
+	END GetNum;
+
+	(** FindProc - Find a procedure in the reference block. Return index of name, or -1 if not found. *)
+	PROCEDURE FindProc*(refs: Bytes; ofs: LONGINT): LONGINT;
+		VAR i, m, t, proc: LONGINT; ch: CHAR;
+	BEGIN
+		proc := -1; i := 0; m := LEN(refs^);
+		ch := refs[i]; INC(i);
+		WHILE (i < m) & ((ch = 0F8X) OR (ch = 0F9X)) DO	(* proc *)
+			GetNum(refs, i, t);	(* pofs *)
+			IF t > ofs THEN	(* previous procedure was the one *)
+				ch := 0X	(* stop search *)
+			ELSE	(* ~found *)
+				IF ch = 0F9X THEN
+					ch := refs[i]; INC(i); (* n pars *)
+					ch := refs[i]; INC(i); (* ret type *)
+					ch := refs[i]; INC(i); (* proc level *)
+					ch := refs[i]; INC(i) (* sl needed *)
+				END;
+				proc := i;	(* remember this position *)
+				REPEAT ch := refs[i]; INC(i) UNTIL ch = 0X;	(* pname *)
+				IF i < m THEN
+					ch := refs[i]; INC(i);	(* 1X | 3X | 0F8X *)
+					WHILE (i < m) & (ch >= 1X) & (ch <= 3X) DO	(* var *)
+						ch := refs[i]; INC(i);	(* type *)
+						IF ch >= 81X THEN
+							GetNum(refs, i, t)	(* dim *)
+						ELSIF (ch = CHR(10H+4)) OR (ch = CHR(10H+13)) THEN
+							GetNum(refs, i, t)	(* tdadr *)
+						END;
+						GetNum(refs, i, t);	(* vofs *)
+						REPEAT ch := refs[i]; INC(i) UNTIL ch = 0X;	(* vname *)
+						IF i < m THEN ch := refs[i]; INC(i) END	(* 1X | 3X | 0F8X *)
+					END
+				END
+			END
+		END;
+		IF (proc = -1) & (i # 0) THEN proc := i END;	(* first procedure *)
+		RETURN proc
+	END FindProc;
+
+BEGIN
+	displayTrap := NIL; hProc := Kernel32.GetCurrentProcess()
+END Exceptions0.

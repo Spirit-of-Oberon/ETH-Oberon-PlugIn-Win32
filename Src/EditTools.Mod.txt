@@ -1,20 +1,19 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE EditTools; 	(** CAS/HM 3.12.93  jm 3.5.95 ported/extended to System 3 /  tk 6.2.96**)
+MODULE EditTools; (** portable *)	(** CAS/HM 3.12.93  jm 3.5.95 ported/extended to System 3 /  tk 6.2.96**)
 
 (*
 	22.2.96 ejz/jm - added ISO support
@@ -22,6 +21,7 @@ MODULE EditTools; 	(** CAS/HM 3.12.93  jm 3.5.95 ported/extended to System 3 /  
 	29.1.97 afi - ChangeColor, ChangeVoff
 	28.5.97 ps - fixed IncSize
 	30.9.97 ejz - added Upper & Lower
+	5.5.98 ejz - added FlipCase
 *)
 
 IMPORT
@@ -71,7 +71,18 @@ VAR
 	PROCEDURE IsFont(lib: Objects.Library): BOOLEAN;
 	BEGIN RETURN (lib # NIL) & (lib IS Fonts.Font)
 	END IsFont;
-	
+
+	PROCEDURE ThisFont(name: ARRAY OF CHAR): Fonts.Font;
+		VAR fnt: Fonts.Font;
+	BEGIN
+		fnt := Fonts.This(name);
+		IF (fnt = Fonts.Default) & (fnt.name # name) THEN
+			RETURN NIL
+		ELSE
+			RETURN fnt
+		END
+	END ThisFont;
+
 	(** text manipulation **)
 
 	PROCEDURE IncFontSize* (T: Texts.Text; beg, end: LONGINT; delta: INTEGER);
@@ -83,8 +94,8 @@ VAR
 			WHILE ~R.eot & (beg < end) & (R.lib = fnt) DO INC(beg); Texts.Read(R, ch) END;
 			IF IsFont(fnt) THEN SplitFontName(fnt.name, i, j, size);
 				IF (i < j) & ((size+delta) >= MinSize) & ((size+delta) <= MaxSize) THEN
-					CombineFontName(fnt.name, fnt.name, i, j, size + delta, fn); fnt := Fonts.This(fn);
-					IF fnt.name = fn THEN Texts.ChangeLooks(T, org, beg, {0}, fnt, 0, 0) END
+					CombineFontName(fnt.name, fnt.name, i, j, size + delta, fn); fnt := ThisFont(fn);
+					IF fnt # NIL THEN Texts.ChangeLooks(T, org, beg, {0}, fnt, 0, 0) END
 				END
 			END
 		END
@@ -98,8 +109,8 @@ VAR
 			IF IsFont(fnt) THEN
 				SplitFontName(fnt.name, i, j, size);
 				IF (i < j) & ((size = old) OR (old = -1)) THEN
-					CombineFontName(fnt.name, fnt.name, i, j, new, fn); fnt := Fonts.This(fn);
-					IF fnt.name = fn THEN Texts.ChangeLooks(T, org, beg, {0}, fnt, 0, 0) END
+					CombineFontName(fnt.name, fnt.name, i, j, new, fn); fnt := ThisFont(fn);
+					IF fnt # NIL THEN Texts.ChangeLooks(T, org, beg, {0}, fnt, 0, 0) END
 				END
 			END
 		END
@@ -112,8 +123,8 @@ VAR
 			WHILE ~R.eot & (beg < end) & (R.lib = fnt) DO INC(beg); Texts.Read(R, ch) END;
 			IF IsFont(fnt) THEN SplitFontName(fnt.name, i, j, size); COPY(fnt.name, fn); fn[i] := 0X;
 				IF (i < j) & ((fn = old) OR (old[0] = "?")) THEN SplitFontName(new, i1, j1, size1);
-					CombineFontName(new, fnt.name, i1, j, size, fn); fnt := Fonts.This(fn);
-					IF fnt.name = fn THEN Texts.ChangeLooks(T, org, beg, {0}, fnt, 0, 0) END
+					CombineFontName(new, fnt.name, i1, j, size, fn); fnt := ThisFont(fn);
+					IF fnt # NIL THEN Texts.ChangeLooks(T, org, beg, {0}, fnt, 0, 0) END
 				END
 			END
 		END
@@ -133,8 +144,8 @@ VAR
 					ELSIF new = "." THEN k := j;
 						REPEAT fn[k] := fn[k+1]; INC(k) UNTIL fn[k] = 0X
 					END;
-					fn[j] := new; fnt := Fonts.This(fn);
-					IF fnt.name = fn THEN Texts.ChangeLooks(T, org, beg, {0}, fnt, 0, 0) END
+					fn[j] := new; fnt := ThisFont(fn);
+					IF fnt # NIL THEN Texts.ChangeLooks(T, org, beg, {0}, fnt, 0, 0) END
 				END
 			END
 		END
@@ -146,8 +157,8 @@ VAR
 		WHILE ~R.eot & (beg < end) DO org := beg; fnt := R.lib;
 			WHILE ~R.eot & (beg < end) & (R.lib = fnt) DO INC(beg); Texts.Read(R, ch) END;
 			IF IsFont(fnt) THEN
-				IF fnt.name = old THEN fnt := Fonts.This(new);
-					IF fnt.name = new THEN Texts.ChangeLooks(T, org, beg, {0}, fnt, 0, 0) END
+				IF (fnt.name = old) OR (old = "?") THEN fnt := ThisFont(new);
+					IF fnt # NIL THEN Texts.ChangeLooks(T, org, beg, {0}, fnt, 0, 0) END
 				END
 			END
 		END
@@ -215,7 +226,9 @@ VAR
 	BEGIN Texts.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos); Texts.Scan(S);
 		Oberon.GetSelection(text, beg, end, time);
 		IF (time >= lastTime) & (S.line = 0) THEN
-			WHILE S.class = Texts.Name DO COPY(S.s, old); SkipArrow(S);
+			WHILE (S.class = Texts.Name) OR ((S.class = Texts.Char) & (S.c = "?")) DO
+				IF S.class = Texts.Name THEN COPY(S.s, old) ELSE old := "?" END;
+				SkipArrow(S);
 				IF S.class = Texts.Name THEN lastTime := time;
 					ChangeFont(text, beg, end, old, S.s); Texts.Scan(S)
 				END
@@ -366,6 +379,42 @@ VAR
 			lastTime := time; lower(text, beg, end)
 		END	
 	END Lower;
+
+	PROCEDURE flipCase*(T: Texts.Text; beg, end: LONGINT);
+		VAR
+			R: Texts.Reader;
+			pos: LONGINT;
+			flip, ch: CHAR;
+	BEGIN
+		pos := beg;
+		Texts.OpenReader(R, T, pos); Texts.Read(R, ch);
+		WHILE ~R.eot & (pos < end) DO
+			Texts.SetFont(W, R.lib); Texts.SetColor(W, R.col); Texts.SetOffset(W, R.voff);
+			IF R.lib IS Fonts.Font THEN
+				flip := Strings.UpperCh(ch);
+				IF flip = ch THEN
+					flip := Strings.LowerCh(ch)
+				END;
+				Texts.Write(W, flip)
+			ELSE
+				Texts.Write(W, ch)
+			END;
+			INC(pos); Texts.Read(R, ch)
+		END;
+		Texts.Delete(T, beg, end);
+		Texts.Insert(T, beg, W.buf)
+	END flipCase;
+
+	PROCEDURE FlipCase*;	(** flip the case of the selection. *)
+		VAR
+			text: Texts.Text;
+			beg, end, time: LONGINT;
+	BEGIN
+		Oberon.GetSelection(text, beg, end, time);
+		IF time >= lastTime THEN
+			lastTime := time; flipCase(text, beg, end)
+		END	
+	END FlipCase;
 
 	PROCEDURE OpenAscii*;
 	VAR S: Attributes.Scanner; F: Files.File; R: Files.Rider; T: Texts.Text; ch: CHAR;
@@ -532,11 +581,11 @@ VAR
 		END
 	END GetMainArg;
 
-	PROCEDURE Words*;	(** "@" | ("^" | "*" ) **)
+	PROCEDURE Words*;	(** "@" | "^" | "*" *)
 		VAR S: Texts.Scanner; D: Documents.Document; text: Texts.Text; L: Objects.LinkMsg; 
-			cc, ct, wc, wt, pc, pt, ec, et, beg1, end1, beg, end, time: LONGINT;  done: BOOLEAN;
+			cc, wc, pc, ec, beg1, end1, beg, end, time: LONGINT;  done: BOOLEAN;
 	BEGIN GetMainArg(S, beg1, end1); D:=Documents.MarkedDoc(); Oberon.GetSelection(text, beg, end, time);
-		ct:=0; wt:=0; pt:=0; et:=0; done := FALSE;
+		done := FALSE;
 		IF (S.class=Texts.Char) & (S.c="*") & (D # NIL) THEN
 			L.id := Objects.get; L.name := "Model"; L.obj := NIL; L.res := -1; D.dsc.handle(D.dsc, L);
 			IF (L.obj # NIL) & (L.obj IS Texts.Text) THEN
@@ -577,7 +626,7 @@ VAR
 		time := -1; T := NIL;
 		Oberon.GetSelection(T, beg, end, time);
 		IF (time > 0) & (T # NIL) THEN
-			lib := NIL;
+			lib := NIL; col := MIN(SHORTINT); voff := MIN(SHORTINT);
 			Texts.OpenReader(R, T, beg);
 			Texts.Read(R, ch);
 			WHILE ~R.eot & (beg <= end) DO
@@ -612,6 +661,42 @@ VAR
 		END
 	END ShowAttrs;
 
-BEGIN Texts.OpenWriter(W); Texts.OpenWriter(WR);
-END EditTools.ShowAttrs
+(** EditTools.LocateLine *)
+	PROCEDURE LocateLine*;
+		VAR
+			S: Attributes.Scanner;
+			C: Oberon.CaretMsg;
+			line: LONGINT;
+			T: Texts.Text;
+			beg, end, time: LONGINT;
+			R: Texts.Reader;
+			ch: CHAR;
+	BEGIN
+		Oberon.GetSelection(T, beg, end, time);
+		IF (T # NIL) & (time >= 0) THEN
+			Attributes.OpenScanner(S, T, beg); Attributes.Scan(S);
+			IF S.class = Attributes.Int THEN
+				line := S.i;
+				C.F := Oberon.MarkedFrame();
+				C.text := Oberon.MarkedText();
+				IF (C.text # NIL) & (C.F # NIL) THEN
+					Texts.OpenReader(R, C.text, 0); Texts.Read(R, ch);
+					WHILE ~R.eot & (line > 1) DO
+						IF ch = Strings.CR THEN
+							DEC(line); Texts.Read(R, ch);
+							IF ch = Strings.LF THEN
+								Texts.Read(R, ch)
+							END
+						ELSE
+							Texts.Read(R, ch)
+						END
+					END;
+					C.car := C.F; C.id := Oberon.set; C.pos := Texts.Pos(R)-1; C.res := -1;
+					Display.Broadcast(C)
+				END
+			END
+		END
+	END LocateLine;
 
+BEGIN Texts.OpenWriter(W); Texts.OpenWriter(WR);
+END EditTools.

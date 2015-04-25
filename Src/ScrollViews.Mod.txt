@@ -1,20 +1,19 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;type=A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE ScrollViews;	(** PS  **)
+MODULE ScrollViews; (** portable *)	(** PS  **)
 
 (**Implementation of camera-views with adjustable viewpoints and scrollbars.
  *)
@@ -305,7 +304,9 @@ BEGIN
 					ClipAgainst(cx, cy, cw, ch, mx, my, mw, mh);	(* clip destination area *)
 					D.v :=  cy - dv; D.h := dv
 				END;
-				Display.CopyBlock(cx, cy - dv, cw, ch, cx, cy, Display.replace)
+				IF (cw > 0) & (ch > 0) THEN
+					Display.CopyBlock(cx, cy - dv, cw, ch, cx, cy, Display.replace)
+				END
 			END
 		ELSE	(* horizontal *)
 			cx := x; cy := y + BarW; cw := w; ch := F.H - 2*F.border - BarW;
@@ -329,7 +330,9 @@ BEGIN
 					ClipAgainst(cx, cy, cw, ch, mx, my, mw, mh);	(* clip destination area *)
 					D.u := cx - dv; D.w := dv
 				END;
-				Display.CopyBlock(cx - dv, cy, cw, ch, cx, cy, Display.replace)
+				IF (cw > 0) & (ch > 0) THEN
+					Display.CopyBlock(cx - dv, cy, cw, ch, cx, cy, Display.replace)
+				END
 			END
 		END;
 		DEC(D.u, D.x + F.X); DEC(D.v, D.y + F.Y + F.H -1);	(* make it relative *)
@@ -717,10 +720,14 @@ BEGIN
 		(* Special optimization *)
 		IF M.H > h THEN (* copy up *)
 			h1 := M.H - h;
-			Display.CopyBlock(x, y, w, h, x, M.Y + h1, Display.replace);
+			IF (w > 0) & (h > 0) THEN
+				Display.CopyBlock(x, y, w, h, x, M.Y + h1, Display.replace)
+			END
 		ELSE (* copy down *)
 			h1 := h - M.H;
-			Display.CopyBlock(x, y + h1 + F.border, w, M.H - F.border, M.X, M.Y + F.border, Display.replace);
+			IF (w > 0) & ((M.H - F.border) > 0) THEN
+				Display.CopyBlock(x, y + h1 + F.border, w, M.H - F.border, M.X, M.Y + F.border, Display.replace)
+			END
 			(* 2 is for the border *)
 		END;
 		IF M.stamp # F.stamp THEN (* first adjust *)
@@ -907,6 +914,7 @@ BEGIN
 		ELSIF M.name = "LineupHY" THEN M.class := Objects.Int; M.i := F.H - Fonts.Default.height; M.res := 0
 		ELSIF M.name = "VScrollBar" THEN M.class := Objects.Bool; M.b := F.hasVBar; M.res := 0
 		ELSIF M.name = "HScrollBar" THEN M.class := Objects.Bool; M.b := F.hasHBar; M.res := 0
+		ELSIF M.name = "Locked" THEN M.class := Objects.Bool; M.b := Gadgets.lockedcontents IN F.state; M.res := 0
 		ELSE Gadgets.framehandle(F, M)
 		END
 	ELSIF M.id = Objects.set THEN
@@ -924,10 +932,19 @@ BEGIN
 				F.hasHBar:= M.b; UpdateBars(F); 
 				M.res := 0
 			END
+		ELSIF M.name = "Locked" THEN
+			IF M.class = Objects.Bool THEN
+				IF M.b THEN
+					F.state := F.state + {Gadgets.lockedcontents}
+				ELSE
+					F.state := F.state - { Gadgets.lockedcontents}
+				END;
+				M.res := 0
+			END
 		ELSE Gadgets.framehandle(F, M)
 		END
 	ELSIF M.id = Objects.enum THEN
-		M.Enum("HScrollBar"); M.Enum("VScrollBar"); Gadgets.framehandle(F, M)
+		M.Enum("HScrollBar"); M.Enum("VScrollBar"); M.Enum("Locked"); Gadgets.framehandle(F, M)
 	END
 END ViewAttr;
 

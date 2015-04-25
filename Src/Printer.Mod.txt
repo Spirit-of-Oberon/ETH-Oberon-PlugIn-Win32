@@ -1,42 +1,41 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE Printer; (* jm 26.10.95 *)
+MODULE Printer; (** portable *)	(* jm 26.10.95 *)
 
 (**Module Printer provide an interface for installable printers.
 *)
 
-IMPORT Registry, Console, Modules, Pictures, Fonts;
+IMPORT Console, Modules, Pictures, Fonts, Texts, Oberon;
 
 CONST
 	Unit300 = 3048; (* 300 dpi resolution *)
-	defaultPrinter = "PSPrinter.Install";
+	defaultPrinter = "WinPrinter.Install";
 
 TYPE
 	Printer* = POINTER TO PrinterDesc;
 	PrinterDesc* = RECORD
 		res*: INTEGER; (** Result code for Open method. *)
-		name*: ARRAY 64 OF CHAR; (** Command used for installing the printer. *)
+		gen*: ARRAY 64 OF CHAR; (** Command used for installing the printer. *)
 		Height*, Width*, Depth*: INTEGER;	(** Page size (in printer pixels), and available colors (bit depth) **)
-		FrameX*, FrameY*, FrameW*, FrameH*: INTEGER; (** Prinatble region of the page. *)
+		FrameX*, FrameY*, FrameW*, FrameH*: INTEGER; (** Printable region of the page. *)
 		Unit*: LONGINT;	(** Printer resolution in 1/36000 mm per pixel. *)
 		
 		InitMetrics*: PROCEDURE (P: Printer);
-		Open*: PROCEDURE (P: Printer; printer, options: ARRAY OF CHAR); (** Initialize printer. *)
-		Close*: PROCEDURE (P: Printer);	(** Stop printing. *)
+		Open*: PROCEDURE (P: Printer; printer, options: ARRAY OF CHAR); (** Initialize printer & set result code. *)
+		Close*: PROCEDURE (P: Printer);	(** Stop printing & set result code. *)
 		Page*: PROCEDURE (P: Printer; nofcopies: INTEGER);	(** End of page reached. *)
 		ReplConst*: PROCEDURE (P: Printer; x, y, w, h: INTEGER);	(** Block fill. *)
 		ReplPattern*: PROCEDURE (P: Printer; x, y, w, h: INTEGER; patno: INTEGER);	(** Pattern fill. *)
@@ -51,31 +50,34 @@ TYPE
 		UseColor*: PROCEDURE (P: Printer; red, green, blue: INTEGER);
 		GetMetric*: PROCEDURE (P: Printer; fnt: Fonts.Font): Fonts.Font
 	END;
-	
+
 VAR
 	Height*, Width*, Depth*: INTEGER;	(** In printer pixels, and bit depth *)
 	FrameX*, FrameY*, FrameW*, FrameH*: INTEGER;	(** Printable area. *)
 	Unit*: LONGINT;	(** Printer resolution in 1/36000 mm per pixel. *)
-	res*: INTEGER;	(** Open result code. 0 = ok, 1 = no connection *)
-	current-: Printer;	(** Current active printer. *)
+	res*: INTEGER;	(** result code. 0 = ok, 1 = no such printer, 2 = no link, 3 = printer not ready, 4 = no permission *)
+	current*: Printer;	(** Current active printer. *)
+
+PROCEDURE SplitName (VAR name, MName, PName: ARRAY OF CHAR);
+VAR i, j: LONGINT;
+BEGIN i := 0;
+	WHILE name[i] # "." DO MName[i] := name[i]; INC(i) END;
+	MName[i] := 0X; INC(i); j := 0;
+	WHILE name[i] # 0X DO PName[j] := name[i]; INC(i); INC(j) END;
+	PName[j] := 0X
+END SplitName;
 
 PROCEDURE LoadDefaultPrinter;
 VAR s, defMod, defCmd: ARRAY 64 OF CHAR; Mod: Modules.Module; Cmd: Modules.Command;
-
-	PROCEDURE SplitName (VAR name, MName, PName: ARRAY OF CHAR);
-	VAR i, j: INTEGER;
-	BEGIN i := 0;
-		WHILE name[i] # "." DO MName[i] := name[i]; INC(i) END;
-		MName[i] := 0X; INC(i); j := 0;
-		WHILE name[i] # 0X DO PName[j] := name[i]; INC(i); INC(j) END;
-		PName[j] := 0X
-	END SplitName;
-
+	S: Texts.Scanner;
 BEGIN
 	current := NIL;
-	Registry.Get("System", "DefaultPrinter", s);
-	IF Registry.res # Registry.Done THEN COPY(defaultPrinter, s) END;
-		
+	Oberon.OpenScanner(S, "Printer.Default"); 
+	IF S.class IN {Texts.Name, Texts.String} THEN
+		COPY(S.s, s)
+	ELSE
+		COPY(defaultPrinter, s)
+	END;
 	SplitName(s, defMod, defCmd);
 	Mod := Modules.ThisMod(defMod);
 	IF Modules.res = 0 THEN
@@ -106,30 +108,31 @@ BEGIN
 	current := P
 END Install;
 
+(** Open specified printer.  res code is set. *)
 PROCEDURE Open* (printer, options: ARRAY OF CHAR);
 VAR P: Printer;
 BEGIN
-	res := 1; (* noconnection *)
-	IF current = NIL THEN
-		RETURN
-	END;
-	P := current;
-	P.Open(P, printer, options);
-	res := P.res;
-	Width := P.Width; Height := P.Height; Depth := P.Depth;
-	FrameX := P.FrameX; FrameY := P.FrameY; FrameW := P.FrameW; FrameH := P.FrameH;
-	Unit := P.Unit;
+	IF current # NIL THEN
+		P := current;
+		P.Open(P, printer, options);
+		res := P.res;
+		Width := P.Width; Height := P.Height; Depth := P.Depth;
+		FrameX := P.FrameX; FrameY := P.FrameY; FrameW := P.FrameW; FrameH := P.FrameH;
+		Unit := P.Unit
+	ELSE
+		res := 1	(* no such printer *)
+	END
 END Open;
 
 PROCEDURE Close*;
 VAR P: Printer;
 BEGIN
-	ASSERT(current # NIL, 100);
 	P := current;
 	P.Close(P);
+	res := P.res;
 	Width := P.Width; Height := P.Height; Depth := P.Depth;
 	FrameX := P.FrameX; FrameY := P.FrameY; FrameW := P.FrameW; FrameH := P.FrameH;
-	Unit := P.Unit;
+	Unit := P.Unit
 END Close;
 
 PROCEDURE Page* (nofcopies: INTEGER);
@@ -220,7 +223,7 @@ END Printer.
 
 11. The default printer that is installed at startup is specified in the System section of the registry under key DefaultPrinter. The value of the key must be the name of a command that installs a printer. Windows Oberon supports WinPrinter.Install and PSPrinter.Install. Oberon has to be rebooted before a change will take effect.
 
-	System.Set System DefaultPrinter := "WinPrinter.Install"
-	System.Get System
+	System.Set Printer Default := "WinPrinter.Install"
+	System.Get Printer
 
 *)

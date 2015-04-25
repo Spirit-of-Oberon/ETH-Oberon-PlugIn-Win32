@@ -1,20 +1,19 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE Documents; (** jm 18.1.95 *)
+MODULE Documents; (** portable *)	(** jm 18.1.95 *)
 
 (**The Documents module forms the basis of the Gadgets document model.
 *)
@@ -40,8 +39,7 @@ MODULE Documents; (** jm 18.1.95 *)
 	30.12.96 - removed MapName
 *)
 
-IMPORT
-	Registry, Objects, Display, Attributes, Links, Gadgets, Modules, Files, Display3, Effects, Oberon, Fonts, Viewers;
+IMPORT Texts, Objects, Display, Attributes, Links, Gadgets, Modules, Files, Display3, Effects, Oberon, Fonts, Strings, Out;
 	
 CONST
 	MaxDocTypes = 48;
@@ -69,7 +67,9 @@ VAR
 	DocExt: ARRAY MaxDocTypes, 32 OF CHAR;
 	DocNewProc: ARRAY MaxDocTypes, 64 OF CHAR;
 	DocService: ARRAY MaxDocTypes OF BOOLEAN;
-	
+
+	errMsg*: ARRAY 256 OF CHAR;
+
 (* ================ Loading/storing of Document Attachments ================= *)
 
 (* The attachment format is as follows:
@@ -137,11 +137,31 @@ END SplitName;
 
 (* Try to load generic document *)
 
+PROCEDURE generic(name, newproc: ARRAY OF CHAR; VAR loaderror: BOOLEAN): Document;
+	VAR
+		D: Document;
+		MName, PName: ARRAY 64 OF CHAR;
+		Mod: Modules.Module; Cmd: Modules.Command;
+BEGIN
+	SplitName(newproc, MName, PName);
+	Mod := Modules.ThisMod(MName);
+	IF Modules.res = 0 THEN
+		Cmd := Modules.ThisCommand(Mod, PName);
+		IF Modules.res = 0 THEN Objects.NewObj := NIL; Cmd;
+			IF (Objects.NewObj # NIL) & (Objects.NewObj IS Document) THEN
+				D := Objects.NewObj(Document); COPY(name, D.name); D.Load(D)
+			ELSE loaderror := TRUE
+			END
+		ELSE loaderror := TRUE
+		END
+	ELSE loaderror := TRUE
+	END;
+	RETURN D
+END generic;
+
 PROCEDURE Generic(name: ARRAY OF CHAR; VAR loaderror: BOOLEAN): Document;
 VAR D: Document; newproc: ARRAY 64 OF CHAR;
 	F: Files.File; R: Files.Rider; tag: INTEGER;
-	MName, PName: ARRAY 64 OF CHAR;
-	Mod: Modules.Module; Cmd: Modules.Command;
 BEGIN
 	D := NIL; loaderror := FALSE;
 	F := Files.Old(name);
@@ -150,21 +170,7 @@ BEGIN
 		Files.ReadInt(R, tag);
 		IF (tag = Id) OR (tag = 0727H) THEN
 			Files.ReadString(R, newproc);
-			SplitName(newproc, MName, PName);
-			Mod := Modules.ThisMod(MName);
-			IF Modules.res = 0 THEN
-				Cmd := Modules.ThisCommand(Mod, PName);
-				IF Modules.res = 0 THEN Objects.NewObj := NIL; Cmd;
-					IF (Objects.NewObj # NIL) & (Objects.NewObj IS Document) THEN
-						D := Objects.NewObj(Document);
-						COPY(name, D.name);
-						D.Load(D);
-					ELSE loaderror := TRUE
-					END
-				ELSE loaderror := TRUE
-				END
-			ELSE loaderror := TRUE
-			END
+			D := generic(name, newproc, loaderror)
 		END
 	END;
 	RETURN D
@@ -179,9 +185,10 @@ END Cap;
 
 (** Open the give document with name name. NIL is returned on failure. Unknown document types are opened as text documents. *)
 PROCEDURE Open*(name: ARRAY OF CHAR): Document;
-VAR i, j, colonpos: INTEGER; ext, MName, PName: ARRAY 64 OF CHAR; D: Document;
-	Mod: Modules.Module; Cmd: Modules.Command; loaderror, def: BOOLEAN;
+VAR i, j, colonpos: INTEGER; ext: ARRAY 64 OF CHAR; D: Document;
+	loaderror: BOOLEAN;
 BEGIN
+	COPY(name, errMsg); Strings.AppendCh(errMsg, " ");
 	D := Generic(name, loaderror);
 	IF (D = NIL) & ~loaderror THEN (* not found *)
 		i := 0; j := -1; colonpos := -1;
@@ -200,33 +207,33 @@ BEGIN
 			END;
 			ext[j] := 0X;
 			i := 0; WHILE (i # reg) & (~DocService[i] OR (DocExt[i] # ext)) DO INC(i) END;
-			IF i = reg THEN (* unknown type *) RETURN NIL END
-		ELSIF j >= 0 THEN
+			IF i = reg THEN (* unknown type *)
+				colonpos := -1	(* ignore colon and try with extension *)
+			END;
+		END;
+		IF colonpos <= 1 THEN
+			IF (j >= 0) THEN
 			i := 0; INC(j); WHILE (name[j] # 0X) & (i # 31) DO ext[i] := Cap(name[j]); INC(i); INC(j) END; (* copy extension *)
 			ext[i] := 0X; i := 0;
 			WHILE (i # reg) & (DocService[i] OR (DocExt[i] # ext)) DO INC(i) END
 		ELSE i := reg (* no period *)
+		END
 		END; 
 		IF i = reg THEN (* nothing, use the default *) COPY("TextDocs.NewDoc", DocNewProc[i]) END;
-		def := DocNewProc[i] = "TextDocs.NewDoc";
-		D := NIL;
-		SplitName(DocNewProc[i], MName, PName);
-		Mod := Modules.ThisMod(MName);
-		IF Modules.res = 0 THEN
-			Cmd := Modules.ThisCommand(Mod, PName);
-			IF Modules.res = 0 THEN Objects.NewObj := NIL; Cmd;
-				IF (Objects.NewObj # NIL) & (Objects.NewObj IS Document) THEN
-					D := Objects.NewObj(Document); COPY(name, D.name); D.Load(D);
-					IF D.dsc = NIL THEN (* document could not be loaded *) D := NIL
-					ELSIF def THEN D.W := Display.Width DIV 8 * 5; D.H := Display.Height - 300
-					END;
-				END
-			END
-		END (* IF Modules.res = 0*)
+		D := generic(name, DocNewProc[i], loaderror)
 	END;
 	Objects.NewObj := NIL; (* for GC *)
-	IF (historyHook # NIL) & (D # NIL) THEN historyHook(D) END;
-	RETURN D
+	IF (D # NIL) & (D.dsc # NIL) THEN
+		IF historyHook # NIL THEN historyHook(D) END;
+		RETURN D
+	ELSE
+		IF loaderror THEN
+			Strings.Append(errMsg, Modules.resMsg)
+		ELSE
+			Strings.Append(errMsg, " loading document failed")
+		END;
+		RETURN NIL
+	END
 END Open;
 
 PROCEDURE Register(ext, newproc: ARRAY OF CHAR; service: BOOLEAN);
@@ -240,40 +247,31 @@ BEGIN
 	END
 END Register;
 
-(* --- can be deleted at a later date 
-PROCEDURE RegisterStandardTypes;
-VAR T: Texts.Text; S: Texts.Scanner; ext, newproc: ARRAY 32 OF CHAR;
+PROCEDURE RegisterStandardTypes(section: ARRAY OF CHAR;  service: BOOLEAN);
+VAR S: Texts.Scanner; ext, newproc: ARRAY 32 OF CHAR;  err: BOOLEAN;
 BEGIN
-	NEW(T); Texts.Open(T, "Documents.Text");
-	IF T.len > 0 THEN
-		Texts.OpenScanner(S, T, 0);
-		LOOP
-			Texts.Scan(S);
-			IF S.eot THEN EXIT END;
-			IF S.class = Texts.Name THEN COPY(S.s, ext);
+	Oberon.OpenScanner(S, section);
+	IF S.class = Texts.Inval THEN
+		Out.String("Oberon.Text - ");  Out.String(section);  Out.String(" not found");  Out.Ln
+	ELSE
+		err := FALSE;
+		WHILE (S.class IN {Texts.Name, Texts.String}) & ~err DO
+			COPY(S.s, ext);  Texts.Scan(S);
+			IF (S.class = Texts.Char) & (S.c = "=") THEN
 				Texts.Scan(S);
-				IF S.eot THEN EXIT END;
-				IF S.class = Texts.Name THEN COPY(S.s, newproc); Register(ext, newproc)
+				IF S.class IN {Texts.Name, Texts.String} THEN
+					COPY(S.s, newproc);  Texts.Scan(S);
+					Register(ext, newproc, service)
+				ELSE err := TRUE
 				END
-			ELSE EXIT
+			ELSE err := TRUE
 			END
+		END;
+		err := err OR (S.class # Texts.Char) OR (S.c # "}");
+		IF err THEN
+			Out.String("Error in ");  Out.String(section);  Out.Ln
 		END
 	END
-END RegisterStandardTypes;
-*)
-
-PROCEDURE EnumDocs(ext, newproc: ARRAY OF CHAR);
-BEGIN Register(ext, newproc, FALSE)
-END EnumDocs;
-
-PROCEDURE EnumDocServices(ext, newproc: ARRAY OF CHAR);
-BEGIN Register(ext, newproc, TRUE)
-END EnumDocServices;
-
-PROCEDURE RegisterStandardTypes;
-BEGIN
-	Registry.Enumerate("Documents", EnumDocs);
-	Registry.Enumerate("DocumentServices", EnumDocServices)
 END RegisterStandardTypes;
 
 (* ===================== default handler for document frames ================ *)
@@ -327,7 +325,6 @@ VAR A: Display.ModifyMsg; old, x, y, w, h: INTEGER; R: Display3.Mask;
 BEGIN
 	IF Absolute(M.dlink) (*TRUE (* 31 IN F.state *) *) THEN (* in viewer system, may optimize *)
 		old := M.mode; M.mode := Display.state; Gadgets.framehandle(F, M); M.mode := old;
-	
 		IF F.dsc # NIL THEN
 			(* Adjust main *)
 			A.id := Display.extend; A.F := F.dsc; A.mode := M.mode;
@@ -684,6 +681,13 @@ BEGIN
 					NEW(F0); F.stamp := M.stamp; F.dlink := F0; Copy(M, F, F0); M.obj := F0
 				END
 			END
+		ELSIF M IS Objects.FindMsg THEN
+			WITH M: Objects.FindMsg DO
+				Gadgets.framehandle(F, M);
+				IF (F.dsc # NIL) & (M.obj = NIL) THEN
+					F.dsc.handle(F.dsc, M)
+				END
+			END
 		ELSE	(* unknown msg, framehandler might know it *)
 			Gadgets.framehandle(F, M)
 		END
@@ -719,7 +723,7 @@ END Init;
 
 (** Returns the marked document (with F1). NIL is returned when no document is marked. The visibility of the Oberon pointer is ignored. *)
 PROCEDURE MarkedDoc*(): Document;
-VAR M: LocateMsg; V: Viewers.Viewer;
+VAR M: LocateMsg; V: Display.Frame;
 BEGIN
 	IF TRUE (* Oberon.Pointer.on *) THEN
 		M.X := Oberon.Pointer.X; M.Y := Oberon.Pointer.Y;
@@ -744,7 +748,8 @@ BEGIN
 	Register("Mod", "TextDocs.NewDoc", FALSE);
 	Register("Panel", "PanelDocs.NewDoc", FALSE);
 	Register("Pict", "RembrandtDocs.NewDoc", FALSE);
-	RegisterStandardTypes()
+	RegisterStandardTypes("Gadgets.Documents", FALSE);
+	RegisterStandardTypes("Gadgets.DocumentServices", TRUE)
 END InitM;
 
 BEGIN Id := 07F7H; InitM

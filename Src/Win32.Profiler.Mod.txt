@@ -1,20 +1,19 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE Profiler; (* jm 13.3.95 *)
+MODULE Profiler; (** non-portable / source: Win32.Profiler.Mod *)	(* jm 13.3.95 *)
 
 (*
 	28.3.95 - added support for marked procedures, i.e. PROCEDURE * bla;
@@ -27,12 +26,13 @@ IMPORT
 
 CONST
 		(* symbol values *)
-		times = 1; period = 18; comma = 19;
-		then = 26; do = 27; becomes = 34;
+		times = 1; period = 18; comma = 19; rbrak = 23;
+		then = 26; do = 27; lbrak = 31; becomes = 34;
 		ident = 38; semicolon = 39; end = 41; elsif = 43;
 		case = 46; loop = 50; return = 53; record = 55; begin = 57;
 		procedure = 61; import = 62; module = 63; eof = 64;
-	
+		FreeBit = 2; free = {FreeBit};
+
 TYPE
 	Ret = POINTER TO RetDesc;
 	RetDesc = RECORD
@@ -63,6 +63,7 @@ VAR
 	bodypos: LONGINT; genbody: BOOLEAN;
 	importpos: LONGINT; genimport: BOOLEAN;
 	varpos: LONGINT;
+	options: ARRAY 64 OF CHAR;
 
 (* --------------------- Memory Analysis --------------------- *)
 CONST
@@ -152,9 +153,9 @@ BEGIN
 	OPS.Get(sym);
 	IF sym = module THEN OPS.Get(sym) ELSE err(16) END ;
 	IF sym = ident THEN	(* module name *)
-		COPY(OPS.name, modName); OPS.Get(sym); CheckSym(semicolon);
+		COPY(OPS.name, modName); OPS.Get(sym);
+		x := OPM.curpos; CheckSym(semicolon);
 		
-		x := OPM.curpos;
 		IF sym = import THEN OPS.Get(sym);
 			LOOP
 				IF sym = ident THEN
@@ -181,6 +182,7 @@ BEGIN
 			procedure:
 				OPS.Get(sym);
 				IF sym = times THEN OPS.Get(sym) END;
+				IF sym = lbrak THEN OPS.Get(sym); OPS.Get(sym); CheckSym(rbrak) END;
 				IF sym = ident THEN Push(OPS.name); OPS.Get(sym) END;
 			| case, do, loop, then, record: OPS.Get(sym); INC(level);
 			| elsif: OPS.Get(sym); DEC(level);
@@ -316,33 +318,37 @@ BEGIN
 	IF compile THEN
 		error := FALSE; OPS.Init;
 		Texts.OpenReader(R, T, 0);
-		Compiler.Module(R, "", MAX(LONGINT), Oberon.Log, error)
+		Compiler.Module(R, options, MAX(LONGINT), Oberon.Log, error)
 	END
 END Instrument;
 
-(** Get the marked text *)
-PROCEDURE GetText(VAR par: Display.Frame): Texts.Text;
+PROCEDURE Options(VAR S: Attributes.Scanner);
 BEGIN
-	par := Oberon.MarkedFrame();
-	RETURN Oberon.MarkedText()
-END GetText;
+	IF (S.class = Texts.Char) & (S.c = Oberon.OptionChar) THEN
+		Attributes.Scan(S);
+		IF S.class = Attributes.Name THEN
+			COPY(S.s, options); Attributes.Scan(S)
+		END
+	END
+END Options;
 
 PROCEDURE Compile*;
-VAR S: Attributes.Scanner; T, t: Texts.Text; error: BOOLEAN; par: Display.Frame; B: Texts.Buffer;
+VAR S: Attributes.Scanner; T, t: Texts.Text; error: BOOLEAN; B: Texts.Buffer;
 BEGIN
 	Texts.WriteString(W, "Profiler.Compile"); Texts.WriteLn(W);
 	Texts.Append(Oberon.Log, W.buf);
 	
 	Attributes.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos); Attributes.Scan(S);
-	error := FALSE;
+	options := "";
+	error := FALSE; Options(S);
 	WHILE (S.class = Attributes.Name) & ~error DO
 		NEW(T); Texts.Open(T, S.s);
 		Instrument(T, error, TRUE);
 		IF error THEN ShowText(T, S.s) END;
-		Attributes.Scan(S)
+		Attributes.Scan(S); Options(S)
 	END;
 	IF (S.class = Attributes.Char) & (S.c = "*") THEN
-		t := GetText(par);
+		t := Oberon.MarkedText(); Options(S);
 		IF t # NIL THEN
 			NEW(T); Texts.Open(T, "");
 			NEW(B); Texts.OpenBuf(B);
@@ -355,12 +361,12 @@ BEGIN
 END Compile;
 
 PROCEDURE ShowCode*;
-VAR S: Attributes.Scanner; T, t: Texts.Text; error: BOOLEAN; par: Display.Frame; B: Texts.Buffer;
+VAR S: Attributes.Scanner; T, t: Texts.Text; error: BOOLEAN; B: Texts.Buffer;
 BEGIN
 	Texts.WriteString(W, "Profiler.ShowCode"); Texts.WriteLn(W);
 	Texts.Append(Oberon.Log, W.buf);
 	
-	t := GetText(par);
+	t := Oberon.MarkedText();
 	IF t # NIL THEN
 		NEW(T); Texts.Open(T, "");
 		NEW(B); Texts.OpenBuf(B);
@@ -616,7 +622,7 @@ BEGIN
 
 		lastsize := 0;
 		WHILE p # end DO
-			tag := p^.tag;
+			tag := S.VAL(Tag, S.VAL(SET, p^.tag) - free);
 			notmarked := S.VAL(Tag, S.VAL(SET, tag) - mark);
 			tdesc := S.VAL(Tag, S.VAL(SET, notmarked) - array);
 			IF notmarked # tdesc THEN (* array block *)
@@ -672,10 +678,9 @@ BEGIN
 END WriteFix;
 
 PROCEDURE ShowMem*;
-VAR i: INTEGER; T: Texts.Text; moddata, objcount, total, used, avail: LONGINT;
+VAR i: INTEGER; T: Texts.Text; moddata, objcount, total, used: LONGINT;
 BEGIN
-	avail := Kernel.Available();
-	used := Kernel.HeapSize() - avail;
+	used := Kernel.Used();
 	
 	MarkPhase;
 	Sweep;

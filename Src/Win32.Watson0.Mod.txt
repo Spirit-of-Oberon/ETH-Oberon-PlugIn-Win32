@@ -1,20 +1,19 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE Watson0;	(** PS, tk	/		/	Windows & Macintosh-Version *)
+MODULE Watson0; (** portable, except where noted / source: Win32.Watson0.Mod *)	(** PS, tk	/		/	Windows & Macintosh-Version *)
 
 	IMPORT OPT:= OOPT, OPU:=OOPU, Modules, Fonts, Objects, Texts, Oberon, Gadgets, 
 		TextFields, ListRiders, Icons, Attributes, Links, FileDir, Strings;
@@ -695,7 +694,7 @@ MODULE Watson0;	(** PS, tk	/		/	Windows & Macintosh-Version *)
 	END ShowDef;
 
 	(** converts import definitions *)
-	PROCEDURE ShowImports*(VAR mod: ARRAY OF CHAR; T: Texts.Text);
+	PROCEDURE ShowImports*(VAR mod: ARRAY OF CHAR; T: Texts.Text);	(** non-portable *)
 	BEGIN	showImps:=TRUE;
 		SetOptions;
 		Str("reading "); Str(mod); Ln; ToLog;
@@ -721,21 +720,21 @@ MODULE Watson0;	(** PS, tk	/		/	Windows & Macintosh-Version *)
 	END DecorateExpMod;
 
 	(** initializes a process to find all client-objects of a module *)
-	PROCEDURE ShowExpInit*(VAR mod: ARRAY OF CHAR): BOOLEAN;
+	PROCEDURE ShowExpInit*(VAR mod: ARRAY OF CHAR): BOOLEAN;	(** non-portable *)
 		VAR m: OPU.Module;
 	BEGIN showExports:=TRUE; SetOptions; Str("reading "); Str(mod); Ln; ToLog;
 		m:=OPU.DecorateExpInit(mod); RETURN m#NIL
 	END ShowExpInit;
 
 	(** checks and decorates a module if it imports any objects of a server module (specified in ShowExportsInit) *)
-	PROCEDURE ShowExpDecorate*(VAR mod: ARRAY OF CHAR);
+	PROCEDURE ShowExpDecorate*(VAR mod: ARRAY OF CHAR);	(** non-portable *)
 	BEGIN
 		IF mod="all" THEN FileDir.EnumerateFiles("", "*.Obj", FALSE, DecorateExpMod) 
 		ELSE OPU.DecorateExpMod(mod); Str("."); ToLog END
 	END ShowExpDecorate;
 
 	(** shows the result of the previous calls to ShowExpInit and ShowExpDecorate *)
-	PROCEDURE ShowExports*(T: Texts.Text);
+	PROCEDURE ShowExports*(T: Texts.Text);	(** non-portable *)
 	BEGIN OPU.DecorateExpDone;
 		GroupTypes(OPT.modules[1].right); 
 		showObj := FALSE;
@@ -779,7 +778,7 @@ MODULE Watson0;	(** PS, tk	/		/	Windows & Macintosh-Version *)
 	END EnumModule;
 
 	(** checks if the specified module is consistent *)
-	PROCEDURE CheckMod*(VAR name: ARRAY OF CHAR;  deep: BOOLEAN);
+	PROCEDURE CheckMod*(VAR name: ARRAY OF CHAR;  deep: BOOLEAN);	(** non-portable *)
 		VAR mod: OPU.Module;
 	BEGIN	
 		IF name="all" THEN FileDir.EnumerateFiles("", "*.Obj", FALSE, EnumModule);
@@ -790,7 +789,7 @@ MODULE Watson0;	(** PS, tk	/		/	Windows & Macintosh-Version *)
 	END CheckMod;
 		
 	(** shows the result of previous calls to CheckMod *)
-	PROCEDURE ShowConsistency*(T: Texts.Text);
+	PROCEDURE ShowConsistency*(T: Texts.Text);	(** non-portable *)
 		VAR mod: OPU.Module; 
 	BEGIN
 		mod:=OPU.modList;

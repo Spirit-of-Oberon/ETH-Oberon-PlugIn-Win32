@@ -1,0 +1,63 @@
+﻿(* OBERON System 3, Release 2.3.
+
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE COMDLG32; (** non-portable / source: Win32.COMDLG32.Mod *)	(* ejz,  *)
+	IMPORT S := SYSTEM, Kernel32, User32;
+
+	CONST
+		PDPageNums* = 02H; PDNoSelection* = 04H; PDNoPageNums* = 08H; PDReturnDC* = 0100H; PDReturnDefault* = 0400H;
+		PSDMargins* = 02; PSDInThousendthsOfInches* = 04H; PSDInHundredthsOfMillimeters* = 08H;
+
+	TYPE
+		PRINTDLG* = RECORD
+			size*: LONGINT;
+			hwndOwner*: LONGINT;
+			devMode*, devNames*: LONGINT;
+			hDC*: LONGINT;
+			flags*: LONGINT;
+			from*, to*, min*, max*: INTEGER;
+			fill*: ARRAY 2+8*4 OF S.BYTE
+		END;
+		PAGESETUPDLG* = RECORD
+			size*: LONGINT;
+			hwndOwner*: LONGINT;
+			devMode*, devNames*: LONGINT;
+			flags*: LONGINT;
+			paperSize*: User32.Point;
+			minMargin*, margin*: User32.Rect;
+			hInstance*, custData*: LONGINT;
+			pageSetupHook*: LONGINT;
+			pagePaintHook*: LONGINT;
+			pageSetupTemplateName*: LONGINT;
+			pageSetupTemplate*: LONGINT
+    	END;
+ 
+	VAR
+		CommDlgExtendedError-: PROCEDURE (): LONGINT;
+		PrintDlg-: PROCEDURE (lppd: LONGINT): LONGINT;
+		PageSetupDlg-: PROCEDURE (lppsd: LONGINT): LONGINT;
+
+	PROCEDURE InitAPI();
+		VAR mod: LONGINT;
+	BEGIN
+		mod := Kernel32.LoadLibrary("COMDLG32");
+		Kernel32.GetAdr(mod, "CommDlgExtendedError", S.VAL(LONGINT, CommDlgExtendedError));
+		Kernel32.GetAdr(mod, "PrintDlgA", S.VAL(LONGINT, PrintDlg));
+		Kernel32.GetAdr(mod, "PageSetupDlgA", S.VAL(LONGINT, PageSetupDlg))
+	END InitAPI;
+
+BEGIN
+	InitAPI()
+END COMDLG32.

@@ -1,20 +1,19 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE Panels; (* jm 19.1.95 *)
+MODULE Panels; (** portable *)	(* jm 19.1.95 *)
 
 (**Implementation of a panel container.
 *)
@@ -43,8 +42,9 @@ MODULE Panels; (* jm 19.1.95 *)
 	23.5.96 - components stay relative to bottom when panel grows upwards (ps - 23.5.96)
 *)
 
-IMPORT
-	Objects, Display, Display3, Fonts, Gadgets, Effects, Oberon, Texts, Input, Files, Printer, Printer3, Attributes, Pictures;
+IMPORT 
+	Objects, Display, Display3, Fonts, Gadgets, Effects, Oberon, Texts, Input, Files, Printer, Printer3, Attributes, Pictures,
+	Modules;
 	
 CONST
 	DefBorderWidth* = 2;	(** Default border clipping width. *)
@@ -59,8 +59,6 @@ CONST
 	outofboundsmodify = 3;
 	
 	markW = 5;
-	
-	DisplayUnit = LONG(10000);
 
 TYPE
 	Panel* = POINTER TO PanelDesc;
@@ -282,6 +280,13 @@ BEGIN
 	Gadgets.framehandle(F, M);
 END StorePanel;
 
+PROCEDURE Explain;
+BEGIN
+	IF (Modules.res # 0) & (Modules.resMsg # "") THEN
+		Texts.WriteString(W, " (");  Texts.WriteString(W, Modules.resMsg);  Texts.Write(W, ")")
+	END
+END Explain;
+
 (** Default load mechanism. *)
 PROCEDURE LoadPanel*(F: Panel; VAR M: Objects.FileMsg);
 VAR ver, x: LONGINT; u: INTEGER; t: Display.Frame; obj: Objects.Object;
@@ -301,6 +306,7 @@ BEGIN
 					END
 				ELSIF obj IS Objects.Dummy THEN (* Alien *)
 					Texts.WriteString(W, "Discarding "); Texts.WriteString(W, obj(Objects.Dummy).GName);
+					Explain;
 					Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
 				ELSE HALT(99)
 				END
@@ -312,7 +318,9 @@ BEGIN
 			IF obj # NIL THEN
 				IF obj IS Pictures.Picture THEN F.pict := obj(Pictures.Picture)
 				ELSIF obj IS Objects.Dummy THEN (* Alien *)
-					Texts.WriteString(W, "Discarding picture"); Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
+					Texts.WriteString(W, "Discarding picture");
+					Explain;
+					Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
 				END
 			END;
 			IF ver = 7 THEN Files.ReadInt(M.R, F.col) END
@@ -334,6 +342,7 @@ BEGIN
 					END
 				ELSIF obj IS Objects.Dummy THEN (* Alien *)
 					Texts.WriteString(W, "Discarding "); Texts.WriteString(W, obj(Objects.Dummy).GName);
+					Explain;
 					Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
 				ELSE HALT(99)
 				END
@@ -362,7 +371,13 @@ BEGIN
 	to.focused := FALSE; to.time := 0; to.grid := from.grid;
 	to.borderW := from.borderW; to.state0 := from.state0;
 	to.do := from.do;
-	to.pict := from.pict;
+	IF (from.pict # NIL) & (M.id = Objects.deep) THEN
+		C.stamp := M.stamp; C.id := M.id;
+		from.pict.handle(from.pict, C);
+		to.pict := C.obj(Pictures.Picture)
+	ELSE
+		to.pict := from.pict
+	END;
 	to.col := from.col
 END CopyPanel;
 
@@ -436,10 +451,11 @@ END PanelAttr;
 PROCEDURE Adjust(F: Panel; x, y: INTEGER; VAR M: Display.ModifyMsg);	(* ps - 23.5.96 *)
 VAR f: Display.Frame; A: Display.ModifyMsg;
 BEGIN
-	IF (M.dH # 0) & (M.Y + M.H # F.Y + F.H) OR (M.dW # 0) & (M.X # F.X) THEN
+	IF (M.dH # 0) & ((M.Y + M.H) # (F.Y + F.H)) OR (M.dW # 0) & (M.X # F.X) THEN
 		A.id := Display.move; A.mode := Display.state; Objects.Stamp(A);
-		A.dX := F.X - M.X; A.dY := F.Y + F.H - (M.Y + M.H); A.dW := 0; A.dH:= 0;
-		f:= F.dsc;
+(* A.dX := F.X - M.X; A.dY := (F.Y + F.H) - (M.Y + M.H); *) A.dW := 0; A.dH:= 0;
+A.dX := M.dX; A.dY := M.dY;
+		A.x := 0;  A.y := 0; f:= F.dsc;
 		WHILE f # NIL DO
 			A.X := f.X + A.dX; A.Y := f.Y + A.dY; A.W := f.W; A.H := f.H; A.F := f; A.res := -1;
 			ToChild(F, f, x, y, A); f := f.next
@@ -451,6 +467,7 @@ END Adjust;
 PROCEDURE FindObj(F: Panel; VAR M: Objects.FindMsg);
 VAR name: ARRAY 64 OF CHAR; f: Display.Frame;
 BEGIN
+	Gadgets.framehandle(F, M);
 	IF (M.name # "") & (M.obj = NIL) THEN
 		(* first search own children *)
 		f := F.dsc;
@@ -474,7 +491,6 @@ PROCEDURE RestoreArea*(F: Panel; x, y, u, v, w, h: INTEGER; M: Display3.Mask; dl
 VAR D: Display.DisplayMsg; B: Display3.Mask; f: Display.Frame; X, Y, W, H: INTEGER;
 BEGIN
 	Oberon.RemoveMarks(x + u, y + F.H - 1 + v, w, h);
-	
 	X := M.X; Y := M.Y; W := M.W; H := M.H;
 	
 	IF M # F.mask THEN
@@ -493,6 +509,7 @@ BEGIN
 			(* should clip against here *)
 			D.u := f.X; D.v := f.Y; D.w := f.W; D.h := f.H; ClipAgainst(D.u, D.v, D.w, D.h, u, v, w, h);
 			D.u := D.u - f.X; D.v := D.v - (f.Y + f.H - 1); D.dlink := dlink;
+			D.x := 0;  D.y := 0;
 			D.device := Display.screen; D.id := Display.area; D.F := f; D.res := -1; ToChild(F, f, x, y, D)
 		END;
 		f := f.next
@@ -642,6 +659,7 @@ BEGIN
 			GrowHull(F, f.X, f.Y, f.W, f.H);
 		END;
 		M.F := f; M.res := -1; M.dlink := NIL; Objects.Stamp(M);
+		M.x := 0;  M.y := 0;  M.time := 0;
 		ToChild(F, f, x, y, M);
 		f := f.next;
 	END;
@@ -717,6 +735,7 @@ BEGIN
 			(* should clip against here *)
 			D.u := f.X; D.v := f.Y; D.w := f.W; D.h := f.H; ClipAgainst(D.u, D.v, D.w, D.h, u, v, w, h);
 			D.u := D.u - f.X; D.v := D.v - (f.Y + f.H - 1); D.dlink := dlink;
+			D.x := 0;  D.y := 0;
 			D.device := Display.screen; D.id := Display.area; D.F := f; D.res := -1; ToChild(F, f, x, y, D)
 		END;
 		f := f.next
@@ -741,6 +760,8 @@ BEGIN
 	tmpP := P; px := tpx; py := tpy; (* restore *)
 	tmpM := NIL; tmpdlink := NIL; (* restore *)
 END RestoreRegion;
+
+PROCEDURE ^ PromoteChild*(F: Display.Frame; f: Display.Frame);
 
 PROCEDURE HandleChildAdjust(F: Panel; VAR M: Display.ModifyMsg);
 VAR u, v, x, y, ox, oy, ow, oh, oldmode: INTEGER; second: BOOLEAN; R: Display3.Mask;
@@ -774,6 +795,9 @@ BEGIN
 		GrowHull(F, ox, oy, ow, oh); GrowHull(F, M.X, M.Y, M.W, M.H);
 		Forward;
 	ELSE (* first adjust *)
+		(* bring child to front *)
+		PromoteChild(F, M.F);
+		(* *)
 		INCL(F.state0, 31); EXCL(F.state0, 30);
 		second := M.stamp = F.stamp; F.stamp := M.stamp; (* check for second time around *)
 		
@@ -789,18 +813,6 @@ BEGIN
 					ToChild(F, M.F, x, y, M);
 					IF ~second THEN InvalidateMasks(F, M.F, ox, oy, ow, oh); InvalidateMasks(F, M.F, M.X, M.Y, M.W, M.H) END;
 					M.mode := Display.display;
-				(*
-					M.mode := Display.state;
-					ToChild(F, M.F, x, y, M);
-					M.mode := Display.display;
-					IF ~second THEN InvalidateMasks(F, M.F, ox, oy, ow, oh); InvalidateMasks(F, M.F, M.X, M.Y, M.W, M.H) END;
-					Gadgets.MakeMask(F, x, y, M.dlink, R);
-					RestoreAboveArea(F, M.F, x, y, M.X, M.Y, M.W, M.H, M.dlink, R);
-					NEW(R); Display3.Open(R);
-					Display3.Add(R, ox, oy, ow, oh);
-					Display3.Add(R, M.X, M.Y, M.W, M.H);
-					RestoreRegion(F, x, y, M.dlink, R);
-				*)
 				ELSE
 					ToChild(F, M.F, x, y, M);
 					IF ~second THEN InvalidateMasks(F, M.F, ox, oy, ow, oh); InvalidateMasks(F, M.F, M.X, M.Y, M.W, M.H) END;
@@ -851,7 +863,7 @@ PROCEDURE PrintPanel(F: Panel; x, y: INTEGER; dlink: Objects.Object);
 VAR P: Display.DisplayMsg; f: Display.Frame; R: Display3.Mask;
 
 	PROCEDURE Pr(x: INTEGER): INTEGER;
-	BEGIN RETURN SHORT(x * DisplayUnit DIV Printer.Unit) END Pr;
+	BEGIN RETURN SHORT(x * Display.Unit DIV Printer.Unit) END Pr;
 
 BEGIN
 	Gadgets.MakePrinterMask(F, x, y, dlink, R);
@@ -873,11 +885,10 @@ BEGIN
 	END;
 	f := F.dsc; y := y + Pr(F.H) - 1;
 	WHILE (f # NIL) & (Printer.res = 0) DO
-		P.res := -1; Objects.Stamp(P); P.device := Display.printer; P.id := Display.full; P.F := f; P.dlink := dlink;
-		P.x := x + SHORT(LONG(f.X) * DisplayUnit DIV Printer.Unit);
-		P.y := y + SHORT(LONG(f.Y) * DisplayUnit DIV Printer.Unit);
-		IF Printer.res = 0 THEN f.handle(f, P) END;
-		f := f.next
+		P.res := -1; Objects.Stamp(P); P.device := Display.printer; P.id := Display.full; P.F := f; P.dlink := F;
+		P.x := x + SHORT(LONG(f.X) * Display.Unit DIV Printer.Unit);
+		P.y := y + SHORT(LONG(f.Y) * Display.Unit DIV Printer.Unit);
+		f.handle(f, P); f := f.next
 	END;
 END PrintPanel;
 
@@ -976,7 +987,7 @@ BEGIN
 					IF M IS Display.DisplayMsg THEN
 						WITH M: Display.DisplayMsg DO
 							IF M.device = Display.screen THEN
-								Gadgets.MakeMask(F, x, y, M.dlink, R); 
+								Gadgets.MakeMask(F, x, y, M.dlink, R);
 								IF M.id = Display.area THEN F.do.RestoreArea(F, x, y, M.u, M.v, M.w, M.h, R, M.dlink)
 								ELSE F.do.RestoreArea(F, x, y, 0, -h + 1, w, h, R, M.dlink)
 								END
@@ -1389,7 +1400,7 @@ END RestoreBackGround;
 PROCEDURE RestoreCaret*(F: Panel; x, y: INTEGER; R: Display3.Mask);
 BEGIN
 	Display3.CopyPattern(R, Display3.textC, Display.cross, x + F.focusx - markW, y + F.H - 1 + F.focusy - markW, 
-			Display3.paint);
+			Display3.paint)
 END RestoreCaret;
 
 PROCEDURE UpdateCaret*(F: Panel);
@@ -1442,12 +1453,14 @@ BEGIN
 		IF f IS Gadgets.Frame THEN
 			IF Inside(f) THEN
 				IF ~(Gadgets.selected IN f(Gadgets.Frame).state) THEN
+					M.x := 0;  M.y := 0;
 					M.id := Display.set; M.res := -1; M.F := f; ToChild(F, f, x, y, M);
 					GrowHull(F, f.X, f.Y, f.W, f.H);
 				END;
 				b := TRUE; 
 			ELSE
 				IF Gadgets.selected IN f(Gadgets.Frame).state THEN
+					M.x := 0;  M.y := 0;
 					M.id := Display.reset; M.res := -1; M.F := f; ToChild(F, f, x, y, M); 
 					GrowHull(F, f.X, f.Y, f.W, f.H);
 				END;
@@ -1516,6 +1529,7 @@ BEGIN
 	x := M.x + F.X; y := M.y + F.Y;
 	
 	S.F := child; S.res := -1; S.dlink := NIL; ResetHull(F);
+	S.x := 0;  S.y := 0;
 	IF Gadgets.selected IN child.state THEN S.id := Display.reset; ToChild(F, child, x, y, S);
 		GetPanelSelection(F, t);
 		IF t = NIL THEN F.time := 0; END;
@@ -1583,6 +1597,7 @@ BEGIN
 	
 	(* F.do.ModifyChild(F, f, u, v, TRUE) *)
 	A.id := Display.move; A.mode := Display.state; A.x := 0; A.y := 0; A.X := u; A.Y := v; A.W := f.W; A.H := f.H;
+	A.dX := 0;  A.dY := 0;  A.dW := 0;  A.dH := 0;
 	A.res := -1; A.F := f; A.dlink := NIL;
 	Objects.Stamp(A);
 	f.handle(f, A);
@@ -1694,7 +1709,7 @@ END TranslateChildren;
 
 PROCEDURE DragSelection*(F: Panel; VAR M: Oberon.InputMsg);
 VAR u, v, X, Y, x, y, w, h, nx, ny, nw, nh, u0, v0, count: INTEGER; f, q: Display.Frame; keys: SET;
-	C: Display.ConsumeMsg; old: Objects.Handler; nl: Objects.Object; 
+	C: Display.ConsumeMsg; old: Objects.Handler; nl: Objects.Object;
 BEGIN
 	GetPanelSelection(F, f);
 	BoundingBox(f, x, y, w, h, count);

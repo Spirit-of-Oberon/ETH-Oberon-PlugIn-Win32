@@ -1,24 +1,23 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE Keys;
+MODULE Keys; (** non-portable / source: Win32.Keys.Mod *)
 
 IMPORT
 	Kernel32, Input, Oberon, Objects, Display, Fonts, User32, Attributes, Texts, Files, Out, Crypt, ListRiders, Gadgets,
-	Effects, Display3;
+	Effects, Display3, SYSTEM;
 	
 TYPE
 	KeyGadget* = POINTER TO KeyGadgetDesc;
@@ -26,7 +25,9 @@ TYPE
 		key*: Crypt.Key;
 	END;
 	
-	Timer = ARRAY 2 OF LONGINT;
+	Timer = RECORD
+			LowPart, HighPart: LONGINT
+		END;
 
 VAR
 	(* for teletype *)
@@ -284,16 +285,16 @@ END RestoreScreen;
 (* ------ Timer Interface *)
 
 PROCEDURE Start;
-VAR r: LONGINT;
-BEGIN r := Kernel32.QueryPerformanceCounter(timer[0]);
+	VAR ret: LONGINT;
+BEGIN ret := Kernel32.QueryPerformanceCounter(SYSTEM.ADR(timer));
 END Start;
 
 PROCEDURE Stop(VAR elapsed: LONGINT);
-VAR t: Timer; r: LONGINT;
+VAR t: Timer; ret: LONGINT;
 BEGIN
-	r := Kernel32.QueryPerformanceCounter(t[0]);
-	IF t[1] = timer[1] THEN elapsed := t[0] - timer[0]
-	ELSE elapsed := MAX(LONGINT) - timer[0] + t[0]
+	ret := Kernel32.QueryPerformanceCounter(SYSTEM.ADR(t));
+	IF t.HighPart = timer.HighPart THEN elapsed := t.LowPart - timer.LowPart
+	ELSE elapsed := MAX(LONGINT) - timer.LowPart + t.LowPart
 	END;
 END Stop;
 

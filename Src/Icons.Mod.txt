@@ -1,20 +1,19 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE Icons; (** jm 19.1.95 *)
+MODULE Icons; (** portable *)	(** jm 19.1.95 *)
 
 (**Implementation of Icons and the Iconizer. Also contains an implementation of a very simple camera-view with fixed viewpoint where no editing of the viewed model is allowed.
 *)
@@ -415,7 +414,7 @@ PROCEDURE PrintIcon(F: Icon; VAR M: Display.DisplayMsg);
 VAR R: Display3.Mask; caph0, w, h: INTEGER; obj: Objects.Object; PM: Display.DisplayMsg;
 
 	PROCEDURE P(x: INTEGER): INTEGER;
-	BEGIN RETURN SHORT(x * LONG(10000) DIV Printer.Unit)
+	BEGIN RETURN SHORT(x * Display.Unit DIV Printer.Unit)
 	END P;
 
 BEGIN
@@ -1001,7 +1000,7 @@ VAR px, py: INTEGER; D: Display.DisplayMsg; block: Views.Block;
 	PROCEDURE CalcPlace(VAR px, py: INTEGER);
 	VAR cx, cy, cw, ch: INTEGER; (* clipping area *) f: Objects.Object;
 	BEGIN
-		cx := 0; cy := 0; cw := Display.Width + Display.ColLeft; ch := Display.Height;
+		cx := 0; cy := 0; cw := Display.Width; ch := Display.Height;
 		f := M.dlink;
 		WHILE (f # NIL) DO
 			IF f IS Gadgets.View THEN
@@ -1029,7 +1028,7 @@ BEGIN
 		CalcPlace(px, py);
 		Views.GetBlock(px, py, of.W, of.H, M.dlink, block);
 		(* Effects.OpenMenu(px, py, of.W, of.H);	(* ps - 15.07.96 *) *)
-		
+
 		CM.id := Display.restore; CM.F := NIL; CM.x := 0; CM.y := 0; CM.res := -1; CM.dlink := NIL;
 		of.handle(of, CM);
 		
@@ -1061,12 +1060,13 @@ BEGIN
 			Input.Mouse(M.keys, M.X, M.Y); keysum := keysum + M.keys;
 			Oberon.DrawCursor(Oberon.Mouse, Effects.Arrow, M.X, M.Y)
 		END;
-		IF ls # NIL THEN Select(ls, FALSE) END;
+		(* IF ls # NIL THEN Select(ls, FALSE) END; *)
 		F.state := fstate; M.dlink := mdlink; F.dlink := fdlink; (* jm / ps *)
 
 		Oberon.FadeCursor(Oberon.Mouse);
 		F.poping := FALSE; of.mask := NIL; 
 		Views.RestoreBlock(block);
+
 		(* Effects.CloseMenu; *)
 		IF (ls # NIL) & (keysum = {1}) THEN 
 			A.id := Objects.get; A.name := "Cmd"; A.res := -1; A.class := Objects.Inval; ls.handle(ls, A);
@@ -1084,7 +1084,7 @@ PROCEDURE PrintIconizer(F: Iconizer; VAR M: Display.DisplayMsg);
 VAR R: Display3.Mask; d: Display.Frame; PM: Display.DisplayMsg; Fdlink, Mdlink: Objects.Object; x, y, w, h, a, b: INTEGER;
 
 	PROCEDURE P(x: INTEGER): INTEGER;
-	BEGIN RETURN SHORT(x * LONG(10000) DIV Printer.Unit)
+	BEGIN RETURN SHORT(x * Display.Unit DIV Printer.Unit)
 	END P;
 
 BEGIN

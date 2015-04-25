@@ -1,20 +1,19 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE Directories;		(* ps,  *)
+MODULE Directories; (** portable / source: Win32.Directories.Mod *)	(* ps,  *)
 
 IMPORT
 	SYSTEM, Kernel32, FileDir, Files, Modules, Input, Strings, Display, Pictures, Display3, Printer, Printer3, Objects, Attributes,
@@ -75,7 +74,7 @@ BEGIN RETURN (drv[0] = "C") OR (Kernel32.GetDriveType(SYSTEM.ADR(drv)) > None)
 END IsDriveAvailable;
 
 PROCEDURE IsOnlyDrive (path: ARRAY OF CHAR): BOOLEAN;
-BEGIN RETURN (path[1] = ":") & (path[2] = 0X)
+BEGIN RETURN (path[0] # 0X) & (path[1] = ":") & (path[2] = 0X)
 END IsOnlyDrive;
 
 PROCEDURE IsDirectory (path: ARRAY OF CHAR): BOOLEAN;
@@ -84,7 +83,7 @@ BEGIN
 	IF IsOnlyDrive(path) THEN res := IsDriveAvailable(path)
 	ELSE
 		attrs := Kernel32.GetFileAttributes(SYSTEM.ADR(path));
-		IF attrs # -1 THEN res := Kernel32.Includes(attrs, Kernel32.FileAttributeDirectory);
+		IF attrs # -1 THEN res := Kernel32.Includes(attrs, Kernel32.FileAttributeDirectory)
 		ELSE res := FALSE
 		END
 	END;
@@ -553,7 +552,7 @@ END EnumForList;
 	Usage: Directories.Directory [\p] "<pattern>" <Objname> ~
 *)
 PROCEDURE Directory*;
-VAR obj: Objects.Object; i: LONGINT; mask: ARRAY 32 OF CHAR; C: ListRiders.ConnectMsg; S: Texts.Scanner;
+VAR obj: Objects.Object; i, j: LONGINT; path, pattern: ARRAY 64 OF CHAR; C: ListRiders.ConnectMsg; S: Texts.Scanner;
 BEGIN
 	writePath := FALSE;
 	Texts.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos); Texts.Scan(S);
@@ -564,7 +563,19 @@ BEGIN
 		Texts.Scan(S)
 	END;
 	IF S.class IN {Texts.Name, Texts.String}  THEN
-		COPY(S.s, mask); Texts.Scan(S);
+		COPY(S.s, path); Texts.Scan(S);
+		i := 0; j := 0;
+		WHILE path[i] # 0X DO
+			IF path[i] = FileDir.PathChar THEN
+				j := i+1
+			END;
+			INC(i)
+		END;
+		i := 0;
+		WHILE path[j] # 0X DO
+			pattern[i] := path[j]; INC(j); INC(i)
+		END;
+		pattern[i] := 0X; path[j-i] := 0X;
 		IF S.class IN {Texts.Name, Texts.String}  THEN
 			obj := Gadgets.FindObj(Gadgets.context, S.s);
 			IF obj # NIL THEN
@@ -573,7 +584,7 @@ BEGIN
 					R := C.R;
 					WHILE ~R.eol DO R.do.DeleteLink(NIL, R) END;
 					R.do.Set(R, 0);
-					FileDir.EnumerateFiles("", mask, FALSE, EnumForList);
+					FileDir.EnumerateFiles(path, pattern, FALSE, EnumForList);
 					Gadgets.Update(obj);
 					R := NIL	(* for carbage collection *)
 				END
@@ -632,4 +643,6 @@ BEGIN
 	Modules.InstallTermHandler(Cleanup);
 	GetPicts
 END Directories.
+
 Gadgets.Insert TextFields.NewTextField Directories.NewDrv ~
+Gadgets.Insert Directories.NewDirList Directories.New ~

@@ -1,4 +1,19 @@
-﻿MODULE IniEdit;
+﻿(* OBERON System 3, Release 2.3.
+
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE IniEdit; (** non-portable *)
 	IMPORT Registry, Objects, Display, Fonts, Texts, Oberon, Attributes, Links, Gadgets, TextFields, Panels, Strings, Views;
 
 	VAR
@@ -160,12 +175,14 @@
 	END EnumSection;
 
 	PROCEDURE SectionList(list: Gadgets.Frame; section: ARRAY OF CHAR);
+		VAR path: ARRAY 128 OF CHAR;
 	BEGIN
 		NEW(P); Panels.InitPanel(P); Y := 1;
 		Attributes.SetBool(P, "Flat", TRUE);
 		Attributes.SetInt(P, "Border", 0);
 		P.W := list.W-16;
-		Registry.Enumerate(section, EnumSection);
+		Registry.OberonPath(section, path);
+		Registry.EnumerateKeyValue(Registry.CurrentUser, path, EnumSection);
 (* check res *)
 		P.H := ABS(Y)+1;
 		Attributes.SetBool(P, "Locked", TRUE);
@@ -195,6 +212,7 @@
 
 	PROCEDURE Set*;
 		VAR
+			path: ARRAY 128 OF CHAR;
 			section, key, value: ARRAY 64 OF CHAR;
 			obj, tf: Objects.Object;
 			list: Gadgets.Frame;
@@ -205,11 +223,12 @@
 		list := Gadgets.context(Gadgets.Frame).dlink(Gadgets.Frame);
 		obj := FindObj(list, "Section");
 		Attributes.GetString(obj, "Value", section);
-		Registry.Set(section, key, value);
+		Registry.OberonPath(section, path);
+		Registry.SetKeyValue(Registry.CurrentUser, path, key, value);
 		IF Registry.res # Registry.Done THEN
 			SectionList(list, section)
 		ELSE
-			Registry.Get(section, key, value);
+			Registry.GetKeyValue(Registry.CurrentUser, path, key, value);
 			IF Registry.res # Registry.Done THEN value := "" END;
 			Attributes.SetString(tf, "Value", value);
 			Gadgets.Update(tf)
@@ -219,15 +238,17 @@
 	PROCEDURE AddKey*;
 		VAR
 			obj: Objects.Object;
+			path: ARRAY 128 OF CHAR;
 			section, key, value: ARRAY 64 OF CHAR;
 	BEGIN
 		obj := FindObj(Gadgets.context, "Key");
 		Attributes.GetString(obj, "Value", key);
 		obj := FindObj(Gadgets.context, "Section");
 		Attributes.GetString(obj, "Value", section);
-		Registry.Get(section, key, value);
+		Registry.OberonPath(section, path);
+		Registry.GetKeyValue(Registry.CurrentUser, path, key, value);
 		IF Registry.res # Registry.Done THEN 
-			Registry.Set(section, key, key)
+			Registry.SetKeyValue(Registry.CurrentUser, path, key, key)
 		END;
 		obj := FindObj(Gadgets.context, "TheList");
 		SectionList(obj(Gadgets.Frame), section)
@@ -236,15 +257,17 @@
 	PROCEDURE DelKey*;
 		VAR
 			obj: Objects.Object;
+			path: ARRAY 128 OF CHAR;
 			section, key, value: ARRAY 64 OF CHAR;
 	BEGIN
 		obj := FindObj(Gadgets.context, "Key");
 		Attributes.GetString(obj, "Value", key);
 		obj := FindObj(Gadgets.context, "Section");
 		Attributes.GetString(obj, "Value", section);
-		Registry.Get(section, key, value);
+		Registry.OberonPath(section, path);
+		Registry.GetKeyValue(Registry.CurrentUser, path, key, value);
 		IF Registry.res = Registry.Done THEN 
-			Registry.Set(section, key, "")
+			Registry.SetKeyValue(Registry.CurrentUser, path, key, "")
 		END;
 		obj := FindObj(Gadgets.context, "TheList");
 		SectionList(obj(Gadgets.Frame), section)

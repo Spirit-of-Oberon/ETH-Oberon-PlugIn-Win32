@@ -1,17 +1,16 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
 (** 
@@ -47,7 +46,7 @@ of the source code to another platform with the name OBERON. *)
 	...
 *)
 
-MODULE TextPopups;	(* tk 6.12.95 *)
+MODULE TextPopups; (** portable *)	(* tk 6.12.95 *)
 
 	(* some marked compiler calls are not portable - but can easily be adopted for different implementations *)
 
@@ -60,7 +59,7 @@ MODULE TextPopups;	(* tk 6.12.95 *)
 		times = 1; minus = 7; eql = 9; colon = 20; rparen=22; lparen=30; ident = 38; begin = 57; const = 58;
 		type = 59; var = 60; procedure = 61; import = 62; eof = 64;
 		CR = 0DX;	TAB = 09X;	SPACE = " ";	LF = 0AX;	
-		MaxHistory = 20; MaxHeight = 400;
+		MaxHistory = 20; MaxHeight = 250;
 		PopupFileName = "TextPopups.Text";
 		
 	TYPE
@@ -115,6 +114,7 @@ MODULE TextPopups;	(* tk 6.12.95 *)
 				Texts.OpenReader(R, text, 0); 
 				res := 0; REPEAT Texts.Read(R, cmd[res]); INC(res) UNTIL cmd[res-1] <= " ";
 				cmd[res-1] := 0X;
+				Oberon.FadeCursor(Oberon.Pointer);
 				Oberon.Pointer.X := x; Oberon.Pointer.Y := y;
 				Oberon.Par.text := text; Oberon.Par.pos := Texts.Pos(R)-1;
 				Oberon.Call(cmd, Oberon.Par, FALSE, res)
@@ -371,8 +371,9 @@ MODULE TextPopups;	(* tk 6.12.95 *)
 	END Remove;
 
 BEGIN
-	Texts.OpenWriter(W);
-	Modules.InstallTermHandler(Remove)
+	Texts.OpenWriter(W); Modules.InstallTermHandler(Remove);
+	Texts.WriteString(W, "TextPopups using ");  Texts.WriteString(W, PopupFileName);
+	Texts.WriteLn(W);  Texts.Append(Oberon.Log, W.buf)
 END TextPopups.
 
 System.Free TextPopups ~

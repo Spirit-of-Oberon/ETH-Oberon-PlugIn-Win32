@@ -1,68 +1,109 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE Math;	(* MH 30.8.93; uses C library calls *)
+MODULE Math; (** portable / source: Win32.Math.Mod *)
 
-(**Commonly needed Math for REALs.
+(**
+	Commonly needed Math for REALs.
 *)
 
-IMPORT S := SYSTEM, Kernel;
+IMPORT SYSTEM;
 
 CONST
 	e* = 2.7182818284590452354E0;
 	pi* = 3.14159265358979323846E0;
 
-VAR
-	sqrt0: PROCEDURE (x: LONGREAL): LONGREAL;
-	exp0: PROCEDURE (x: LONGREAL): LONGREAL;
-	ln0: PROCEDURE (x: LONGREAL): LONGREAL;
-	sin0: PROCEDURE (x: LONGREAL): LONGREAL;
-	cos0: PROCEDURE (x: LONGREAL): LONGREAL;
-	arctan0: PROCEDURE (x: LONGREAL): LONGREAL;
+PROCEDURE -Sin(x: REAL): REAL
+	0D9H, 004H, 024H,	(* FLD [ESP] *)
+	0D9H, 0FEH,	(* FSIN *)
+	058H	(* POP EAX *);
 
-PROCEDURE sqrt* (x: REAL): REAL;
-BEGIN RETURN SHORT(sqrt0(x))
-END sqrt;
+PROCEDURE -Cos(x: REAL): REAL
+	0D9H, 004H, 024H,	(* FLD [ESP] *)
+	0D9H, 0FFH,	(* FCOS *)
+	058H	(* POP EAX *);
 
-PROCEDURE exp* (x: REAL): REAL;
-BEGIN RETURN SHORT(exp0(x))
-END exp;
+PROCEDURE -Arctan(x: REAL): REAL
+	0D9H, 004H, 024H,	(* FLD [ESP] *)
+	0D9H, 0E8H,	(* FLD1 *)
+	0D9H, 0F3H,	(* FPATAN ST(1)/ST(0) *)
+	058H	(* POP EAX *);
 
-PROCEDURE ln* (x: REAL): REAL;
-BEGIN RETURN SHORT(ln0(x))
-END ln;
+PROCEDURE -Sqrt(x: REAL): REAL
+	0D9H, 004H, 024H,	(* FLD [ESP] *)
+	0D9H, 0FAH,	(* FSQRT ST(0) *)
+	058H	(* POP EAX *);
 
-PROCEDURE sin* (x: REAL): REAL;
-BEGIN RETURN SHORT(sin0(x))
+PROCEDURE -Ln(x: REAL): REAL
+	0D9H, 0E8H,	(* FLD1 *)
+	0D9H, 0EAH ,	(* FLDL2E *)
+	0DEH, 0F9H,	(* FDIVP ST(1)/ST(0) *)
+	0D9H, 004H, 024H,	(* FLD [ESP] *)
+	0D9H, 0F1H,	(* FYL2X *)
+	058H	(* POP EAX *);
+
+PROCEDURE -Exp(x: REAL): REAL
+	0D9H, 004H, 24H,	(* FLD [ESP] *)
+	0D9H, 0EAH,	(* FLDL2E *)
+	0DEH, 0C9H,	(* FMULP ST(1), ST(0) *)
+	0D9H, 0C0H,	(* FLD ST(0) *)
+	0D9H, 0FCH,	(* FRNDINT *)
+	0D9H, 0C9H,	(* FXCH ST(1), ST(0) *)
+	0D8H, 0E1H,	(* FSUB ST(0), ST(1) *)
+	0D9H, 0F0H,	(* F2XM1 *)
+	0D9H, 0E8H,	(* FLD1 *)
+	0DEH, 0C1H,	(* FADDP ST(1), ST(0) *)
+	0D9H, 0FDH,	(* FSCALE *)
+	0DDH, 0D9H,	(* FSTP ST(1) *)
+	058H	(* POP EAX *);
+
+PROCEDURE sin*(x: REAL): REAL;
+BEGIN 
+	IF x < 0.0 THEN RETURN -Sin(-x) ELSE RETURN Sin(x) END 
 END sin;
 
-PROCEDURE cos* (x: REAL): REAL;
-BEGIN RETURN SHORT(cos0(x))
+PROCEDURE cos*(x: REAL): REAL;
+BEGIN 
+	IF x < 0.0 THEN RETURN Cos(-x) ELSE RETURN Cos(x) END 
 END cos;
 
-PROCEDURE arctan* (x: REAL): REAL;
-BEGIN RETURN SHORT(arctan0(x))
+PROCEDURE arctan*(x: REAL): REAL;
+BEGIN 
+	RETURN Arctan(x)
 END arctan;
 
+PROCEDURE sqrt*(x: REAL): REAL;
+BEGIN 
+	IF x <= 0 THEN
+		IF x = 0 THEN RETURN 0 ELSE HALT(80) END
+	ELSE
+		RETURN Sqrt(x)
+	END
+END sqrt;
 
-BEGIN
-	Kernel.GetAdr(0, "sqrt", S.VAL(LONGINT, sqrt0));
-	Kernel.GetAdr(0, "exp", S.VAL(LONGINT, exp0));
-	Kernel.GetAdr(0, "ln", S.VAL(LONGINT, ln0));
-	Kernel.GetAdr(0, "sin", S.VAL(LONGINT, sin0));
-	Kernel.GetAdr(0, "cos", S.VAL(LONGINT, cos0));
-	Kernel.GetAdr(0, "arctan", S.VAL(LONGINT, arctan0));
+PROCEDURE ln*(x: REAL): REAL;
+BEGIN 
+	IF x <= 0 THEN HALT(80)
+	ELSE
+		RETURN Ln(x)
+	END
+END ln;
+
+PROCEDURE exp*(x: REAL): REAL;
+BEGIN 
+	RETURN Exp(x)
+END exp;
+
 END Math.

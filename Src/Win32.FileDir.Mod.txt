@@ -1,916 +1,572 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE FileDir;	(* MH Feb 93 / 2.6.94 jm 6.7.95 *)
+MODULE FileDir; (** non-portable / source: Win32.FileDir.Mod *) (* FileDir for Oberon for Windows 95/NT, ejz  *)
+	IMPORT S := SYSTEM, Kernel32, Kernel, Registry, Console;
 
-(**The FileDir module implements the naming of files in directories. Not all FileDir modules are equal between different Oberon implementations. There are however a few exported components that are found in a number of Oberon ports (these are marked portable in the definition). The definition presented here is that of Oberon for Windows.
-*)
+(* Based on FileDir from MH Feb 93 / 2.6.94 jm 6.7.95 *)
+(* 18.2.96 - added RelFileName (ejz) *)
 
-(*
-	jm - fixed next mapping; i was not initialized
-	26.10. 95 jm - switch to URL notation
-	15.12.95 - Removed OptionChar
-*)
+(** The FileDir module implements the naming of files in directories. *)
 
-IMPORT
-	S := SYSTEM, Registry, Kernel, Kernel32, C := Console;
+	CONST
+		MaxName = 260+1;
+		WinPathChar = "\";
+		pathChar = "/";
 
-CONST
-	PathLen* = 128;
-	NameLen* = 32;
-	HostNameLen* = 14;
+	TYPE
+		(** file enumerator *)
+		FileEnumerator* = PROCEDURE (path, name: ARRAY OF CHAR; time, date, size: LONGINT; isdir: BOOLEAN);
+		(** (search-) path enumerator *)
+		PathEnumerator* = PROCEDURE (path: ARRAY OF CHAR);
+		FileName* = ARRAY MaxName OF CHAR;
 
-	HeaderLen = 2 (* FileTag *) + NameLen (* oberon file name *) ;
-	OberonFileTag = "oB";
+	VAR
+		searchPath: ARRAY 4*MaxName OF CHAR;
+		workPath, tempPath: FileName;
+		PathChar-: CHAR; (** directory separator *)
+		moduleCS: Kernel32.CriticalSection;
 
-	DirectoryFileName = "$FILEDIR.$$$";
-	NofCachedDirs = 5;	(* number of dirs cached in addition to dirs in environmen variable OBERON *)
-
-TYPE
-	Path* = ARRAY PathLen OF CHAR;
-	FileName* = ARRAY NameLen OF CHAR;
-	HostName* = ARRAY HostNameLen OF CHAR;
-	
-	Directory* = POINTER TO DirectoryDesc;
-	Entry* = POINTER TO EntryDesc;
-	
-	DirectoryDesc* = RECORD
-		path*: Path; (* With \ as directory separator! *)
-		permanent: BOOLEAN;
-		translation: BOOLEAN;
-		readonly: BOOLEAN;
-		entries: Entry;
-	END;
-
-	EntryDesc* = RECORD	(** Directories consists of Entries, one for each file *)
-		prev, next: Entry;
-		dir*: Directory;
-		name*: FileName;
-		hostname*: HostName;	(** DOS filename *)
-	END;
-
-	EntryHandler* = PROCEDURE (name, dosName: ARRAY OF CHAR);
-
-	(** Portable file enumerator *)
-	FileEnumerator* = PROCEDURE (path, name: ARRAY OF CHAR; time, date, size: LONGINT; isdir: BOOLEAN);
-
-	(** (search-) path enumerator *)
-	PathEnumerator* = PROCEDURE (path: ARRAY OF CHAR);
-
-VAR
-	DOSFilePrefix-: CHAR;	(** The prefix character used to identify native DOS files "_". *)
-	PathChar-: CHAR;	(** Character used to separate directory names in paths (normally /). *)
-	CurrentDir: Directory;
-	Dir: POINTER TO ARRAY OF Directory;
-	LastFlushed: LONGINT;
-	Tag: ARRAY 3 OF CHAR;
-	ShowMsg: PROCEDURE (msg: LONGINT);
-	HideMsg: PROCEDURE;
-
-PROCEDURE Append (VAR s: ARRAY OF CHAR; suff: ARRAY OF CHAR);
-	VAR i, j, max: LONGINT;
-BEGIN
-	i := 0; j := 0; max := LEN(s)-1;
-	WHILE s[i] # 0X DO INC(i) END;
-	WHILE (i < max) & (suff[j] # 0X) DO s[i] := suff[j]; INC(i); INC(j) END;
-	s[i] := 0X;
-END Append;
-
-PROCEDURE AppendFile (VAR path: ARRAY OF CHAR; filename: ARRAY OF CHAR);
-	VAR i, j, max: LONGINT;
-BEGIN
-	i := 0; j := 0; max := LEN(path)-1;
-	WHILE path[i] # 0X DO INC(i) END;
-	IF (i > 0) & (path[i-1] # "\") THEN path[i] := "\"; INC(i) END;
-	WHILE (i < max) & (filename[j] # 0X) DO path[i] := filename[j]; INC(i); INC(j) END;
-	path[i] := 0X;
-END AppendFile;
-
-PROCEDURE Cap (ch: CHAR): CHAR;
-BEGIN
-	IF ("a" <= ch) & (ch <= "z") THEN RETURN CAP(ch) ELSE RETURN ch END;
-END Cap;
-
-PROCEDURE Convert2DOS(VAR s: ARRAY OF CHAR);
-VAR i: INTEGER;
-BEGIN
-	i := 0;
-	WHILE s[i] # 0X DO
-		IF s[i] = "/" THEN s[i] := "\" END;
-		INC(i)
-	END
-END Convert2DOS;
-
-PROCEDURE Convert2URL(VAR s: ARRAY OF CHAR);
-VAR i: INTEGER;
-BEGIN
-	i := 0;
-	WHILE s[i] # 0X DO
-		IF s[i] = "\" THEN s[i] := "/" END;
-		INC(i)
-	END
-END Convert2URL;
-
-PROCEDURE InsertEntry* (D: Directory; e: Entry);
-	VAR h: Entry;
-BEGIN
-	IF D.translation THEN
-		h := D.entries.next;
-		WHILE e.name > h.name DO h := h.next END;
-		(* insert e before h *)
-		ASSERT(e.name # h.name);
-		e.dir := D;
-		e.next := h; e.prev := h.prev;
-		h.prev.next := e; h.prev := e;
-	END
-END InsertEntry;
-
-PROCEDURE RemoveEntry* (D: Directory; e: Entry);
-BEGIN
-	e.prev.next := e.next; e.next.prev := e.prev;
-	e.next := e; e.prev := e;
-END RemoveEntry;
-
-PROCEDURE ThisEntry* (D: Directory; VAR name: ARRAY OF CHAR): Entry;
-	VAR e: Entry;
-BEGIN
-	IF ~D.translation THEN RETURN NIL END;
-	e := D.entries.next;
-	WHILE name > e.name DO e := e.next END;
-	IF name = e.name THEN RETURN e ELSE RETURN NIL END;
-END ThisEntry;
-
-PROCEDURE ThisHostEntry* (D: Directory; VAR hostname: ARRAY OF CHAR): Entry;
-	VAR e: Entry;
-BEGIN
-	IF ~D.translation THEN RETURN NIL END;
-	e := D.entries.next;
-	WHILE (e # D.entries) & (hostname # e.hostname) DO e := e.next END;
-	IF e = D.entries THEN (* not found *) RETURN NIL ELSE RETURN e END;
-END ThisHostEntry;
-
-PROCEDURE WriteFileDir (dir: Directory);
-	VAR fullname: Path; fd: LONGINT; done: BOOLEAN; e: Entry;
-		b: Kernel32.FindData; sh, ret: LONGINT; found: BOOLEAN;
-		name: HostName;
-
-	PROCEDURE WriteStr (s: ARRAY OF CHAR);
-		VAR i, nofWritten: LONGINT; done: BOOLEAN;
-	BEGIN i := 0;
-		WHILE s[i] # 0X DO INC(i) END;
-		done := Kernel32.WriteFile(fd, S.ADR(s), i+1, nofWritten, Kernel32.NULL) # Kernel32.False
-	END WriteStr;
-
-BEGIN
-	IF ~dir.translation THEN RETURN END;
-	fullname := dir.path; AppendFile(fullname, DirectoryFileName);
-	fd := Kernel32.CreateFile(S.ADR(fullname), Kernel32.LongOr(Kernel32.GenericRead, Kernel32.GenericWrite), Kernel32.FileShareRead, Kernel32.NULL, Kernel32.CreateAlways, Kernel32.FileAttributeNormal, Kernel32.NULL);
-	IF fd # Kernel32.InvalidHandleValue THEN
-		fullname := dir.path; AppendFile(fullname, "*.*");
-		sh := Kernel32.FindFirstFile(S.ADR(fullname), S.ADR(b));
-		IF sh # Kernel32.InvalidHandleValue THEN found := TRUE;
-			WHILE found DO
-				IF ~Kernel32.Includes(b.fileAttrs, Kernel32.FileAttributeDirectory) THEN
-					COPY(b.name, name);
-					e := ThisHostEntry(dir, name);
-					IF e # NIL THEN WriteStr("O"); WriteStr(e.name); WriteStr(e.hostname);
-					ELSE WriteStr("D"); WriteStr(b.name);
-					END;
-				END;
-				found := Kernel32.FindNextFile(sh, S.ADR(b)) # Kernel32.False
-			END;
-			ret := Kernel32.FindClose(sh);
-		END;
-		done := Kernel32.CloseHandle(fd) # Kernel32.False
-	END
-END WriteFileDir;
-
-PROCEDURE WriteFileDirs;
-	VAR i: LONGINT;
-BEGIN
-	i := 0;
-	WHILE i < LEN(Dir^) DO
-		IF (Dir[i] # NIL) & Dir[i].permanent & ~Dir[i].readonly THEN WriteFileDir(Dir[i]) END;
-		INC(i)
-	END
-END WriteFileDirs;
-
-PROCEDURE FinalizeDir (D: PTR);
-	VAR i: INTEGER; done: BOOLEAN;
-BEGIN
-	WITH D: Directory DO
-		C.Str("FileDir.FinalizeDir "); C.Str(D.path); C.Ln;
-		IF D.permanent THEN C.Str("  nothing to do, is a permanent dir"); C.Ln; RETURN END;
-		i:= 0; WHILE D.path[i] # 0X DO INC(i) END;
-		LOOP
-			done := (Kernel32.RemoveDirectory(S.ADR(D.path)) # Kernel32.False);
-			IF ~done THEN EXIT END;
-			C.Str("  removed directory "); C.Str(D.path); C.Ln;
-			WHILE (i > 0) & (D.path[i] # "\") DO DEC(i) END; IF i = 0 THEN EXIT END;
-			D.path[i]:= 0X;
-		END
-	END
-END FinalizeDir;
-
-PROCEDURE Caps(VAR s: ARRAY OF CHAR);
-VAR i: INTEGER;
-BEGIN
-	i := 0;
-	WHILE s[i] # 0X DO
-		s[i] := Cap(s[i]);
-		INC(i)
-	END
-END Caps;
-
-PROCEDURE ExpandPath (VAR this: ARRAY OF CHAR; VAR absPath: ARRAY OF CHAR);
-	VAR done: BOOLEAN; current: Path; ret: LONGINT;
-BEGIN
-	ret := Kernel32.GetCurrentDirectory(PathLen, S.ADR(current));
-	done := Kernel32.SetCurrentDirectory(S.ADR(this)) # Kernel32.False;
-	IF done THEN
-		ret := Kernel32.GetCurrentDirectory(LEN(absPath), S.ADR(absPath));
-		Caps(absPath);
-		done := Kernel32.SetCurrentDirectory(S.ADR(current)) # Kernel32.False
-	ELSE absPath[0] := 0X (* << jm *)
-	END
-END ExpandPath;
-
-PROCEDURE UpdateEntry (D: Directory; VAR name: FileName; VAR hostname: ARRAY OF CHAR);
-	VAR done: BOOLEAN;
-		res, fd1, fd2: LONGINT;
-		lastw1, lastw2: Kernel32.FileTime;
-		e: Entry;
-BEGIN
-	e := ThisEntry(D, name);
-	IF e = NIL THEN
-		NEW(e); COPY(name, e.name); COPY(hostname, e.hostname);
-		InsertEntry(D, e);
-	ELSE (* A file with name is already registerd. Use newer host file *)
-		IF hostname # e.hostname THEN
-			fd1 := Kernel32.CreateFile(S.ADR(e.hostname), Kernel32.GenericRead, Kernel32.LongOr(Kernel32.FileShareRead, Kernel32.FileShareWrite), Kernel32.NULL, Kernel32.OpenExisting, Kernel32.FileAttributeNormal, Kernel32.NULL);
-			IF fd1 # Kernel32.InvalidHandleValue THEN
-				res := Kernel32.GetFileTime(fd1, Kernel32.NULL, Kernel32.NULL, S.ADR(lastw1));
-				fd2 := Kernel32.CreateFile(S.ADR(hostname), Kernel32.GenericRead, Kernel32.LongOr(Kernel32.FileShareRead, Kernel32.FileShareWrite), Kernel32.NULL, Kernel32.OpenExisting, Kernel32.FileAttributeNormal, Kernel32.NULL);
-				IF fd2 # Kernel32.InvalidHandleValue THEN
-					res := Kernel32.GetFileTime(fd2, Kernel32.NULL, Kernel32.NULL, S.ADR(lastw2));
-					res := Kernel32.CompareFileTime(S.ADR(lastw1), S.ADR(lastw2));
-					done := Kernel32.CloseHandle(fd1) # Kernel32.False;
-					done := Kernel32.CloseHandle(fd2) # Kernel32.False;
-					IF res = -1 THEN (* fd1 is older *)
-						done := Kernel32.DeleteFile(S.ADR(e.hostname)) # Kernel32.False; COPY(hostname, e.hostname)
-					ELSE done := Kernel32.DeleteFile(S.ADR(hostname)) # Kernel32.False
-					END
-				ELSE done := Kernel32.CloseHandle(fd1) # Kernel32.False
-				END;
-			END
-		END
-	END
-END UpdateEntry;
-
-PROCEDURE BuildDirectory (D: Directory);
-	VAR s: ARRAY 8 OF CHAR;
-		b: Kernel32.FindData; sh: LONGINT;
-		done, found: BOOLEAN;
-		nofRead, ret: LONGINT;
-		head: ARRAY HeaderLen OF CHAR;
-		name: FileName;
-		fd: LONGINT;
-		i: INTEGER;
-BEGIN
-	IF ~D.translation THEN RETURN END;
-	s := "*.*";
-	sh := Kernel32.FindFirstFile(S.ADR(s), S.ADR(b));
-	IF sh # Kernel32.InvalidHandleValue THEN found := TRUE;
-		WHILE found DO
-			IF ~Kernel32.Includes(b.fileAttrs, Kernel32.FileAttributeDirectory) THEN
-				fd := Kernel32.CreateFile(S.ADR(b.name), Kernel32.GenericRead, Kernel32.LongOr(Kernel32.FileShareRead, Kernel32.FileShareWrite), Kernel32.NULL, Kernel32.OpenExisting, Kernel32.FileAttributeNormal, Kernel32.NULL);
-				IF fd # Kernel32.InvalidHandleValue THEN
-					done := Kernel32.ReadFile(fd, S.ADR(head), HeaderLen, nofRead, Kernel32.NULL) # Kernel32.False;
-					IF (head[0] = Tag[0]) & (head[1] = Tag[1]) THEN (* Oberon file tag found *)
-						i := 0;
-						WHILE i < NameLen DO name[i] := head[i+2]; INC(i) END;
-						name[NameLen-1] := 0X;
-						done := Kernel32.CloseHandle(fd) # Kernel32.False;
-						UpdateEntry(D, name, b.name);
-					ELSE
-						done := Kernel32.CloseHandle(fd) # Kernel32.False
-					END;
-				END;
-			END;
-			found := Kernel32.FindNextFile(sh, S.ADR(b)) # Kernel32.False;
-		END;
-		ret := Kernel32.FindClose(sh);
-	END;
-END BuildDirectory;
-
-PROCEDURE ReadDirectory (D: Directory); (* read cached directory table for D *)
-	CONST N = 1024;
-	VAR oberonName: FileName; name, hostname: HostName;
-		e: Entry; done, found, isOberon, ok: BOOLEAN;
-		b: Kernel32.FindData; sh: LONGINT; fd: LONGINT;
-		filelen, remaining, pos, ret: LONGINT;
-		buf: ARRAY N OF CHAR;
-
-	PROCEDURE Read (VAR ch: CHAR);
-		VAR n, nofRead: LONGINT; done: BOOLEAN;
+ (** Replace all occurences of character from in name by to. *)
+	PROCEDURE ConvertChar*(VAR name: ARRAY OF CHAR; from, to: CHAR);
+		VAR i: LONGINT;
 	BEGIN
-		IF pos >= filelen THEN ch := 0X; INC(pos);
-		ELSE
-			IF pos MOD N = 0 THEN
-				n := remaining; IF n > N THEN n := N END;
-				done := Kernel32.ReadFile(fd, S.ADR(buf), n, nofRead, Kernel32.NULL) # Kernel32.False; 				DEC(remaining, nofRead);
+		i := 0;
+		WHILE name[i] # 0X DO
+			IF name[i] = from THEN
+				name[i] := to
 			END;
-			ch := buf[pos MOD N]; INC(pos);
-		END
-	END Read;
-
-	PROCEDURE ReadStr (VAR s: ARRAY OF CHAR; VAR done: BOOLEAN);
-		VAR i: INTEGER;
-	BEGIN i := 0; Read(s[i]);
-		WHILE s[i] # 0X DO INC(i); Read(s[i]) END;
-		s[i] := 0X;
-		done := pos <= filelen;
-	END ReadStr;
-
-	PROCEDURE ReadEntry (VAR oberonName, hostname: ARRAY OF CHAR; VAR isOberon, done: BOOLEAN);
-	BEGIN
-		ReadStr(oberonName, done);
-		IF oberonName[0] = "O" THEN isOberon := TRUE
-		ELSIF oberonName[0] = "D" THEN isOberon := FALSE
-		ELSE done := FALSE; RETURN
-		END;
-		IF isOberon THEN ReadStr(oberonName, done) END;
-		ReadStr(hostname, done);
-	END ReadEntry;
-
-BEGIN
-	IF ~D.translation THEN RETURN END;
-	COPY(DirectoryFileName, name);
-	fd := Kernel32.CreateFile(S.ADR(name), Kernel32.GenericRead(*Write*), Kernel32.LongOr(Kernel32.FileShareRead, Kernel32.FileShareWrite), Kernel32.NULL, Kernel32.OpenExisting, Kernel32.FileAttributeNormal, Kernel32.NULL);
-	filelen := Kernel32.GetFileSize(fd, Kernel32.NULL); remaining := filelen;
-	IF fd # Kernel32.InvalidHandleValue THEN
-		name := "*.*"; ok := FALSE;
-		sh := Kernel32.FindFirstFile(S.ADR(name), S.ADR(b));
-		IF sh # Kernel32.InvalidHandleValue THEN
-			LOOP
-				IF ~Kernel32.Includes(b.fileAttrs, Kernel32.FileAttributeDirectory) THEN
-					ReadEntry(oberonName, hostname, isOberon, done);
-					IF ~done THEN EXIT END;
-					IF b.name # hostname THEN EXIT
-					ELSE
-						IF isOberon THEN
-							NEW(e); e.name := oberonName; e.hostname := hostname;
-							InsertEntry(D, e);
-						END;
-					END;
-				END;
-				found := Kernel32.FindNextFile(sh, S.ADR(b)) # Kernel32.False;
-				IF ~found THEN ok := TRUE; EXIT END;
-			END;
-			ret := Kernel32.FindClose(sh);
-		END;
-		done := Kernel32.CloseHandle(fd) # Kernel32.False;
-		COPY(DirectoryFileName, name);
-		IF ~D.readonly THEN done := Kernel32.DeleteFile(S.ADR(name)) # Kernel32.False END;
-		IF ~ok THEN C.Str("Inconsistent File register. building new for "); C.Str(D.path); C.Ln;
-			BuildDirectory(D);
-		END;
-	ELSE C.Str("Cached File register not found. Building new for "); C.Str(D.path); C.Ln;
-		BuildDirectory(D)
-	END
-END ReadDirectory;
-
-PROCEDURE OpenDirectory (VAR absPath: Path; VAR D: Directory; permanent: BOOLEAN);
-	VAR sentinel: Entry; done: BOOLEAN; current: Path; attribs, ret: LONGINT;
-BEGIN
-	NEW(D); D.permanent := permanent; D.path := absPath; Kernel.RegisterObject(D, FinalizeDir, TRUE);
-	Convert2DOS(D.path);
-	D.translation := ~(((CAP(absPath[0]) = "A") OR (CAP(absPath[0]) = "B")) & (absPath[1] = ":"));
-	NEW(sentinel); sentinel.next := sentinel; sentinel.prev := sentinel;
-	sentinel.name[0] := 0FFX; sentinel.name[1] := 0X;
-	sentinel.hostname[0] := 0FFX; sentinel.hostname[1] := 0X;
-	D.entries := sentinel;
-	ret := Kernel32.GetCurrentDirectory(PathLen, S.ADR(current));
-	done := Kernel32.SetCurrentDirectory(S.ADR(absPath)) # Kernel32.False;
-	IF ~done THEN D := NIL; RETURN END;
-	attribs := Kernel32.GetFileAttributes(S.ADR(absPath));
-	D.readonly := Kernel32.Includes(attribs, Kernel32.FileAttributeReadOnly);
-	ReadDirectory(D);
-	done := Kernel32.SetCurrentDirectory(S.ADR(current)) # Kernel32.False
-END OpenDirectory;
-
-(** Non-portable way to enumerate files in a directory. *)
-PROCEDURE Enumerate* (D: Directory; H: EntryHandler);
-	VAR e: Entry; path: Path; name: HostName;
-		b: Kernel32.FindData; sh, ret: LONGINT; found: BOOLEAN;
-BEGIN
-	IF D.translation THEN (* list Oberon files *)
-		e := D.entries.next;
-		WHILE e # D.entries DO
-			H(e.name, e.hostname);
-			e := e.next;
-		END
-	END;
-	(* list dos files *)
-	path := D.path; AppendFile(path, "*.*");
-	sh := Kernel32.FindFirstFile(S.ADR(path), S.ADR(b));
-	IF sh # Kernel32.InvalidHandleValue THEN found := TRUE;
-		WHILE found DO
-			IF ~Kernel32.Includes(b.fileAttrs, Kernel32.FileAttributeDirectory) THEN
-				IF ThisHostEntry(D, b.name) = NIL THEN
-					name[0] := DOSFilePrefix; name[1] := 0X; Append(name, b.name);
-					H(name, b.name);
-				END;
-			END;
-			found := Kernel32.FindNextFile(sh, S.ADR(b)) # Kernel32.False;
-		END;
-		ret := Kernel32.FindClose(sh);
-	END;
-END Enumerate;
-
-PROCEDURE Match (s1, s2: ARRAY OF CHAR): BOOLEAN;
-	VAR i: INTEGER;
-BEGIN i := 0;
-	WHILE (s1[i] # 0X) & (s2[i] # 0X) & (CAP(s1[i]) = CAP(s2[i])) DO INC(i) END;
-	RETURN (s1[i] = 0X) & (s2[i] = 0X);
-END Match;
-
-PROCEDURE ThisDirectory* (path: ARRAY OF CHAR): Directory;
-	VAR D: Directory; i: LONGINT; absPath: Path;
-BEGIN
-	Convert2DOS(path);
-	ExpandPath(path, absPath);
-	IF absPath = "" THEN RETURN NIL END; (* << jm *)
-	i := 0;
-	WHILE (i < LEN(Dir^)) DO
-		IF (Dir[i] # NIL) & Match(Dir[i].path, absPath) THEN RETURN Dir[i] END;
-		INC(i)
-	END;
-	REPEAT LastFlushed := (LastFlushed + 1) MOD LEN(Dir^);
-	UNTIL (Dir[LastFlushed] = NIL) OR (~Dir[LastFlushed].permanent);
-	OpenDirectory(absPath, D, FALSE);
-	IF D # NIL THEN Dir[LastFlushed] := D END;
-	RETURN D;
-END ThisDirectory;
-
-PROCEDURE CurrentDirectory* (): Directory;
-	VAR ret: LONGINT; current: Path;
-BEGIN
-	ret := Kernel32.GetCurrentDirectory(PathLen, S.ADR(current));
-	CurrentDir := ThisDirectory(current);
-	RETURN CurrentDir;
-END CurrentDirectory;
-
-PROCEDURE ReadOnly* (D: Directory): BOOLEAN;
-BEGIN RETURN D.readonly
-END ReadOnly;
-
-(** Portable way of obtaining the current directory. *)
-PROCEDURE GetWorkingDirectory*(VAR path: ARRAY OF CHAR);
-	VAR ret: LONGINT;
-BEGIN
-	ret := Kernel32.GetCurrentDirectory(LEN(path), S.ADR(path)); Convert2URL(path);
-	Caps(path)
-END GetWorkingDirectory;
-
-PROCEDURE ChangeDirectory* (path: ARRAY OF CHAR; VAR done: BOOLEAN);
-VAR D: Directory;
-BEGIN done := FALSE;
-	D := ThisDirectory(path);
-	IF D # NIL THEN
-		done := Kernel32.SetCurrentDirectory(S.ADR(D.path)) # Kernel32.False;
-		IF done THEN CurrentDir := D END;
-	END
-END ChangeDirectory;
-
-PROCEDURE CreateDirectory*(path: ARRAY OF CHAR; VAR done: BOOLEAN);
-	VAR i: INTEGER; sh: LONGINT; b: Kernel32.FindData; abs: BOOLEAN;
-BEGIN
-	IF path[1] = ":" THEN abs:= TRUE ELSE abs:= FALSE END;
-	WHILE path[i] # 0X DO
-		IF (path[i] = "/") OR (path[i] = "\") THEN
-			IF ~abs OR (i > 2) THEN
-				path[i]:= 0X;
-				sh := Kernel32.FindFirstFile(S.ADR(path), S.ADR(b));
-				IF sh = Kernel32.InvalidHandleValue THEN
-					done:= (Kernel32.CreateDirectory(S.ADR(path), 0) # Kernel32.False);
-					IF ~done THEN RETURN END
-				ELSE
-					sh:= Kernel32.FindClose(sh)
-				END
-			END;
-			path[i]:= "\"
-		END;
-		INC(i)
-	END;
-	IF path[i-1] # "\" THEN
-		done := (Kernel32.CreateDirectory(S.ADR(path), 0) # Kernel32.False)
-	END
-END CreateDirectory;
-
-(** No checks are made if the directory is in use or not. *)
-PROCEDURE DeleteDirectory*(path: ARRAY OF CHAR; VAR done: BOOLEAN);
-BEGIN
-	Convert2DOS(path);
-	done := Kernel32.RemoveDirectory(S.ADR(path)) # Kernel32.False
-END DeleteDirectory;
-
-PROCEDURE OpenSearchPath* (VAR pathNo: LONGINT);
-BEGIN pathNo := -1
-END OpenSearchPath;
-
-PROCEDURE GetNextInSearchPath* (VAR pathNo: LONGINT; VAR D: Directory);
-BEGIN
-	IF pathNo = -1 THEN D := CurrentDir; pathNo := 0;
-	ELSE
-		WHILE (pathNo < LEN(Dir^)) & ((Dir[pathNo] = NIL) OR ~Dir[pathNo].permanent OR (Dir[pathNo] = CurrentDir)) DO
-			 INC(pathNo)
-		END;
-		IF pathNo < LEN(Dir^) THEN D := Dir[pathNo] ELSE D := NIL END;
-		INC(pathNo);
-	END;
-END GetNextInSearchPath;
-
-	PROCEDURE EnumerateSearchPaths*(enum: PathEnumerator);
-		VAR
-			D: Directory;
-			path: FileName;
-			i: LONGINT;
-	BEGIN
-		OpenSearchPath(i);
-		GetNextInSearchPath(i, D);
-		WHILE D # NIL DO
-			COPY(D.path, path); Convert2URL(path);
-			enum(path);
-			GetNextInSearchPath(i, D)
-		END
-	END EnumerateSearchPaths;
-
-(** Maps long Oberon filenames into short DOS filenames. *)
-PROCEDURE Map* (VAR name, hostname: ARRAY OF CHAR);
-	VAR i, j, k, dot: INTEGER;
-BEGIN
-	(* search for the last dot in oberon file name *)
-	dot := 0; i := 0;
-	WHILE name[i] # 0X DO
-		IF name[i] = "." THEN dot := i END;
-		INC(i)
-	END;
-	IF dot = 0 THEN dot := i END;
-	(* copy at most eight 'non-dot' characters, until last dot in oberon name *)
-	i := 0; j := 0;
-	WHILE (j < 8) & (i < dot) DO
-		IF name[i] # "." THEN hostname[j] := Cap(name[i]); INC(j) END;
-		INC(i)
-	END;
-	(* copy at most three characters after last dot in oberon name *)
-	IF name[dot] # 0X THEN
-		hostname[j] := "."; INC(j);
-		i := dot+1; k := 0;
-		WHILE (k < 3) & (name[i] # 0X) DO
-			IF name[i] # "." THEN hostname[j] := Cap(name[i]); INC(j); INC(k) END;
 			INC(i)
-		END;
-	END;
-	hostname[j] := 0X;
-END Map;
-
-(** If Map returns a DOS filename that already exists, NextMapping "bumps" the filename to the next
-possible filename candidate (which might be in conflict with another DOS file). *)
-PROCEDURE NextMapping* (this: ARRAY OF CHAR; VAR next: ARRAY OF CHAR);
-	VAR i: INTEGER; ch: CHAR;
-BEGIN i := 0;
-	COPY(this, next);
-	WHILE next[i] # 0X DO INC(i) END;
-	WHILE i > 0 DO DEC(i);
-		ch := Cap(next[i]);
-		IF ("A" <= ch) & (ch < "Z") OR ("0" <= ch) & ( ch < "9") THEN
-			next[i] := CHR(ORD(next[i])+1);
-			RETURN
 		END
-	END;
-	HALT(99); (* no next hash value possible *)
-END NextMapping;
+	END ConvertChar;
 
-PROCEDURE Exists* (dir: Directory; VAR hostname: ARRAY OF CHAR): BOOLEAN;
-	VAR fullname: Path; ret, sh: LONGINT; b: Kernel32.FindData;
-BEGIN
-	COPY(dir.path, fullname); AppendFile(fullname, hostname);
-	sh := Kernel32.FindFirstFile(S.ADR(fullname), S.ADR(b));
-	IF sh # Kernel32.InvalidHandleValue THEN ret := Kernel32.FindClose(sh); RETURN TRUE ELSE RETURN FALSE END;
-END Exists;
-
-PROCEDURE FindFile*(VAR name, fullname: ARRAY OF CHAR; usepath: BOOLEAN): BOOLEAN;
-	VAR pathNo: LONGINT; i, j: INTEGER; dir: Directory;
-BEGIN
-	IF usepath THEN
-		OpenSearchPath(pathNo); GetNextInSearchPath(pathNo, dir);
-		WHILE dir # NIL DO
-			IF Exists(dir, name) & (ThisHostEntry(dir, name) = NIL) THEN
-				COPY(dir.path, fullname); i := 0; j := 0;
-				WHILE fullname[i] # 0X DO INC(i) END;
-				IF (i > 0) & (fullname[i-1] # "\") THEN fullname[i] := "\"; INC(i) END;
-				WHILE name[j] # 0X DO fullname[i] := name[j]; INC(i); INC(j) END;
-				fullname[i] := 0X;
-				RETURN TRUE;
-			END;
-			GetNextInSearchPath(pathNo, dir);
-		END
-	ELSE
-		dir := CurrentDirectory();
-		IF Exists(dir, name) & (ThisHostEntry(dir, name) = NIL) THEN
-			COPY(dir.path, fullname); i := 0; j := 0;
-			WHILE fullname[i] # 0X DO INC(i) END;
-			IF (i > 0) & (fullname[i-1] # "\") THEN fullname[i] := "\"; INC(i) END;
-			WHILE name[j] # 0X DO fullname[i] := name[j]; INC(i); INC(j) END;
-			fullname[i] := 0X;
-			RETURN TRUE
-		END
-	END;
-	fullname[0] := 0X;
-	RETURN FALSE
-END FindFile;
-
-
-PROCEDURE Rename* (e: Entry; VAR new: ARRAY OF CHAR);
-	VAR fullold, fullnew: Path; done: BOOLEAN;
-BEGIN
-	COPY(e.dir.path, fullold); (*Append(fullold, "\");*) fullnew := fullold;
-	AppendFile(fullold, e.hostname); AppendFile(fullnew, new);
-	done := Kernel32.MoveFile(S.ADR(fullold), S.ADR(fullnew)) # Kernel32.False;
-	IF done THEN COPY(new, e.hostname) END;
-END Rename;
-
-PROCEDURE Delete* (dir: Directory; VAR name: ARRAY OF CHAR);
-	VAR fullname: Path; done: BOOLEAN;
-BEGIN
-	COPY(dir.path, fullname); (*Append(fullname, "\");*) AppendFile(fullname, name);
-	done := Kernel32.DeleteFile(S.ADR(fullname)) # Kernel32.False
-END Delete;
-
-(** Indicates if a character is part of a valid Texts.Name (i.e. filename). The letters a-z, A-Z, ., 0-9 are always part of a valid filename and should NOT be tested with this function. SpecialChars are those needed in addition to the normal ones above, and are by convention the directory separators allowed by the underlying filesystem (/ for DOS, / for UNIX and : for Macintosh). *)
-PROCEDURE SpecialChar*(ch: CHAR): BOOLEAN;
-BEGIN
-	RETURN (ch = "/") OR (ch = ":") OR (ch = "_"); (* Windows *)
-END SpecialChar;
-
-PROCEDURE matches (VAR name, pat: ARRAY OF CHAR; i, j: INTEGER): BOOLEAN;
-BEGIN
-	IF (name[i] = 0X) & (pat[j] = 0X) THEN RETURN TRUE
-	ELSIF pat[j] # "*" THEN RETURN (name[i] = pat[j]) & matches(name, pat, i+1, j+1)
-	ELSE (* pat[j] = "*", name[i] may be 0X *)
-		RETURN matches(name, pat, i, j+1) OR ((name[i] # 0X) & matches(name, pat, i+1, j))
-	END
-END matches;
-
-PROCEDURE matches2 (VAR name, pat: ARRAY OF CHAR; i, j: INTEGER): BOOLEAN;
-	(* as matches, but ignores case *)
-BEGIN
-	IF (name[i] = 0X) & (pat[j] = 0X) THEN RETURN TRUE
-	ELSIF pat[j] # "*" THEN RETURN (CAP(name[i]) = CAP(pat[j])) & matches2(name, pat, i+1, j+1)
-	ELSE (* pat[j] = "*", name[i] may be 0X *)
-		RETURN matches2(name, pat, i, j+1) OR ((name[i] # 0X) & matches2(name, pat, i+1, j))
-	END
-END matches2;
-
-(** Portable way to enumerate files. The detail flag indicates if time, date and size
-must be calculated. When
-	path = "."	=> enumerate files in current directory
-	path = ""	=> enumerate files in the search path
-	path = ?	=> enumerate files in the  directory ?
-	
-	Directories are always returned independent of the pattern specified. The only wildcard allowed is *.
-*)
-PROCEDURE EnumerateFiles*(path, pattern: ARRAY OF CHAR; detail: BOOLEAN; enum: FileEnumerator);
-	VAR pathno: LONGINT; dir: Directory;
-
-	PROCEDURE ConvertTime(ft: LONGINT; VAR time, date: LONGINT);
-	VAR ret: LONGINT; lft: Kernel32.FileTime; st: Kernel32.SystemTime;
+ (** Search the (relative) filename name in the current directory. If it could not be found all directories in the search path
+ 	are searched for name. fileName returns the full (absolute) name for the file found. *)
+	PROCEDURE FindFile*(VAR name, fullname: ARRAY OF CHAR; usepath: BOOLEAN): BOOLEAN;
+		VAR ret, i: LONGINT;
 	BEGIN
-		ret := Kernel32.FileTimeToLocalFileTime(ft, S.ADR(lft));
-		ret := Kernel32.FileTimeToSystemTime(S.ADR(lft), S.ADR(st));
-		date := LONG(st.year-1900)*200H + st.month*20H + st.day;
-		time := LONG(st.hour)*1000H + st.min*40H + st.sec;
-	END ConvertTime;
-	
-	PROCEDURE Report(VAR path, name, hostname: ARRAY OF CHAR; native: BOOLEAN);
-	VAR fd, time, date, size, ret: LONGINT; s: ARRAY PathLen OF CHAR; VAR ft: Kernel32.FileTime;
-			done: BOOLEAN;
-	BEGIN
-		time := 0; date := 0; size := 0;
-		IF detail THEN
-			COPY(path, s); Convert2DOS(s); AppendFile(s, hostname);
-			fd := Kernel32.CreateFile(S.ADR(s), Kernel32.GenericRead, Kernel32.LongOr(Kernel32.FileShareRead, Kernel32.FileShareWrite), Kernel32.NULL, Kernel32.OpenExisting, Kernel32.FileAttributeNormal, Kernel32.NULL);
-			size := Kernel32.GetFileSize(fd, Kernel32.NULL); IF ~native THEN DEC(size, HeaderLen) END;
-			ret := Kernel32.GetFileTime(fd, Kernel32.NULL, Kernel32.NULL, S.ADR(ft));
-			ConvertTime(S.ADR(ft), time, date);
-			done := Kernel32.CloseHandle(fd) # Kernel32.False
+		ConvertChar(name, pathChar, WinPathChar);
+		Kernel32.EnterCriticalSection(S.ADR(moduleCS));
+		ret := Kernel32.SearchPath(S.ADR(workPath), S.ADR(name), Kernel32.NULL, LEN(fullname), S.ADR(fullname), i);
+		IF (ret <= 0) & usepath THEN
+			ret := Kernel32.SearchPath(S.ADR(searchPath), S.ADR(name), Kernel32.NULL, LEN(fullname), S.ADR(fullname), i)
 		END;
-		enum(path, name, time, date, size, FALSE);
-	END Report;
-	
-	PROCEDURE Enumerate(D: Directory);
-	VAR e: Entry; path, thePath: Path; name: HostName; b: Kernel32.FindData;
-		sh: LONGINT; found: BOOLEAN; i: INTEGER;
-		time, date, ret: LONGINT;
+		Kernel32.LeaveCriticalSection(S.ADR(moduleCS));
+		ConvertChar(fullname, WinPathChar, pathChar);
+		RETURN ret > 0
+	END FindFile;
+
+	PROCEDURE CheckPath(VAR fullName: ARRAY OF CHAR): BOOLEAN;
+		VAR ret, err, i, j, k: LONGINT;
 	BEGIN
-		COPY(D.path, thePath); Convert2URL(thePath);
-		i := 0; WHILE thePath[i] # 0X DO INC(i) END;
-		IF (i > 0) & (thePath[i-1] = "/") THEN thePath[i-1] := 0X END;
-
-		IF D.translation THEN (* list Oberon files *)
-			e := D.entries.next;
-			WHILE e # D.entries DO
-				IF matches(e.name, pattern, 0, 0) THEN Report(thePath, e.name, e.hostname, FALSE) END;
-				e := e.next
-			END
-		END;
-		(* list dos files *)
-		path := D.path; AppendFile(path, "*.*");
-		sh := Kernel32.FindFirstFile(S.ADR(path), S.ADR(b));
-		IF sh # Kernel32.InvalidHandleValue THEN found := TRUE;
-			WHILE found DO
-				IF ~Kernel32.Includes(b.fileAttrs, Kernel32.FileAttributeDirectory) THEN
-					IF ThisHostEntry(D, b.name) = NIL THEN
-						name[0] := DOSFilePrefix; name[1] := 0X; Append(name, b.name);
-						IF matches2(name, pattern, 0, 0) THEN Report(thePath, name, b.name, TRUE) END
-					END
-				ELSIF (b.name # ".") & (b.name # "..") THEN
-					ConvertTime(S.ADR(b.lastWrite), time, date);
-					enum(thePath, b.name, time, date, b.sizeLow, TRUE)
-				END;
-				found := Kernel32.FindNextFile(sh, S.ADR(b)) # Kernel32.False;
-			END;
-			ret := Kernel32.FindClose(sh)
-		END
-	END Enumerate;
-	
-BEGIN
-	IF path # "" THEN
-		dir := ThisDirectory(path);
-		IF dir # NIL THEN Enumerate(dir) END
-	ELSE
-		OpenSearchPath(pathno); GetNextInSearchPath(pathno, dir);
-		WHILE dir # NIL DO
-			Enumerate(dir);
-			GetNextInSearchPath(pathno, dir)
-		END
-	END
-END EnumerateFiles;
-
-(** Compute the relative filename (relative to the working directory). filename must be the absolute filename with drive letter. *)
-PROCEDURE RelFileName*(fileName: ARRAY OF CHAR; VAR relFileName: ARRAY OF CHAR);
-VAR i, j, k, p: LONGINT; workPath: ARRAY 261 OF CHAR;
-BEGIN
-	GetWorkingDirectory(workPath);
-	
-	IF CAP(workPath[0]) # CAP(fileName[0]) THEN (* different drive letters -> nothing to be done *)
-		COPY(fileName, relFileName)
-	ELSE
-		i := 0; j := -1; p := 0;
-		WHILE (CAP(fileName[i]) = CAP(workPath[i])) & (fileName[i] # 0X) & (workPath[i] # 0X) DO
-			IF workPath[i] = PathChar THEN
+		i := 0; j := -1;
+		WHILE fullName[i] # 0X DO
+			IF fullName[i] = WinPathChar THEN
 				j := i
 			END;
 			INC(i)
 		END;
-		
-		IF (workPath[i] # 0X) OR (fileName[i] # PathChar) THEN
-			IF j > 2 THEN (* first part of directories do match *)
-				k:= j;
+		IF j > 0 THEN
+			fullName[j] := 0X
+		END;
+		k := Kernel32.SetCurrentDirectory(S.ADR(fullName));
+		IF j > 0 THEN
+			fullName[j] := WinPathChar
+		END;
+		ret := Kernel32.SetCurrentDirectory(S.ADR(workPath));
+		IF ret = Kernel32.False THEN
+			err := Kernel32.GetLastError(); Kernel32.LeaveCriticalSection(S.ADR(moduleCS)); HALT(99)
+		END;
+		RETURN k # Kernel32.False
+	END CheckPath;
+
+ (** Compute the relative filename (relative to the working directory). *)
+	PROCEDURE RelFileName*(fileName: ARRAY OF CHAR; VAR relFileName: ARRAY OF CHAR);
+		VAR
+			ret, err, i, j, k, p: LONGINT;
+			fullName: FileName;
+	BEGIN
+		k := -1; i := 0;
+		WHILE fileName[i] # 0X DO
+			IF fileName[i] = ":" THEN
+				k := i
+			END;
+			INC(i)
+		END;
+		IF (k > 1) OR (k = 0) THEN
+			COPY(fileName, relFileName); RETURN
+		END;
+		Kernel32.EnterCriticalSection(S.ADR(moduleCS));
+		IF ~FindFile(fileName, fullName, TRUE) THEN (* file does not exist -> would be created in the current dir *)
+			ConvertChar(fileName, pathChar, WinPathChar);
+			ret := Kernel32.GetFullPathName(S.ADR(fileName), LEN(fullName), S.ADR(fullName), i);
+			IF ret <= 0 THEN
+				err := Kernel32.GetLastError(); Kernel32.LeaveCriticalSection(S.ADR(moduleCS)); HALT(99)
+			ELSIF ~CheckPath(fullName) THEN
+				Kernel32.LeaveCriticalSection(S.ADR(moduleCS)); HALT(99)
+			END
+		ELSE
+			ConvertChar(fullName, pathChar, WinPathChar)
+		END; (* from here on all with WinPathChar and drive letter *)
+		IF CAP(workPath[0]) # CAP(fullName[0]) THEN (* different drive letters -> nothing to be done *)
+			COPY(fullName, relFileName)
+		ELSE
+			i := 0; j := -1; p := 0;
+			WHILE (fullName[i] # 0X) & (workPath[i] # 0X) & (CAP(fullName[i]) = CAP(workPath[i])) DO
+				IF workPath[i] = WinPathChar THEN
+					j := i
+				END;
+				INC(i)
+			END;
+			IF workPath[i] = 0X THEN
+				IF fullName[i] # WinPathChar THEN (* first part of directories do match *)
+					relFileName[p] := "."; relFileName[p+1] := "."; relFileName[p+2] := WinPathChar;
+					INC(p, 3); INC(j);
+					WHILE fullName[j] # 0X DO
+						relFileName[p] := fullName[j] ; INC(j); INC(p)
+					END
+				ELSE (* file is in a subdirectory of the current dir *)
+					INC(i);
+					WHILE fullName[i] # 0X DO
+						relFileName[p] := fullName[i]; INC(i); INC(p)
+					END
+				END
+			ELSIF j > 2 THEN (* first part of directories do match *)
+				k := j; i := j+1;
 				WHILE workPath[k] # 0X DO
-					IF workPath[k] = PathChar THEN
-						relFileName[p]:= "."; relFileName[p+1] := "."; relFileName[p+2] := PathChar; INC(p, 3)
+					IF workPath[k] = WinPathChar THEN
+						relFileName[p] := "."; relFileName[p+1] := "."; relFileName[p+2] := WinPathChar; INC(p, 3)
 					END;
 					INC(k)
 				END;
-				INC(j);
-				WHILE fileName[j] # 0X DO
-					relFileName[p] := fileName[j]; INC(j); INC(p)
-				END;
+				WHILE fullName[i] # 0X DO
+					relFileName[p] := fullName[i]; INC(i); INC(p)
+				END
 			ELSE (* only drive letters match *)
 				i := j;
-				WHILE fileName[i] # 0X DO
-				relFileName[p] := fileName[i]; INC(i); INC(p)
+				WHILE fullName[i] # 0X DO
+					relFileName[p] := fullName[i]; INC(i); INC(p)
 				END
-			END
-		ELSE (* file is in a subdirectory of the current dir *)
-			INC(i);
-			WHILE fileName[i] # 0X DO
-				relFileName[p] := fileName[i]; INC(i); INC(p)
-			END
-		END;
-		relFileName[p] := 0X
-	END
-END RelFileName;
-
-PROCEDURE InitDirectories;
-	VAR
-		SysDir, path, current: Path;
-		ret: LONGINT;
-		i, j, dir, nofdirs: INTEGER;
-		msg: ARRAY 128 OF CHAR;
-		dirs: ARRAY 256 OF CHAR;
-		done: BOOLEAN;
-
-		PROCEDURE Loaded(path: ARRAY OF CHAR): BOOLEAN;
-		VAR k: INTEGER;
-		BEGIN
-			FOR k := 0 TO dir-1 DO
-				IF (Dir[k] # NIL) & Match(Dir[k].path, path) THEN RETURN TRUE END
 			END;
-			RETURN FALSE
-		END Loaded;
+			relFileName[p] := 0X
+		END;
+		Kernel32.LeaveCriticalSection(S.ADR(moduleCS));
+		ConvertChar(relFileName, WinPathChar, pathChar)
+	END RelFileName;
 
-		PROCEDURE Load(VAR path: Path);
-		BEGIN
-			IF path # "" THEN ExpandPath(path, path);
-				IF (path # "") & ~Loaded(path) THEN
-					msg := "Reading Directory "; Append(msg, path); ShowMsg(S.ADR(msg));
-					OpenDirectory(path, Dir[dir], TRUE);
-					IF Dir[dir] # NIL THEN INC(dir) END;
-				END
+(** Get the current directory. *)
+	PROCEDURE GetWorkingDirectory*(VAR path: ARRAY OF CHAR);
+		VAR ret, err: LONGINT;
+	BEGIN
+		Kernel32.EnterCriticalSection(S.ADR(moduleCS));
+		ret := Kernel32.GetCurrentDirectory(LEN(workPath), S.ADR(workPath));
+		IF ret <= 0 THEN
+			err := Kernel32.GetLastError(); Kernel32.LeaveCriticalSection(S.ADR(moduleCS)); HALT(99)
+		END;
+		COPY(workPath, path);
+		Kernel32.LeaveCriticalSection(S.ADR(moduleCS));
+		ConvertChar(path, WinPathChar, pathChar)
+	END GetWorkingDirectory;
+
+(** Change to directory path. *)
+	PROCEDURE ChangeDirectory*(path: ARRAY OF CHAR; VAR done: BOOLEAN);
+		VAR ret, err: LONGINT;
+	BEGIN
+		ConvertChar(path, pathChar, WinPathChar);
+		Kernel32.EnterCriticalSection(S.ADR(moduleCS));
+		ret := Kernel32.SetCurrentDirectory(S.ADR(path));
+		done := ret # Kernel32.False;
+		IF ret = Kernel32.False THEN
+			err := Kernel32.GetLastError()
+		ELSE
+			ret := Kernel32.GetCurrentDirectory(LEN(workPath), S.ADR(workPath));
+			IF ret <= 0 THEN
+				err := Kernel32.GetLastError(); Kernel32.LeaveCriticalSection(S.ADR(moduleCS)); HALT(99)
 			END
-		END Load;
-		
-BEGIN
-	(* get number of directories in registry section [System] *)
-	Registry.Get("System", "Directories", dirs);
-	nofdirs := 0; i := 0;
-	WHILE dirs[i] # 0X DO
-		IF dirs[i] = ";" THEN INC(nofdirs) END;
-		INC(i);
-	END;
-	IF (i > 0) & (dirs[i-1] # ";") THEN INC(nofdirs) END;
-	(* allocate directory objects *)
-	NEW(Dir, nofdirs + 1 (*system*) + NofCachedDirs); (* all Dir[i] = NIL *)
-	
-	(* initialize System Directory *)
-	ret := Kernel32.GetModuleFileName(Kernel32.NULL, S.ADR(SysDir), PathLen);
-	i := 0; j := 0;
-	WHILE SysDir[i] # 0X DO
-		IF SysDir[i] = "\" THEN
-			j := i
 		END;
-		INC(i)
-	END;
-	SysDir[j] := 0X;
-	Caps(SysDir); Load(SysDir);
-	
-	(* initialize current directory *)
-	ret := Kernel32.GetCurrentDirectory(PathLen, S.ADR(path)); Caps(path);
-	msg := "Reading Directory "; Append(msg, path); ShowMsg(S.ADR(msg));
-	CurrentDir := ThisDirectory(path);
+		Kernel32.LeaveCriticalSection(S.ADR(moduleCS))
+	END ChangeDirectory;
 
-	(* initialize search path *)
-	ret := Kernel32.GetCurrentDirectory(PathLen, S.ADR(current));
-	done := Kernel32.SetCurrentDirectory(S.ADR(SysDir)) # Kernel32.False;
-	i := 0; j := 0; dir := 0;
-	WHILE dirs[i] # 0X DO
-		IF (dirs[i] = ";") THEN
-			path[j] := 0X; j := 0; Load(path)
-		ELSIF dirs[i] > " " THEN
-			path[j] := dirs[i]; INC(j)
+(** Create a new directory. *)
+	PROCEDURE CreateDirectory*(path: ARRAY OF CHAR; VAR done: BOOLEAN);
+		VAR ret, err: LONGINT;
+	BEGIN
+		ConvertChar(path, pathChar, WinPathChar);
+		Kernel32.EnterCriticalSection(S.ADR(moduleCS));
+		ret := Kernel32.CreateDirectory(S.ADR(path), Kernel32.NULL);
+		IF ret = Kernel32.False THEN
+			err := Kernel32.GetLastError()
 		END;
-		INC(i)
-	END;
-	path[j] := 0X;
-	Load(path);
-	done := Kernel32.SetCurrentDirectory(S.ADR(current)) # Kernel32.False;
-	Registry.Set("SystemInfo", "FileSystem", "FAT");
-	Registry.Set("SystemInfo", "HostFilenamePrefix", "_");
-	Kernel.InstallQ(Kernel.quitQ, WriteFileDirs);
-END InitDirectories;
+		Kernel32.LeaveCriticalSection(S.ADR(moduleCS));
+		done := ret # Kernel32.False
+	END CreateDirectory;
+
+(** Delete directory path. *)
+	PROCEDURE DeleteDirectory*(path: ARRAY OF CHAR; VAR done: BOOLEAN);
+		VAR ret, err: LONGINT;
+	BEGIN
+		ConvertChar(path, pathChar, WinPathChar);
+		Kernel32.EnterCriticalSection(S.ADR(moduleCS));
+		ret := Kernel32.RemoveDirectory(S.ADR(path));
+		IF ret = Kernel32.False THEN
+			err := Kernel32.GetLastError()
+		END;
+		done := ret # Kernel32.False;
+		ret := Kernel32.GetCurrentDirectory(LEN(workPath), S.ADR(workPath));
+		IF ret <= 0 THEN
+			err := Kernel32.GetLastError(); Kernel32.LeaveCriticalSection(S.ADR(moduleCS)); HALT(99)
+		END;
+		Kernel32.LeaveCriticalSection(S.ADR(moduleCS))
+	END DeleteDirectory;
+
+(** Get the directory for temporary files. *)
+	PROCEDURE GetTempDirectory*(VAR path: ARRAY OF CHAR);
+	BEGIN
+		COPY(tempPath, path);
+		ConvertChar(path, WinPathChar, pathChar)
+	END GetTempDirectory;
+
+(** Compare two filenames. *)
+	PROCEDURE SameName*(VAR a, b: ARRAY OF CHAR): BOOLEAN;
+		VAR i, j: LONGINT;
+	BEGIN
+		i := 0; j := 0;
+		WHILE (CAP(a[i]) = CAP(b[j])) & (a[i] # 0X) & (b[j] # 0X) DO
+			INC(i); INC(j)
+		END;
+		RETURN (a[i] = 0X) & (b[j] = 0X)
+	END SameName;
+
+(** Enumerate files. The detail flag indicates if time, date and size
+must be calculated. When
+	path = "."	=> enumerate files in current directory
+	path = ""	=> enumerate files in the search path
+	path = ?	=> enumerate files in the directory ?
+	
+	Directories are always returned independent of the pattern specified. The only wildcard allowed is *. *)
+	PROCEDURE EnumerateFiles*(path, pattern: ARRAY OF CHAR; detail: BOOLEAN; enum: FileEnumerator);
+		VAR
+			curPath: FileName;
+			ret, err, i, j: LONGINT;
+		PROCEDURE EnumeratePath();
+			VAR
+				i, j, h, t, d: LONGINT;
+				FD: Kernel32.FindData;
+				ft: Kernel32.FileTime;
+				st: Kernel32.SystemTime;
+		BEGIN
+			i := 0;
+			WHILE curPath[i] #  0X DO
+				INC(i)
+			END;
+			IF curPath[i-1] # WinPathChar THEN
+				curPath[i] := WinPathChar; INC(i)
+			END;
+			curPath[i] := 0X; j := i-1;
+			h := 0;
+			WHILE pattern[h] # 0X DO
+				curPath[i] := pattern[h]; INC(i); INC(h)
+			END;
+			IF h = 0 THEN
+				curPath[i] := "*"; INC(i); curPath[i] := "."; INC(i); curPath[i] := "*"; INC(i)
+			END;
+			curPath[i] := 0X;
+			h := Kernel32.FindFirstFile(S.ADR(curPath), S.ADR(FD)); curPath[j] := 0X; ConvertChar(curPath, WinPathChar, pathChar);
+			IF h # Kernel32.InvalidHandleValue THEN
+				t := 0; d := 0;
+				REPEAT
+					IF detail THEN
+						ret := Kernel32.FileTimeToLocalFileTime(S.ADR(FD.lastWrite), S.ADR(ft));
+						ret := Kernel32.FileTimeToSystemTime(S.ADR(ft), S.ADR(st));
+						IF ret = Kernel32.False THEN
+							err := Kernel32.GetLastError();
+							d := 0; t := 0
+						ELSE
+							d := LONG(st.year-1900)*200H + LONG(st.month)*20H + LONG(st.day);
+							t := LONG(st.hour)*1000H + LONG(st.min)*40H + LONG(st.sec)
+						END
+					END;
+					IF (S.VAL(SET, FD.fileAttrs) * S.VAL(SET, Kernel32.FileAttributeDirectory)) # S.VAL(SET, S.VAL(SET, Kernel32.FileAttributeDirectory)) THEN
+						enum(curPath, FD.name, t, d, FD.sizeLow, FALSE)
+					END;
+					i := Kernel32.FindNextFile(h, S.ADR(FD))
+				UNTIL i = Kernel32.False;
+				i := Kernel32.FindClose(h)
+			END;
+			curPath[j] := pathChar; i := j+1;
+			curPath[i] := "*"; INC(i); curPath[i] := 0X; ConvertChar(curPath, pathChar, WinPathChar);
+			h := Kernel32.FindFirstFile(S.ADR(curPath), S.ADR(FD)); curPath[j] := 0X; ConvertChar(curPath, WinPathChar, pathChar);
+			IF h # Kernel32.InvalidHandleValue THEN
+				t := 0; d := 0;
+				REPEAT
+					IF detail THEN
+						ret := Kernel32.FileTimeToSystemTime(S.ADR(FD.lastWrite), S.ADR(st));
+						IF ret = Kernel32.False THEN
+							err := Kernel32.GetLastError();
+							d := 0; t := 0
+						ELSE
+							d := LONG(st.year-1900)*200H + LONG(st.month)*20H + LONG(st.day);
+							t := LONG(st.hour)*1000H + LONG(st.min)*40H + LONG(st.sec)
+						END
+					END;
+					IF (S.VAL(SET, FD.fileAttrs) * S.VAL(SET, Kernel32.FileAttributeDirectory)) = S.VAL(SET, S.VAL(SET, Kernel32.FileAttributeDirectory)) THEN
+						IF (FD.name # "..") & (FD.name # ".") THEN
+							enum(curPath, FD.name, t, d, FD.sizeLow, TRUE)
+						END
+					END;
+					i := Kernel32.FindNextFile(h, S.ADR(FD))
+				UNTIL i = Kernel32.False;
+				i := Kernel32.FindClose(h)
+			END
+		END EnumeratePath;
+	BEGIN
+		IF enum = NIL THEN RETURN END;
+		Kernel32.EnterCriticalSection(S.ADR(moduleCS));
+		IF path = "." THEN
+			COPY(workPath, curPath);
+			Kernel32.LeaveCriticalSection(S.ADR(moduleCS));
+			EnumeratePath()
+		ELSIF path = "" THEN
+			COPY(workPath, curPath);
+			Kernel32.LeaveCriticalSection(S.ADR(moduleCS));
+			EnumeratePath();
+			Kernel32.EnterCriticalSection(S.ADR(moduleCS));
+			i := 0; j := 0;
+			WHILE searchPath[i] # 0X DO
+				IF searchPath[i] # ";" THEN
+					curPath[j] := searchPath[i]; INC(j)
+				ELSE
+					curPath[j] := 0X;
+					IF (j > 0) & ~SameName(curPath, workPath) THEN
+						Kernel32.LeaveCriticalSection(S.ADR(moduleCS));
+						EnumeratePath();
+						Kernel32.EnterCriticalSection(S.ADR(moduleCS))
+					END;
+					j := 0
+				END;
+				INC(i)
+			END;
+			curPath[j] := 0X;
+			IF (j > 0) & ~SameName(curPath, workPath) THEN
+				Kernel32.LeaveCriticalSection(S.ADR(moduleCS));
+				EnumeratePath()
+			ELSE
+				Kernel32.LeaveCriticalSection(S.ADR(moduleCS))
+			END
+		ELSE
+			COPY(path, curPath); ConvertChar(curPath, pathChar, WinPathChar);
+			Kernel32.LeaveCriticalSection(S.ADR(moduleCS));
+			EnumeratePath()
+		END
+	END EnumerateFiles;
+
+	PROCEDURE EnumerateSearchPaths*(enum: PathEnumerator);
+		VAR
+			ret, err, j, k: LONGINT;
+			path: FileName;
+		PROCEDURE EnumDir();
+		BEGIN
+			IF k > 0 THEN
+				path[k] := 0X;
+				ret := Kernel32.SetCurrentDirectory(S.ADR(path));
+				IF ret # Kernel32.False THEN
+					ret := Kernel32.GetCurrentDirectory(LEN(path), S.ADR(path));
+					IF ret <= 0 THEN
+						err := Kernel32.GetLastError(); Kernel32.LeaveCriticalSection(S.ADR(moduleCS)); HALT(99)
+					END;
+					ConvertChar(path, WinPathChar, pathChar);
+					enum(path)
+				ELSE
+					err := Kernel32.GetLastError(); Kernel32.LeaveCriticalSection(S.ADR(moduleCS)); HALT(99)
+				END;
+				ret := Kernel32.SetCurrentDirectory(S.ADR(workPath));
+				k := 0
+			END
+		END EnumDir;
+	BEGIN
+		IF enum = NIL THEN RETURN END;
+		Kernel32.EnterCriticalSection(S.ADR(moduleCS));
+		COPY(workPath, path);
+		ConvertChar(path, WinPathChar, pathChar);
+		enum(path);
+		k := 0; j := 0;
+		WHILE searchPath[j] # 0X DO
+			IF (searchPath[j] = ";") OR (searchPath[j] < " ") THEN
+				EnumDir()
+			ELSE
+				path[k] := searchPath[j]; INC(k)
+			END;
+			INC(j)
+		END;
+		EnumDir();
+		Kernel32.LeaveCriticalSection(S.ADR(moduleCS))
+	END EnumerateSearchPaths;
+
+	PROCEDURE CheckName*(name: ARRAY OF CHAR): BOOLEAN;
+		VAR
+			fullName: FileName;
+			ret, err, i: LONGINT;
+			ch: CHAR;
+	BEGIN
+		ConvertChar(name, pathChar, WinPathChar);
+		Kernel32.EnterCriticalSection(S.ADR(moduleCS));
+		ret := Kernel32.GetFullPathName(S.ADR(name), LEN(fullName), S.ADR(fullName), i);
+		IF ret <= 0 THEN
+			err := Kernel32.GetLastError(); Kernel32.LeaveCriticalSection(S.ADR(moduleCS)); RETURN FALSE
+		ELSIF ~CheckPath(fullName) THEN
+			Kernel32.LeaveCriticalSection(S.ADR(moduleCS)); RETURN FALSE
+		ELSIF i # Kernel32.NULL THEN
+			i := i-S.ADR(fullName);
+			fullName[i-1] := 0X; ch := fullName[i];
+			WHILE ch # 0X DO
+				IF ~( ((CAP(ch) >= "A") & (CAP(ch) <= "Z"))  OR  ((ch >= "0") & (ch <= "9"))  OR
+						(ch = ".") OR (ch = "_") OR (ch = "-") ) THEN Kernel32.LeaveCriticalSection(S.ADR(moduleCS)); RETURN FALSE
+				END;
+				INC(i); ch := fullName[i]
+			END;
+			Kernel32.LeaveCriticalSection(S.ADR(moduleCS)); RETURN TRUE
+		ELSE
+			Kernel32.LeaveCriticalSection(S.ADR(moduleCS)); RETURN FALSE
+		END
+	END CheckName;
+
+	PROCEDURE *Shutdown();
+	BEGIN
+		Kernel32.DeleteCriticalSection(S.ADR(moduleCS))
+	END Shutdown;
+
+	PROCEDURE Init();
+		VAR
+			ret, err, i, j, k: LONGINT;
+			dirs: ARRAY 4*MaxName OF CHAR;
+			dir, sysPath: FileName;
+		PROCEDURE AddDir();
+		BEGIN
+			IF k > 0 THEN
+				dir[k] := 0X; ConvertChar(dir, PathChar, WinPathChar);
+				ret := Kernel32.SetCurrentDirectory(S.ADR(sysPath));
+				ret := Kernel32.SetCurrentDirectory(S.ADR(dir));
+				IF ret # Kernel32.False THEN
+					ret := Kernel32.GetCurrentDirectory(LEN(dir), S.ADR(dir));
+					IF ret <= 0 THEN
+						err := Kernel32.GetLastError(); HALT(99)
+					END;
+					IF dir # workPath THEN
+						searchPath[i] := ";"; INC(i);
+						k := 0;
+						WHILE dir[k] # 0X DO
+							searchPath[i] := dir[k]; INC(i); INC(k)
+						END
+					END
+				ELSE
+					Console.Str(dir); Console.Str(" not a vaild directory"); Console.Ln()
+				END;
+				k := 0
+			END
+		END AddDir;
+	BEGIN
+		Kernel32.InitCriticalSection(S.ADR(moduleCS));
+		Kernel32.EnterCriticalSection(S.ADR(moduleCS));
+		Kernel.InstallQ(Kernel.quitQ, Shutdown);
+		PathChar := pathChar;
+		ret := Kernel32.GetCurrentDirectory(LEN(workPath), S.ADR(workPath));
+		IF ret <= 0 THEN
+			err := Kernel32.GetLastError(); HALT(99)
+		END;
+		Registry.GetKeyValue(Registry.CurrentUser, Registry.oberonSystem, "Files", sysPath);
+		IF Registry.res = Registry.Done THEN
+			ret := Kernel32.SetCurrentDirectory(S.ADR(sysPath));
+			IF ret # Kernel32.False THEN
+				ret := Kernel32.GetCurrentDirectory(LEN(sysPath), S.ADR(sysPath))
+			END
+		ELSE
+			ret := Kernel32.False
+		END;
+		IF ret = Kernel32.False THEN
+			ret := Kernel32.GetModuleFileName(0, S.ADR(sysPath), MaxName);
+			i := 0; j := -1;
+			WHILE sysPath[i] # 0X DO
+				IF sysPath[i] = WinPathChar THEN
+					j := i
+				END;
+				INC(i)
+			END;
+			i := j+1; sysPath[i] := 0X;
+			COPY(sysPath, searchPath)
+		ELSE
+			i := 0;
+			WHILE sysPath[i] # 0X DO
+				searchPath[i] := sysPath[i]; INC(i)
+			END;
+			searchPath[i] := 0X
+		END;
+		Registry.GetKeyValue(Registry.CurrentUser, Registry.oberonSystem, "Directories", dirs);
+		IF Registry.res # Registry.Done THEN
+			dirs := "system;obj;src;apps;docu;resource"
+		END;
+		k := 0; j := 0;
+		WHILE dirs[j] # 0X DO
+			IF (dirs[j] = ";") OR (dirs[j] < " ") THEN
+				AddDir()
+			ELSE
+				dir[k] := dirs[j]; INC(k)
+			END;
+			INC(j)
+		END;
+		AddDir();
+		searchPath[i] := 0X;
+		IF Registry.res # Registry.Done THEN
+			Registry.SetKeyValue(Registry.CurrentUser, Registry.oberonSystem, "Directories", searchPath)
+		END;
+		Registry.GetKeyValue(Registry.CurrentUser, Registry.oberonSystem, "Temp", tempPath);
+		IF Registry.res = Registry.Done THEN
+			ConvertChar(tempPath, PathChar, WinPathChar);
+			ret := Kernel32.SetCurrentDirectory(S.ADR(sysPath));
+			ret := Kernel32.SetCurrentDirectory(S.ADR(tempPath));
+			IF ret # Kernel32.False THEN
+				ret := Kernel32.GetCurrentDirectory(LEN(tempPath), S.ADR(tempPath))
+			END
+		ELSE
+			ret := Kernel32.False
+		END;
+		IF ret = Kernel32.False THEN
+			ret := Kernel32.GetTempPath(LEN(tempPath), S.ADR(tempPath))
+		END;
+		Registry.GetKeyValue(Registry.CurrentUser, Registry.oberonSystem, "Work", dir);
+		IF (Registry.res = Registry.Done) & (dir # "") THEN
+			ConvertChar(dir, PathChar, WinPathChar);
+			ret := Kernel32.SetCurrentDirectory(S.ADR(sysPath));
+			ret := Kernel32.SetCurrentDirectory(S.ADR(dir));
+			IF ret # Kernel32.False THEN
+				ret := Kernel32.GetCurrentDirectory(LEN(workPath), S.ADR(workPath))
+			END
+		END;
+		ret := Kernel32.SetCurrentDirectory(S.ADR(workPath));
+		Registry.OberonPath("SystemInfo", sysPath);
+		Registry.SetKeyValue(Registry.CurrentUser, sysPath, "FileSystem", "VFAT/NTFS");
+		Registry.SetKeyValue(Registry.CurrentUser, sysPath, "HostFilenamePrefix", "");
+		Kernel32.LeaveCriticalSection(S.ADR(moduleCS))
+	END Init;
 
 BEGIN
-	DOSFilePrefix := "_";
-	PathChar := "/";
-	
-	Kernel.GetAdr(0, "ShowMsg", S.VAL(LONGINT, ShowMsg));
-	Kernel.GetAdr(0, "HideMsg", S.VAL(LONGINT, HideMsg));
-
-	Tag := OberonFileTag;
-	InitDirectories;
+	Init()
 END FileDir.
 
 (** Remarks:
 
-1. Newly created files are always written in the working directory when no absolute filename is specified. Opening a file searches in the current directory, followed by each directory in the path in return. Each directory contains a translation file of Oberon filenames to DOS filenames. When the translation file is missing, a new translation is built by reading the file headers of each file in the directory. The file headers contain the Oberon name of a file (the headers are hidden from Files clients). Copying or deleting files from Oberon directories from outside the Oberon system is detected when Oberon tries to access a directory; this causes the translation table to be reconstructed.
+1. Newly created files are always written in the working directory when no absolute filename is specified. Opening a file
+searches in the current directory, followed by each directory in the path in return.
 
- 2. The search path for files is specified by the Directories key in the System section of the Registry. It should be a list of absolute path names, separated by semicolons.
- 
- 3. The Directory record uses \ as directory separator in the exported string. ThisDirectory, GetWorkingDirectory, ChangeDirectory, CreateDirectory, EnumerateFiles and DeleteDirectory use or return / as directory separator.
- *)
+2. The search path for files is specified by the Directories key in the System section of the Registry. *)

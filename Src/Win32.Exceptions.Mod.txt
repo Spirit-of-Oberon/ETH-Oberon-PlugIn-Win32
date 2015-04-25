@@ -1,0 +1,314 @@
+﻿(* OBERON System 3, Release 2.3.
+
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE Exceptions; (** non-portable / source: Win32.Exceptions.Mod *)	(** ejz  *)
+	IMPORT SYSTEM, Kernel32, Kernel, Modules, Strings, Threads, Types, Exceptions0;
+
+	CONST
+		Ignore* = 0; Forward* = 1; Fail* = 2;
+
+	TYPE
+		Exception* = RECORD
+			exc: Kernel32.ExceptionRecord;
+			cont: Kernel32.Context;
+			t: Threads.Thread
+		END;
+
+		SysException* = RECORD (Exception)
+		END;
+
+		UserException* = RECORD (Exception)
+		END;
+
+		Handler = PROCEDURE (VAR e: Exception): LONGINT;
+		LocalHandler = PROCEDURE (ebp: LONGINT; VAR e: Exception): LONGINT;
+
+	VAR
+		moduleCS: Threads.Mutex;
+
+	PROCEDURE GetDescription*(VAR e: Exception; VAR desc: ARRAY OF CHAR);
+		VAR ebp: LONGINT; type: Types.Type; arg: ARRAY 16 OF CHAR;
+	BEGIN
+		IF e IS SysException THEN
+		IF e.exc.ExceptionCode = Kernel32.ExceptionGuardPage THEN
+			COPY("guard page violation", desc)
+		ELSIF e.exc.ExceptionCode = Kernel32.ExceptionBreakPoint THEN
+			IF e.cont.Eax = 1 THEN
+				COPY("heap overflow", desc)
+			ELSIF e.cont.Eax = 3 THEN
+				COPY("breakpoint", desc)
+			ELSIF e.cont.Eax = 15 THEN
+				COPY("invalid case in WITH statement", desc)
+			ELSIF e.cont.Eax = 16 THEN
+				COPY("invalid case in CASE statement", desc)
+			ELSIF e.cont.Eax = 17 THEN
+				COPY("function procedure without RETURN", desc)
+			ELSIF e.cont.Eax = 18 THEN
+				COPY("type guard check", desc)
+			ELSIF e.cont.Eax = 19 THEN
+				COPY("implicit type guard check in record assignment", desc)
+			ELSIF e.cont.Eax = 21 THEN
+				COPY("index out of range", desc)
+			ELSIF e.cont.Eax = 22 THEN
+				COPY("dimension trap", desc)
+			ELSIF e.cont.Eax = 23 THEN
+				COPY("Exceptions.Raise", desc)
+			ELSIF e.cont.Eax = 24 THEN
+				COPY("abort from keyboard", desc)
+			ELSE
+				Strings.IntToStr(e.cont.Eax, arg);
+				COPY("HALT / ASSERT failed ", desc);
+				Strings.Append(desc, arg)
+			END
+		ELSIF e.exc.ExceptionCode = Kernel32.ExceptionSingleStep THEN
+			COPY("single step", desc)
+		ELSIF e.exc.ExceptionCode = Kernel32.ExceptionAccessViolation THEN
+			COPY("access violation", desc)
+		ELSIF e.exc.ExceptionCode = Kernel32.ExceptionIllegalInstruction THEN
+			COPY("illegal instruction", desc)
+		ELSIF e.exc.ExceptionCode = Kernel32.ExceptionArrayBoundsExceeded THEN
+			COPY("index out of range", desc)
+		ELSIF e.exc.ExceptionCode = Kernel32.ExceptionFltDenormalOperand THEN
+			COPY("FPU: denormal operand", desc)
+		ELSIF e.exc.ExceptionCode = Kernel32.ExceptionFltDivideByZero THEN
+			COPY("FPU: divide by zero", desc)
+		ELSIF e.exc.ExceptionCode = Kernel32.ExceptionFltInexactResult THEN
+			COPY("FPU: inexact result", desc)
+		ELSIF e.exc.ExceptionCode = Kernel32.ExceptionFltInvalidOperation THEN
+			COPY("FPU: invalid operation", desc)
+		ELSIF e.exc.ExceptionCode = Kernel32.ExceptionFltOverflow THEN
+			COPY("FPU: overflow", desc)
+		ELSIF e.exc.ExceptionCode = Kernel32.ExceptionFltStackCheck THEN
+			COPY("FPU: stack check", desc)
+		ELSIF e.exc.ExceptionCode = Kernel32.ExceptionFltUndeflow THEN
+			COPY("FPU: undeflow", desc)
+		ELSIF e.exc.ExceptionCode = Kernel32.ExceptionIntDivideByZero THEN
+			COPY("integer division by zero", desc)
+		ELSIF e.exc.ExceptionCode = Kernel32.ExceptionIntOverflow THEN
+			COPY("integer overflow", desc)
+		ELSIF e.exc.ExceptionCode = Kernel32.ExceptionPrivInstruction THEN
+			COPY("privileged instruction", desc)
+		ELSIF e.exc.ExceptionCode = Kernel32.ExceptionStackOverflow THEN
+			COPY("stack overflow", desc)
+		ELSE
+			Strings.IntToStr(e.exc.ExceptionCode, arg);
+			COPY("exception ", desc);
+			Strings.Append(desc, arg)
+		END
+		ELSE
+			SYSTEM.GETREG(SYSTEM.EBP, ebp); (* get type from stack *)
+			Exceptions0.Get(ebp+12, ebp);
+			Exceptions0.Get(ebp-4, type);
+			COPY(type.module.name, desc);
+			Strings.AppendCh(desc, ".");
+			Strings.Append(desc, type.name)
+		END
+	END GetDescription;
+
+	PROCEDURE FindHandler(mod: Modules.Module; pc: LONGINT; VAR handler: Handler; VAR slNeeded: BOOLEAN);
+		VAR
+			refs: Exceptions0.Bytes; type: Types.Type;
+			i, m, t, level, tdadr, proc: LONGINT; cand, sl: BOOLEAN; ch: CHAR;
+	BEGIN
+		handler := NIL;
+		IF mod # NIL THEN
+			refs := SYSTEM.VAL(Exceptions0.Bytes, mod.refs);
+			DEC(pc, SYSTEM.ADR(mod.code[0]));
+			m := LEN(refs^); proc := -1; level := -1;
+			i := 0; ch := refs[i]; INC(i);
+			WHILE (i < m) & ((ch = 0F8X) OR (ch = 0F9X)) DO	(* proc *)
+				Exceptions0.GetNum(refs, i, t);	(* pofs *)
+				IF t > pc THEN	(* previous procedure was the one *)
+					ch := 0X	(* stop search *)
+				ELSE	(* ~found *)
+					proc := t;	(* remember this pofs *)
+					IF ch = 0F9X THEN
+						ch := refs[i]; INC(i); (* n pars *)
+						ch := refs[i]; INC(i); (* ret type *)
+						level := ORD(refs[i]); INC(i); (* proc level *)
+						ch := refs[i]; INC(i) (* sl needed *)
+					ELSE
+						level := -1
+					END;
+					REPEAT ch := refs[i]; INC(i) UNTIL ch = 0X;	(* pname *)
+					IF i < m THEN
+						ch := refs[i]; INC(i);	(* 1X | 3X | 0F8X *)
+						WHILE (i < m) & (ch >= 1X) & (ch <= 3X) DO	(* var *)
+							ch := refs[i]; INC(i);	(* type *)
+							IF ch >= 81X THEN
+								Exceptions0.GetNum(refs, i, t)	(* dim *)
+							ELSIF (ch = CHR(10H+4)) OR (ch = CHR(10H+13)) THEN
+								Exceptions0.GetNum(refs, i, t)	(* tdadr *)
+							END;
+							Exceptions0.GetNum(refs, i, t);	(* vofs *)
+							REPEAT ch := refs[i]; INC(i) UNTIL ch = 0X;	(* vname *)
+							IF i < m THEN ch := refs[i]; INC(i) END	(* 1X | 3X | 0F8X *)
+						END
+					END
+				END
+			END;
+			IF proc = -1 THEN proc := t END;
+			IF (level = -1) & (proc # -1) THEN (* module body *)
+				proc := MAX(LONGINT) (* any pc is ok *)
+			END;
+			INC(level);
+			i := 0; ch := refs[i]; INC(i);
+			WHILE (i < m) & ((ch = 0F8X) OR (ch = 0F9X)) DO	(* proc *)
+				Exceptions0.GetNum(refs, i, pc);	(* pofs *)
+				IF ch = 0F9X THEN
+					ch := refs[i]; INC(i); (* n pars *)
+					cand := ORD(ch) = 1;
+					ch := refs[i]; INC(i); (* ret type *)
+					cand := cand & (ORD(ch) = 6); (* LInt *)
+					ch := refs[i]; INC(i); (* proc level *)
+					cand := cand & (ORD(ch) = level);
+					ch := refs[i]; INC(i); (* sl needed *)
+					sl := ch # 0X;
+					cand := cand & (pc < proc)
+				ELSE
+					cand := FALSE
+				END;
+				REPEAT ch := refs[i]; INC(i) UNTIL ch = 0X;	(* pname *)
+				IF i < m THEN
+					ch := refs[i]; INC(i);	(* 1X | 3X | 0F8X *)
+					WHILE (i < m) & (ch >= 1X) & (ch <= 3X) DO	(* var *)
+						ch := refs[i]; INC(i);	(* type *)
+						IF ch >= 81X THEN
+							Exceptions0.GetNum(refs, i, t)	(* dim *)
+						ELSIF (ch = CHR(10H+4)) OR (ch = CHR(10H+13)) THEN
+							Exceptions0.GetNum(refs, i, tdadr);
+							IF cand THEN
+								IF (tdadr >= 0) & (tdadr <= 1024*1024) THEN
+									Exceptions0.Get(mod.sb+tdadr, tdadr)
+								END;
+								Exceptions0.Get(tdadr-4, type);
+								IF (type.module.name = "Exceptions") & (type.name = "Exception") THEN
+									handler := SYSTEM.VAL(Handler, SYSTEM.ADR(mod.code[0])+pc);
+									slNeeded := sl
+								END
+							END
+						END;
+						Exceptions0.GetNum(refs, i, t);	(* vofs *)
+						REPEAT ch := refs[i]; INC(i) UNTIL ch = 0X;	(* vname *)
+						IF i < m THEN ch := refs[i]; INC(i) END	(* 1X | 3X | 0F8X *)
+					END
+				END
+			END
+		END
+	END FindHandler;
+
+	PROCEDURE Dispatch(VAR e: Exception): LONGINT;
+		VAR
+			pc, bp, lastbp, ret: LONGINT;
+			mod: Modules.Module;
+			handler: Handler; lHandler: LocalHandler;
+			slNeeded: BOOLEAN;
+	BEGIN
+		pc := e.exc.ExceptionAddress; bp := e.cont.Ebp;
+		IF pc = 0 THEN (* assume call of procedure variable with value NIL *)
+			Exceptions0.Get(e.cont.Esp, pc) (* get return address on top of stack *)
+		END;
+		mod := Exceptions0.GetMod(pc);
+		LOOP
+			FindHandler(mod, pc, handler, slNeeded);
+			IF handler # NIL THEN
+				IF slNeeded THEN
+					lHandler := SYSTEM.VAL(LocalHandler, handler);
+					ret := lHandler(bp, e)
+				ELSE
+					ret := handler(e)
+				END;
+				IF ret # Forward THEN RETURN ret END
+			END;
+			lastbp := bp;
+			Exceptions0.Get(bp+4, pc); Exceptions0.Get(bp, bp); (* return addr from stack *)
+			IF (bp < lastbp) OR (bp >= e.t.stackBottom) THEN (* invalid stack frame *)
+				RETURN Fail
+			END;
+			mod := Exceptions0.GetMod(pc)
+		END
+	END Dispatch;
+
+	PROCEDURE DisplayTrap(VAR e: Exception);
+		VAR e0: Exceptions0.Exception;
+	BEGIN
+		SYSTEM.MOVE(SYSTEM.ADR(e), SYSTEM.ADR(e0), SIZE(Exception));
+		GetDescription(e, e0.desc);
+		Exceptions0.displayTrap(e0)
+	END DisplayTrap;
+
+	PROCEDURE [stdcall] *ExcpFrmHandler(VAR excpRec: Kernel32.ExceptionRecord; excpFrame: Kernel32.ExcpFrmPtr; VAR context: Kernel32.Context; dispatch: LONGINT): LONGINT;
+		VAR e: SysException; ret: LONGINT;
+	BEGIN
+		Threads.Lock(moduleCS);
+		DEC(Kernel.GCenabled);
+		e.t := Threads.This();
+		SYSTEM.MOVE(SYSTEM.ADR(excpRec), SYSTEM.ADR(e.exc), SIZE(Kernel32.ExceptionRecord));
+		SYSTEM.MOVE(SYSTEM.ADR(context), SYSTEM.ADR(e.cont), SIZE(Kernel32.Context));
+		ret := Dispatch(e);
+		DisplayTrap(e);
+		INC(Kernel.GCenabled);
+		Threads.Unlock(moduleCS);
+		RETURN Kernel32.ExceptionExecuteHandler
+	END ExcpFrmHandler;
+
+	PROCEDURE Raise*(VAR e: UserException);
+	BEGIN
+		Threads.Lock(moduleCS);
+		DEC(Kernel.GCenabled);
+		e.t := Threads.This();
+		e.cont.ContextFlags := Kernel32.ContextFull; Kernel32.GetThreadContext(e.t.handle, SYSTEM.ADR(e.cont));
+		e.exc.ExceptionCode := Kernel32.ExceptionBreakPoint; e.cont.Eax := 23;
+		SYSTEM.GETREG(SYSTEM.EBP, e.cont.Ebp);
+		Exceptions0.Get(e.cont.Ebp+4, e.cont.Eip); Exceptions0.Get(e.cont.Ebp, e.cont.Ebp); (* return addr from stack *)
+		e.exc.ExceptionAddress := e.cont.Eip;
+		IF Dispatch(e) # Ignore THEN
+			DisplayTrap(e);
+			INC(Kernel.GCenabled);
+			Threads.Unlock(moduleCS);
+			Threads.Abort(e.t)
+		ELSE
+			INC(Kernel.GCenabled);
+			Threads.Unlock(moduleCS)
+		END
+	END Raise;
+
+BEGIN
+	NEW(moduleCS); Threads.Init(moduleCS);
+	Kernel32.excpFrmHandler := ExcpFrmHandler
+END Exceptions.
+
+(**
+	TYPE
+		MyException = RECORD (Exceptions.UserException)
+		END;
+
+	PROCEDURE P();
+		VAR e: MyException;
+		PROCEDURE Handler(VAR e: Exceptions.Exception): LONGINT;
+		BEGIN
+			IF e IS MyException THEN
+				...
+				RETURN Exceptions.Ignore / Forward / Fail
+			ELSE
+				RETURN Exceptions.Fail
+			END
+		END Handler;
+	BEGIN
+		...
+		Exceptions.Raise(e)
+		...
+	END P;
+*)

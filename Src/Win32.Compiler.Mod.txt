@@ -1,0 +1,318 @@
+﻿(* OBERON System 3, Release 2.3.
+
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;type=A"
+
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE Compiler; (** portable, except where noted / source: Win32.Compiler.Mod *) (* OOP2: RC, NM 6.3.89 / 12.1.94 *) (* jm 18.2.95 modified to be text viewer independant *)
+(*	code generator for Intel i386, i387/ i486 - Diplomarbeit ETH-Zürich WS 92/93
+	by Niklaus Mannhart, 87-913-117I
+	author's address: 	Himmelrich 22
+		6340 Baar, Switzerland
+		e-mail: mannhart@inf.ethz.ch	phone: +41 42 31 40 33
+
+This program is distributed in the hope that it will be useful, 
+but WITHOUT ANY WARRANTY; without even the implied warranty of 
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+
+To my parents enabling me to study at the ETH.
+
+Acknowledgements
+
+Many thanks go to my "compiler construction" teacher Marc Brandis. He had the idea of writing such a
+compiler and answered many questions during the development. Mattias Hausner, developer of the
+WinOberon System, was patiently guiding me fixing the bugs. Without his support, the compiler
+would never have been finished - It was great pleasure to work with them.
+
+Niklaus Mannhart, December 1993
+
+
+	March the 2nd 1993
+	Release 12.12.93 / Release 1.0
+	Release 12.1.94 / Release 1.1 (fixed: bugs in OOPL.LoadProc and floating point compare (OOPL.FloadCmp))
+	Release 13.3.94 / Release 1.2 (fixed: bug in OOPC.Index)
+	Release 23.6.94  / Release 1.3 (fixed: bug in OOPL.Load, OOPC.SYSgetputReg, floating point problem in OOPL.PushRegs);
+	Release 30.8.94 / 1.4 (mh fixes: OOPC.Index, OOPC.NewSys, OOPL.OutRefs)
+	Release 7.12.94 / 1.5 (fixed: OOPC.NewSys, OOPC.Convert (IntToInt)
+	Release 5.1.96 / 1.6 Object model added
+*)
+
+	IMPORT
+		Kernel, FileDir, Files, Modules, Texts, Oberon,
+		OPP := OOPP, OPB := OOPB, OPV := OOPV, OPT := OOPT, OPS := OOPS,
+		OPC := OOPC, OPL := OOPL, OPO := OOPO, OPM := OOPM, POPV := OPOPV;
+	
+	CONST
+
+		(* compiler options: *)
+		inxchk = 0;	(* index check on *)
+		ovflchk = 1;	(* overflow check on *)
+		typchk = 3;	(* type check on *)
+		ptrinit = 5;	(* pointer initialization *)
+		assert = 6;	(* assert evaluation *)
+		findpc = 7;	(* find text position of breakpc *)
+		systemchk = 8;	(* prevent compilation of modules that import SYSTEM *) (* jm *)
+		newsf = 10;	(* generation of new symbol file allowed *)
+		extsf = 11;	(* e - generation of extended symbol file allowed *)
+		warning = 12;	(* w - display warnings *)
+		update = 13;	(* u - compile only if necessary *)
+		portable = 17;
+		DefOpt = {inxchk, typchk, ptrinit, portable, assert};
+		MakeName = "OOPU";
+
+		module = 63; ident = 38;	(* symbols *)
+
+	VAR
+		W: Texts.Writer;
+
+		(* global because of the GC call *)
+		source: Texts.Text;
+		sourceR: Texts.Reader;
+		S: Texts.Scanner;
+		dpath: FileDir.FileName;
+		make*: RECORD		(** non-portable *)
+			Init*: PROCEDURE;
+			Actualize*: PROCEDURE (name: ARRAY OF CHAR; log: Texts.Text): BOOLEAN
+		END;
+
+	PROCEDURE SignOn;
+		VAR m: Modules.Module;
+	BEGIN
+		m := Modules.ThisMod(MakeName);
+		Texts.WriteString(W, "Oberon Portable Compiler / nw & rc"); Texts.WriteLn(W);
+		Texts.WriteString(W, "Intel Code Generator  / nm, tk 5.1.96"); Texts.WriteLn(W);
+		Texts.Append(Oberon.Log, W.buf)
+	END SignOn;
+
+	PROCEDURE WriteMsg(source: Texts.Reader;  log: Texts.Text);
+		VAR sym: SHORTINT;
+	BEGIN
+		Texts.WriteString(W, " compiling ");
+		OPM.Init({}, source, log); OPS.Get(sym);
+		IF sym = module THEN
+			OPS.Get(sym);
+			IF sym = ident THEN
+				IF OPM.outputPath # "" THEN
+					Texts.WriteString(W, OPM.outputPath); Texts.Write(W, FileDir.PathChar)
+				END;
+				OPS.Get(sym); Texts.WriteString(W, OPS.name);
+				IF Modules.FindMod(OPS.name) # NIL THEN Texts.WriteString(W, " (in use) ") END
+			END
+		END;
+		Texts.Append(log, W.buf)
+	END WriteMsg;
+
+	PROCEDURE Module*(source: Texts.Reader; opt: ARRAY OF CHAR; breakpc: LONGINT; log: Texts.Text; VAR error: BOOLEAN);
+		VAR 
+			extSF, newSF: BOOLEAN; options: SET;
+			p: OPT.Node; modName: OPS.Name; i: INTEGER; ch: CHAR;
+			m: Modules.Module;
+	BEGIN
+		OPS.Init(); WriteMsg(source, log);
+		options := DefOpt; i := 0;
+		REPEAT
+			ch := opt[i]; INC(i);
+			IF ch = "x" THEN options := options / {inxchk}
+			ELSIF ch = "v" THEN options := options / {ovflchk}
+			ELSIF ch = "t" THEN options := options / {typchk}
+			ELSIF ch = "s" THEN options := options / {newsf}
+			ELSIF ch = "e" THEN options := options / {extsf}
+			ELSIF ch = "p" THEN options := options / {ptrinit}
+			ELSIF ch = "a" THEN options := options / {assert}
+			ELSIF ch = "f" THEN options := options / {findpc}; options := options - {portable}
+			ELSIF ch = "w" THEN options := options / {warning}
+			ELSIF ch = "u" THEN options := options / {update}
+			ELSIF ch = "S" THEN options := options / {systemchk}
+			ELSIF ch = "P" THEN options := options + {portable}
+			ELSIF ch = "N" THEN options := options - {portable}
+			END
+		UNTIL ch = 0X;
+		OPM.Init(options, source, log);
+		IF portable IN options THEN OPB.typSize := POPV.NoTypSize ELSE OPB.typSize := OPV.TypSize END;
+		newSF := newsf IN options; extSF := extsf IN options;
+		OPP.Module(p, modName, options, systemchk IN options);
+		IF OPM.noerr THEN OPM.Begin(modName);
+			IF ~(portable IN options) THEN OPL.Init; OPV.Init(options, breakpc) END;
+			OPM.errpos := 0;
+			OPT.Export(modName, newSF, extSF);
+			IF newSF THEN OPM.LogWStr(" new symbol file")
+			ELSIF extSF THEN OPM.LogWStr(" extended symbol file")
+			END;
+			IF portable IN options THEN
+				OPM.errpos := 0;
+				IF OPM.noerr THEN POPV.Module(p) END
+			ELSE
+				OPV.AdrAndSize(OPT.topScope);
+				IF OPM.noerr THEN
+					OPM.errpos := 0;
+					OPC.Init(options);
+					OPV.Module(p);
+					IF OPM.noerr THEN
+						OPL.OutCode(modName);
+						IF OPM.noerr THEN
+							OPM.LogWStr("   "); OPM.LogWNum(OPO.pc, 1)
+							END
+						END
+				END;
+				OPL.Close
+			END;
+IF OPM.noerr THEN
+	m := Modules.modList;
+	WHILE (m # NIL) & (m.name # modName) DO m := m.link END;
+	IF m # NIL THEN
+		OPM.LogWStr(" (in use) ")
+	END
+END
+		END;
+		OPT.CloseScope; OPT.Close;
+		OPM.LogWLn; error := ~OPM.noerr;
+		Kernel.GC	(* << jm *)
+	END Module;
+	
+	PROCEDURE Compile*;
+		VAR beg, end, time: LONGINT; error, SourceCoder: BOOLEAN; ch: CHAR; defopt: ARRAY 32 OF CHAR;
+
+		PROCEDURE GetOptions(VAR options: ARRAY OF CHAR);
+			VAR i: SHORTINT;
+		BEGIN	i:=0; 
+			ch := S.nextCh; i:=0;
+			WHILE ((ch >= "0") & (ch <= "9") OR (ch >= "a") & (ch <= "z") OR (ch >= "A") & (ch <= "Z")) DO	
+				i:=0; WHILE (options[i]#ch) & (options[i]#0X) DO INC(i) END;
+				IF options[i]=0X THEN options[i]:=ch; options[i+1]:=0X END;
+				Texts.Read(S, ch)	
+			END;
+			S.nextCh := ch; Texts.Scan(S)
+		END GetOptions;
+		
+		PROCEDURE InOptions(VAR options: ARRAY OF CHAR; opt: CHAR): BOOLEAN;
+			VAR i: INTEGER;
+		BEGIN	i:=0; WHILE (options[i]#opt) & (options[i]#0X) DO INC(i) END;
+			RETURN options[i]#0X;
+		END InOptions;
+
+		PROCEDURE Do(filename: ARRAY OF CHAR; beg: LONGINT; options: ARRAY OF CHAR);
+			VAR line: INTEGER; name: ARRAY 32 OF CHAR; S1: Texts.Scanner;
+				fbeg, fend, ftime, breakpc: LONGINT; ftext: Texts.Text; u: BOOLEAN;
+		BEGIN
+			line := S.line;
+			Texts.Scan(S);
+			IF (S.line = line) & (S.class = Texts.Char) & ((S.c = Oberon.OptionChar) OR (S.c = "%")) THEN GetOptions(options) END;
+			IF InOptions(options, "f") THEN
+				LOOP
+					Oberon.GetSelection(ftext, fbeg, fend, ftime);
+					IF ftime >= 0 THEN
+						Texts.OpenScanner(S1, ftext, fbeg); Texts.Scan(S1);
+						IF S1.class = Texts.Int THEN breakpc := S1.i; EXIT END
+					END ;
+					Texts.WriteString(W, "  pc not selected"); Texts.WriteLn(W);
+					Texts.Append(Oberon.Log, W.buf); error := TRUE; RETURN
+				END
+			END;
+			u := InOptions(options, "u"); 
+			IF u & (make.Actualize#NIL) THEN u := make.Actualize(name, Oberon.Log) ELSE u := TRUE END;
+			IF u THEN 
+				Texts.OpenReader(sourceR, source, beg);
+				Module(sourceR, options, breakpc, Oberon.Log, error)
+			END
+		END Do;
+
+		PROCEDURE OpenSource(VAR name: ARRAY OF CHAR; VAR text: Texts.Text; options: ARRAY OF CHAR);	(* ejz, 19.4.95 *)
+		CONST SCTag = 011FFH;
+		VAR F: Files.File; R: Files.Rider; tag: INTEGER; cmd: ARRAY 64 OF CHAR; par: Texts.Text; pos: LONGINT;
+		BEGIN
+			OPS.Get := NIL; SourceCoder := FALSE;
+			F := Files.Old(name); par := NIL;
+			IF F # NIL THEN
+				Files.Set(R, F, 0);
+				Files.ReadInt(R, tag);
+				IF tag = SCTag THEN
+					Files.ReadString(R, cmd);
+					par := Oberon.Par.text; pos := Oberon.Par.pos;
+					NEW(Oberon.Par.text); Texts.Open(Oberon.Par.text, ""); Oberon.Par.pos := 0; Texts.WriteString(W, name);
+					Texts.Append(Oberon.Par.text, W.buf);
+					Oberon.Call(cmd, Oberon.Par, FALSE, tag);
+					Oberon.Par.text := par; Oberon.Par.pos := pos;
+					IF OPS.Get # NIL THEN SourceCoder := TRUE; Texts.Open(text, "")
+					ELSE text := NIL
+					END
+				ELSE Texts.Open(text, name)
+				END
+			ELSE text := NIL
+			END;
+			IF (par = NIL) & ((text = NIL) OR (text.len = 0)) THEN error := TRUE;
+				Texts.WriteString(W, name); Texts.WriteString(W, " not found");
+				Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
+			ELSE Do(name, 0, options)
+			END
+		END OpenSource;
+
+	BEGIN
+		error := FALSE; defopt[0] := 0X; COPY(dpath, OPM.outputPath);
+		OPS.Get := NIL; SourceCoder := FALSE;
+		Texts.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos); Texts.Scan(S);
+		IF make.Init # NIL THEN make.Init END;
+		IF (S.class = Texts.Char) & (S.c # Oberon.OptionChar) THEN
+			IF S.c = "*" THEN
+				source := Oberon.MarkedText();
+				IF source # NIL THEN Do("", 0, defopt) END
+			ELSIF S.c = "^" THEN
+				Oberon.GetSelection(source, beg, end, time);
+				IF time >= 0 THEN
+					Texts.OpenScanner(S, source, beg); Texts.Scan(S); NEW(source); 
+					IF (S.class = Texts.Char) & (S.c = Oberon.OptionChar) & (Texts.Pos(S) - S.len <= end) THEN
+						defopt[0] := 0X; GetOptions(defopt)
+					END;
+					WHILE (S.class IN {Texts.Name, Texts.String}) & (Texts.Pos(S) - S.len <= end) & ~error DO
+						OpenSource(S.s, source, defopt)	(* ejz, 19.4.95 *)
+					END
+				END
+			ELSIF S.c = "@" THEN
+				Oberon.GetSelection(source, beg, end, time);
+				IF time >= 0 THEN Do("", beg, defopt) END
+			END
+		ELSE NEW(source);
+			IF (S.class = Texts.Char) & (S.c = Oberon.OptionChar) & ~error THEN
+				defopt[0] := 0X; GetOptions(defopt)
+			END;
+			WHILE (S.class IN {Texts.Name, Texts.String}) & ~error DO
+				OpenSource(S.s, source, defopt) (* ejz, 19.4.95 *)
+			END
+		END
+	END Compile;
+
+	PROCEDURE SetDestPath*;	(** non-portable *)
+	VAR S: Texts.Scanner; beg, end, time: LONGINT; T: Texts.Text; cur: FileDir.FileName; done: BOOLEAN;
+	BEGIN
+		Texts.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos); Texts.Scan(S);
+		IF (S.class = Texts.Char) & (S.c = "^") OR (S.line # 0) THEN
+			Oberon.GetSelection(T, beg, end, time);
+			IF time >= 0 THEN Texts.OpenScanner(S, T, beg); Texts.Scan(S) END
+		END;
+		IF S.class IN {Texts.Name, Texts.String} THEN
+			Texts.WriteString(W, "Compiler.SetDestPath ");
+			FileDir.GetWorkingDirectory(cur);
+			FileDir.ChangeDirectory(S.s, done);
+			IF done THEN
+				FileDir.GetWorkingDirectory(dpath); COPY(dpath, OPM.outputPath);
+				Texts.WriteString(W, dpath)
+			ELSE
+				Texts.WriteString(W, S.s); Texts.WriteString(W, " not found")
+			END;
+			FileDir.ChangeDirectory(cur, done);
+			Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
+		END
+	END SetDestPath;
+
+BEGIN
+	Texts.OpenWriter(W); SignOn
+END Compiler.

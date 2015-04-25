@@ -1,0 +1,584 @@
+﻿(* OBERON System 3, Release 2.3.
+
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE Threads; (** non-portable / source: Win32.Threads.Mod *)	(* Threads for Oberon for Windows 95/NT, ejz,  *)
+	IMPORT SYSTEM, Kernel32, Kernel, Console, Modules, Reals, Exceptions0;
+
+	CONST
+(** Priority levels used by GetPriority & SetPriority *)
+		Low* = Kernel32.ThreadPrioBelowNormal;
+		Normal* = Kernel32.ThreadPrioNormal;
+		High* = Kernel32.ThreadPrioAboveNormal;
+		Infinite* = 0FFFFFFFFH; (** see Wait *)
+
+	TYPE
+(** Thread descriptor, used to store thread information. *)
+		Thread* = POINTER TO ThreadDesc;
+		BodyProc* = Modules.Command; (** Thread body procedure. *)
+		ThreadDesc* = RECORD (Kernel32.ObjectDesc)
+			id, prio, GCCount: LONGINT;
+			stackBottom*: Kernel32.ADDRESS;
+			name*: ARRAY 64 OF CHAR; (** Name of thread. *)
+			proc: BodyProc;
+			next: Thread;
+			cont: Kernel32.Context;
+			atomic, first: BOOLEAN;
+			safe*: BOOLEAN (** Restart the thread after a trap. *)
+		END;
+
+		EnumProc* = PROCEDURE (t: Thread);
+
+(** Base type for critical section objects. E.g. NetSystem.Connection *)
+		Mutex* = POINTER TO MutexDesc;
+		MutexDesc* = RECORD
+			cs: Kernel32.CriticalSection;
+			next: Mutex;
+			id, count: LONGINT
+		END;
+
+(** Base type for events *)
+		Event* = POINTER TO EventDesc;
+		EventDesc* = RECORD (Kernel32.ObjectDesc)
+		END;
+
+	VAR
+		hProc: LONGINT;
+		excp: Kernel32.ExcpFrm;
+		threads, aliens: Thread;
+		mtxs: Mutex;
+		oberonLoop*: Thread; (** thread executing Oberon.Loop *)
+		threaded: BOOLEAN;
+		moduleCS: Kernel32.CriticalSection;
+		win32Event*: Event;
+		quitLoop*: BOOLEAN;
+		break: ARRAY 20 OF CHAR;
+
+(** Wait for ownership of the mutex. *)
+	PROCEDURE Lock*(mtx: Mutex);
+	BEGIN
+		IF threaded THEN
+			Kernel32.EnterCriticalSection(SYSTEM.ADR(mtx.cs));
+			IF mtx.count <= 0 THEN mtx.id := Kernel32.GetCurrentThreadId() END;
+			INC(mtx.count)
+		END
+	END Lock;
+
+(** Release ownership of the mutex. *)
+	PROCEDURE Unlock*(mtx: Mutex);
+	BEGIN
+		IF threaded THEN
+			DEC(mtx.count);
+			IF mtx.count <= 0 THEN mtx.id := Kernel32.NULL END;
+			Kernel32.LeaveCriticalSection(SYSTEM.ADR(mtx.cs))
+		END
+	END Unlock;
+
+	PROCEDURE *FinalizeMutex(mtx: PTR);
+		VAR pmx, mx: Mutex;
+	BEGIN
+		WITH mtx: Mutex DO
+			pmx := NIL; mx := mtxs;
+			WHILE mx # mtx DO
+				pmx := mx; mx := mx.next
+			END;
+			IF pmx # NIL THEN
+				pmx.next := mtx.next
+			ELSIF mtx = mtxs THEN
+				mtxs := mtx.next
+			ELSE
+				HALT(99)
+			END;
+			mtx.id := Kernel32.NULL; mtx.count := 0; mtx.next := NIL;
+			Kernel32.DeleteCriticalSection(SYSTEM.ADR(mtx.cs))
+		END
+	END FinalizeMutex;
+
+(** Initialize a new mutex. *)
+	PROCEDURE Init*(mtx: Mutex);
+		VAR mx: Mutex;
+	BEGIN
+		mx := mtxs;
+		WHILE (mx # NIL) & (mx # mtx) DO
+			mx := mx.next
+		END;
+		IF mx = NIL THEN
+			mtx.next := mtxs; mtxs := mtx;
+			mtx.id := Kernel32.NULL; mtx.count := 0;
+			Kernel32.InitCriticalSection(SYSTEM.ADR(mtx.cs));
+			Kernel.RegisterObject(mtx, FinalizeMutex, TRUE)
+		ELSE
+			HALT(99)
+		END
+	END Init;
+
+(** Set an event *)
+	PROCEDURE Set*(event: Event);
+	BEGIN
+		Kernel32.SetEvent(event.handle)
+	END Set;
+
+(** Reset an event *)
+	PROCEDURE Reset*(event: Event);
+	BEGIN
+		Kernel32.ResetEvent(event.handle)
+	END Reset;
+
+	PROCEDURE *FinalizeEvent(event: PTR);
+	BEGIN
+		WITH event: Event DO
+			IF event.handle # Kernel32.InvalidHandleValue THEN
+				Kernel32.CloseHandle(event.handle);
+				event.handle := Kernel32.InvalidHandleValue
+			END
+		END
+	END FinalizeEvent;
+
+(** Initialize a new event *)
+	PROCEDURE Create*(event: Event; manualReset, initialState: BOOLEAN);
+		VAR manual, initial: LONGINT;
+	BEGIN
+		IF manualReset THEN manual := Kernel32.True ELSE manual := Kernel32.False END;
+		IF initialState THEN initial := Kernel32.True ELSE initial := Kernel32.False END;
+		event.handle := Kernel32.CreateEvent(Kernel32.NULL, manual, initial, Kernel32.NULL);
+		Kernel.RegisterObject(event, FinalizeEvent, TRUE)
+	END Create;
+
+(** Wait for an event or kernel object to be signaled for at most timeOut milliseconds. *)
+	PROCEDURE Wait*(event: Kernel32.Object; timeOut: LONGINT);
+	BEGIN
+		Kernel32.WaitForSingleObject(event.handle, timeOut)
+	END Wait;
+
+(** Get the current thread beeing processed. *)
+	PROCEDURE This*(): Thread;
+		VAR id: LONGINT; t: Thread;
+	BEGIN
+		id := Kernel32.GetCurrentThreadId();
+		Kernel32.EnterCriticalSection(SYSTEM.ADR(moduleCS));
+		t := threads;
+		WHILE (t # NIL) & (t.id # id) DO
+			t := t.next
+		END;
+		Kernel32.LeaveCriticalSection(SYSTEM.ADR(moduleCS));
+		RETURN t
+	END This;
+
+	PROCEDURE *FinalizeThread(t: PTR);
+	BEGIN
+		WITH t: Thread DO
+			IF t.handle # Kernel32.InvalidHandleValue THEN
+				Kernel32.CloseHandle(t.handle);
+				t.handle := Kernel32.InvalidHandleValue
+			END
+		END
+	END FinalizeThread;
+
+	PROCEDURE Cleanup(t: Thread);
+		VAR mx: Mutex;
+	BEGIN
+		IF t.id = Kernel32.GetCurrentThreadId() THEN
+			IF t.atomic THEN
+				Kernel.EndAtomic(); t.atomic := FALSE
+			END;
+			mx := mtxs;
+			WHILE mx # NIL DO
+				IF mx.id = t.id THEN
+					WHILE mx.count > 0 DO
+						Unlock(mx)
+					END
+				END;
+				mx := mx.next
+			END
+		END;
+		WHILE t.GCCount > 0 DO
+			DEC(t.GCCount); INC(Kernel.GCenabled)
+		END
+	END Cleanup;
+
+	PROCEDURE ^Start*(t: Thread; p: BodyProc; stackLen: LONGINT);
+
+	PROCEDURE kill(t: Thread; safe: BOOLEAN);
+		VAR ret, id: LONGINT; pt: Thread;
+	BEGIN
+		ASSERT(t # NIL);
+		Kernel32.EnterCriticalSection(SYSTEM.ADR(moduleCS));
+		t.first := FALSE;
+		pt := threads;
+		WHILE (pt # NIL) & (pt.next # t) DO
+			pt := pt.next
+		END;
+		IF pt # NIL THEN
+			pt.next := t.next
+		ELSIF threads = t THEN
+			threads := t.next
+		ELSE
+			HALT(99)
+		END;
+		t.next := NIL; id := Kernel32.GetCurrentThreadId();
+		IF t.id # id THEN
+			Kernel32.SuspendThread(t.handle);
+			IF t.proc # NIL THEN (* let the thread stop itself *)
+				t.next := aliens; aliens := t; Kernel32.LeaveCriticalSection(SYSTEM.ADR(moduleCS));
+				Kernel32.SetThreadContext(t.handle, SYSTEM.ADR(t.cont))
+			ELSE
+				Kernel32.LeaveCriticalSection(SYSTEM.ADR(moduleCS)); Cleanup(t);
+				Kernel32.TerminateThread(t.handle, 0);
+				RETURN
+			END;
+			REPEAT
+				ret := Kernel32.ResumeThread(t.handle)
+			UNTIL ret <= 1
+		ELSE (* Stop(self) *)
+			Kernel32.LeaveCriticalSection(SYSTEM.ADR(moduleCS));
+			Cleanup(t); FinalizeThread(t);
+			IF t.safe & safe THEN
+				Start(t, t.proc, 0)
+			END;
+			Kernel32.ExitThread(0)
+		END
+	END kill;
+
+(** Stop execution of thread t. *)
+	PROCEDURE Kill*(t: Thread);
+	BEGIN
+		kill(t, FALSE)
+	END Kill;
+
+(** Stop execution of thread t after a trap. *)
+	PROCEDURE Abort*(t: Thread);
+	BEGIN
+		Kernel32.threadAbortNotify(t.id);
+		kill(t, TRUE)
+	END Abort;
+
+	PROCEDURE [stdcall] *ExcpFrmHandler(VAR excpRec: Kernel32.ExceptionRecord; excpFrame: Kernel32.ExcpFrmPtr; VAR context: Kernel32.Context; dispatch: LONGINT): LONGINT;
+		VAR t: Thread; ret: LONGINT;
+	BEGIN
+		DEC(Kernel.GCenabled); t := This();
+		ret := Kernel32.excpFrmHandler(excpRec, excpFrame, context, dispatch);
+		IF ret # Kernel32.ExceptionContinueExecution THEN
+			IF t # NIL THEN
+				INC(Kernel.GCenabled);
+				Abort(t);
+				RETURN ret
+			ELSE
+				Console.Str("Threads.ExcpFrmHandler: failing thread not found!!!"); Console.Ln()
+			END
+		END;
+		INC(Kernel.GCenabled);
+		RETURN ret
+	END ExcpFrmHandler;
+
+	PROCEDURE Break*(t: Thread); (* not reentrant / global break code *)
+		VAR cont: Kernel32.Context; mod: Modules.Module; pc, bp, lastbp: LONGINT;
+	BEGIN
+		DEC(Kernel.GCenabled);
+		Kernel32.SuspendThread(t.handle);
+		cont.ContextFlags := Kernel32.ContextControl; Kernel32.GetThreadContext(t.handle, SYSTEM.ADR(cont));
+		pc := cont.Eip; bp := cont.Ebp;
+		mod := Exceptions0.GetMod(pc);
+		LOOP
+			IF mod # NIL THEN EXIT END;
+			lastbp := bp;
+			SYSTEM.GET(bp+4, pc); SYSTEM.GET(bp, bp); (* return addr from stack *)
+			IF (bp < lastbp) OR (bp >= t.stackBottom) THEN (* invalid stack frame *)
+				EXIT
+			END;
+			mod := Exceptions0.GetMod(pc)
+		END;
+		IF mod = NIL THEN
+			Console.Str("Threads.Break: PC not found"); Console.Ln();
+			Kernel32.ResumeThread(t.handle);
+			INC(Kernel.GCenabled);
+			RETURN
+		END;
+		(* push cont.Eip *) break[0] := 68X; SYSTEM.MOVE(SYSTEM.ADR(pc), SYSTEM.ADR(break[1]), 4);
+		(* push ebp *) break[5] := 055X;
+		(* mov ebp, esp *) break[6] := 08BX; break[7] := 0ECX;
+		(* move eax, 24 *) break[8] := 0B8X; break[9] := 018X; break[10] := 000X; break[11] := 000X; break[12] := 000X;
+		(* int 3 *) break[13] := 0CCX;
+		(* mov esp, ebp *) break[14] := 08BX; break[15] := 0E5X;
+		(* pop ebp *) break[16] := 05DX;
+		(* ret *) break[17] := 0C3X;
+		cont.Eip := SYSTEM.ADR(break[0]); cont.Ebp := bp;
+		Kernel32.SetThreadContext(t.handle, SYSTEM.ADR(cont));
+		Kernel32.ResumeThread(t.handle);
+		INC(Kernel.GCenabled)
+	END Break;
+
+	PROCEDURE [stdcall] *Wrapper(par: LONGINT): LONGINT;
+		VAR
+			excp: Kernel32.ExcpFrm;
+			pt, t: Thread;
+			id: LONGINT;
+			wrapper: Kernel32.ThreadStartRoutine;
+	BEGIN
+		Kernel32.EnterCriticalSection(SYSTEM.ADR(moduleCS));
+		id := Kernel32.GetCurrentThreadId();
+		pt := NIL; t := threads;
+		WHILE (t # NIL) & (t.id # id) DO
+			t := t.next
+		END;
+		IF t = NIL THEN
+			t := aliens;
+			WHILE (t # NIL) & (t.id # id) DO
+				pt := t; t := t.next
+			END
+		END;
+		Kernel32.LeaveCriticalSection(SYSTEM.ADR(moduleCS));
+		IF t.first THEN
+			Reals.SetFCR(Reals.DefaultFCR);
+			t.first := FALSE; wrapper := Wrapper;
+			excp.handler := ExcpFrmHandler; excp.link := Kernel32.NULL;
+			Kernel32.InstallExcpFrm(excp);
+			SYSTEM.GETREG(SYSTEM.ESP, t.stackBottom);
+			IF t = oberonLoop THEN
+				Kernel.stackBottom := t.stackBottom
+			END;
+			t.cont.ContextFlags:= Kernel32.ContextFull; Kernel32.GetThreadContext(t.handle, SYSTEM.ADR(t.cont));
+			t.cont.Eip := SYSTEM.VAL(LONGINT, wrapper);
+			Kernel32.SetThreadPriority(t.handle, Normal); t.prio := Normal;
+			t.proc(); Kill(t)
+		ELSE
+			Cleanup(t);
+			Kernel32.EnterCriticalSection(SYSTEM.ADR(moduleCS));
+			IF pt # NIL THEN
+				pt.next := t.next
+			ELSIF aliens = t THEN
+				aliens := t.next
+			END;
+			t.next := NIL; Kernel32.LeaveCriticalSection(SYSTEM.ADR(moduleCS));
+			Kernel32.ExitThread(0)
+		END
+	END Wrapper;
+
+(** Start a new thread executing p. *)
+	PROCEDURE Start*(t: Thread; p: BodyProc; stackLen: LONGINT);
+		VAR pt, tt: Thread;
+	BEGIN
+		IF ~threaded THEN
+			RETURN
+		END;
+		ASSERT((p # NIL) & (t # NIL));
+		Kernel32.EnterCriticalSection(SYSTEM.ADR(moduleCS));
+		pt := NIL; tt := threads;
+		WHILE (tt # NIL) & (tt # t) DO
+			pt := tt; tt := tt.next
+		END;
+		IF tt = t THEN
+			Kernel32.LeaveCriticalSection(SYSTEM.ADR(moduleCS));
+			t.proc := p; Wrapper(t.id);
+			HALT(99)
+		ELSIF pt # NIL THEN
+			pt.next := t
+		ELSE
+			threads := t
+		END;
+		Kernel.RegisterObject(t, FinalizeThread, TRUE);
+		t.next := NIL; t.proc := p; t.handle := Kernel32.InvalidHandleValue; t.id := 0;
+		t.stackBottom := 0; t.atomic := FALSE; t.first := TRUE; t.GCCount := 0;
+		t.handle := Kernel32.CreateThread(0, stackLen, Wrapper, 0, 0, t.id);
+		Kernel32.LeaveCriticalSection(SYSTEM.ADR(moduleCS))
+	END Start;
+
+(** Enumerate all threads. *)
+	PROCEDURE Enumerate*(p: EnumProc);
+		VAR t: Thread;
+	BEGIN
+		ASSERT(p # NIL);
+		Kernel32.EnterCriticalSection(SYSTEM.ADR(moduleCS));
+		t := threads;
+		WHILE t # NIL DO
+			p(t); t := t.next
+		END;
+		Kernel32.LeaveCriticalSection(SYSTEM.ADR(moduleCS))
+	END Enumerate;
+
+(** Suspend execution of thread t. *)
+	PROCEDURE Suspend*(t: Thread);
+	BEGIN
+		Kernel32.SuspendThread(t.handle)
+	END Suspend;
+
+(** Resume execution of thread t. *)
+	PROCEDURE Resume*(t: Thread);
+	BEGIN
+		Kernel32.ResumeThread(t.handle)
+	END Resume;
+
+(** Change the priority of thread t to prio. *)
+	PROCEDURE SetPriority*(t: Thread; prio: LONGINT);
+	BEGIN
+		Kernel32.SetThreadPriority(t.handle, prio); t.prio := prio
+	END SetPriority;
+
+(** Get the priority for thread t. *)
+	PROCEDURE GetPriority*(t: Thread; VAR prio: LONGINT);
+	BEGIN
+		t.prio := Kernel32.GetThreadPriority(t.handle); prio := t.prio
+	END GetPriority;
+
+(** Set the calling thread to sleep for the specified amount of milliseconds. *)
+	PROCEDURE Sleep*(ms: LONGINT);
+	BEGIN
+		Kernel32.Sleep(ms)
+	END Sleep;
+
+(** Pass control to the next ready thread. *)
+	PROCEDURE Pass*();
+	BEGIN
+		Kernel32.Sleep(0)
+	END Pass;
+
+	PROCEDURE *EnableGC();
+		VAR t: Thread;
+	BEGIN
+		t := This();
+		IF t # NIL THEN
+			DEC(t.GCCount)
+		END;
+		INC(Kernel.GCenabled)
+	END EnableGC;
+
+	PROCEDURE *DisableGC();
+		VAR t: Thread;
+	BEGIN
+		t := This();
+		IF t # NIL THEN
+			INC(t.GCCount)
+		END;
+		DEC(Kernel.GCenabled)
+	END DisableGC;
+
+(** Start non-interruptable section *)
+	PROCEDURE BeginAtomic*(): BOOLEAN;
+		VAR t, tt: Thread;
+	BEGIN
+		Kernel32.EnterCriticalSection(SYSTEM.ADR(moduleCS));
+		tt := This();
+		IF tt # NIL THEN
+			ASSERT(~tt.atomic);
+			t := threads;
+			WHILE t # NIL DO
+				IF t # tt THEN
+					ASSERT(~t.atomic);
+					Kernel32.SuspendThread(t.handle)
+				END;
+				t := t.next
+			END;
+			tt.atomic := TRUE;
+			RETURN TRUE
+		ELSE
+			Kernel32.LeaveCriticalSection(SYSTEM.ADR(moduleCS));
+			RETURN FALSE
+		END
+	END BeginAtomic;
+
+(** End non-interruptable section *)
+	PROCEDURE EndAtomic*();
+		VAR t, tt: Thread;
+	BEGIN
+		tt := This();
+		ASSERT(tt.atomic);
+		tt.atomic := FALSE;
+		t := threads;
+		WHILE t # NIL DO
+			IF t # tt THEN
+				ASSERT(~t.atomic);
+				Kernel32.ResumeThread(t.handle)
+			END;
+			t := t.next
+		END;
+		Kernel32.LeaveCriticalSection(SYSTEM.ADR(moduleCS))
+	END EndAtomic;
+
+	PROCEDURE *Shutdown();
+		VAR tt, t: Thread; i: LONGINT;
+	BEGIN
+		IF threaded THEN
+			Kernel32.EnterCriticalSection(SYSTEM.ADR(moduleCS));
+			oberonLoop.safe := FALSE; quitLoop := TRUE; Set(win32Event);
+			tt := This();
+			IF tt # oberonLoop THEN
+				Kernel32.LeaveCriticalSection(SYSTEM.ADR(moduleCS));
+				i := 0;
+				WHILE (oberonLoop.handle # Kernel32.InvalidHandleValue) & (i < 50) DO
+					Kernel32.Sleep(100); INC(i)
+				END;
+				Kernel32.EnterCriticalSection(SYSTEM.ADR(moduleCS))
+			END;
+			threaded := FALSE;
+			t := threads;
+			WHILE t # NIL DO
+				IF (t # tt) & (Kernel32.TerminateThread(t.handle, 0) # Kernel32.False) THEN
+					FinalizeThread(t)
+				END;
+				t := t.next
+			END;
+			Kernel32.LeaveCriticalSection(SYSTEM.ADR(moduleCS));
+			Kernel32.DeleteCriticalSection(SYSTEM.ADR(moduleCS))
+		END
+	END Shutdown;
+
+	PROCEDURE *CheckStacks();
+		VAR
+			t: Thread; cont: Kernel32.Context;
+			sp, p: Kernel32.ADDRESS;
+	BEGIN
+		t := threads;
+		WHILE t # NIL DO
+			cont.ContextFlags := Kernel32.LongOr(Kernel32.ContextControl, Kernel32.ContextInteger);
+			Kernel32.GetThreadContext(t.handle, SYSTEM.ADR(cont));
+			Kernel.Candidate(cont.Edi); Kernel.Candidate(cont.Esi);
+			Kernel.Candidate(cont.Ebx); Kernel.Candidate(cont.Edx);
+			Kernel.Candidate(cont.Ecx); Kernel.Candidate(cont.Eax);
+			Kernel.Candidate(cont.Ebp);
+			sp := cont.Esp;
+			WHILE sp < t.stackBottom DO
+				SYSTEM.GET(sp, p); Kernel.Candidate(p);
+				INC(sp, 4)
+			END;
+			t := t.next
+		END
+	END CheckStacks;
+
+	PROCEDURE init();
+		VAR hthread: LONGINT;
+	BEGIN
+		Kernel32.InitCriticalSection(SYSTEM.ADR(moduleCS));
+		Kernel32.EnterCriticalSection(SYSTEM.ADR(moduleCS));
+		excp.handler := ExcpFrmHandler; excp.link := Kernel32.NULL;
+		Kernel32.InstallExcpFrm(excp); oberonLoop := NIL; quitLoop := FALSE;
+		threaded := FALSE; aliens := NIL;
+		NEW(mtxs); Kernel.DisableTracing(SYSTEM.ADR(mtxs^), SYSTEM.ADR(mtxs.next)); mtxs := NIL;
+		NEW(threads); threads.next := NIL; threads.stackBottom := Kernel.stackBottom;
+		hthread := Kernel32.GetCurrentThread(); hProc := Kernel32.GetCurrentProcess();
+		Kernel32.DuplicateHandle(hProc, hthread, hProc, threads.handle, 0, 0, Kernel32.DuplicateSameAccess);
+		threads.id := Kernel32.GetCurrentThreadId(); threads.name := "BootLoader"; threads.proc := NIL;
+		threads.prio := SHORT(Kernel32.GetThreadPriority(threads.handle)); threads.GCCount := SHORT(-Kernel.GCenabled+1);
+		threads.atomic := FALSE; threads.first := TRUE;
+		threads.cont.ContextFlags := Kernel32.ContextFull; Kernel32.GetThreadContext(threads.handle, SYSTEM.ADR(threads.cont));
+		Kernel.BeginAtomic := BeginAtomic; Kernel.EndAtomic := EndAtomic;
+		Kernel.CheckStacks := CheckStacks;
+		Modules.InstallTermHandler(Shutdown);
+		Kernel.EnableGC := EnableGC; Kernel.DisableGC := DisableGC;
+		threaded := TRUE;
+		NEW(win32Event); Create(win32Event, FALSE, FALSE);
+		Kernel32.LeaveCriticalSection(SYSTEM.ADR(moduleCS))
+	END init;
+
+BEGIN
+	init()
+END Threads.

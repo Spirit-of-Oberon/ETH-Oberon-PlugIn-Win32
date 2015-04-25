@@ -1,20 +1,19 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE BookDocs;
+MODULE BookDocs; (** portable *)
 	IMPORT BooksHelp, Books, Books0, Oberon, Files, Texts, Fonts, Display, Display3, Objects, BasicGadgets, TextFields, Gadgets,
 		TextGadgets, TextGadgets0, TextDocs, Panels, Strings, Desktops, Documents, Printer, Effects;
 	
@@ -112,16 +111,16 @@ MODULE BookDocs;
 			RETURN fnt
 		END Font;
 	BEGIN
-		titleFont := Font("Syntax20m.Scn.Fnt");
-		sectionFonts[0] := Font("Syntax16m.Scn.Fnt");
-		sectionFonts[1] := Font("Syntax14m.Scn.Fnt");
-		sectionFonts[2] := Font("Syntax12m.Scn.Fnt");
+		titleFont := Font("Default20b.Scn.Fnt");
+		sectionFonts[0] := Font("Default16b.Scn.Fnt");
+		sectionFonts[1] := Font("Default14b.Scn.Fnt");
+		sectionFonts[2] := Font("Default12b.Scn.Fnt");
 		i := 3;
 		WHILE i < Books.maxSect DO
-			sectionFonts[i] := Font("Syntax12i.Scn.Fnt");
+			sectionFonts[i] := Font("Default12i.Scn.Fnt");
 			INC(i)
 		END;
-		textFont := Font("Syntax12.Scn.Fnt");
+		textFont := Font("Default12.Scn.Fnt");
 		linkFont := textFont;
 		callFont := textFont;
 		noteFont := textFont

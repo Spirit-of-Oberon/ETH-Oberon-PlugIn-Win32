@@ -1,0 +1,71 @@
+﻿(* OBERON System 3, Release 2.3.
+
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE OMI; (** non-portable / source: Win32.OMI.Mod *)	(* tk 25.10.95 *)
+
+	IMPORT Modules, PLV := OPLV, Interchange, Texts, Oberon;
+
+	VAR
+		W: Texts.Writer;
+
+(*
+	PROCEDURE VerboseMod(M: Modules.Module);
+	BEGIN
+		Texts.WriteString(W, "ModuleDecoder.Decode "); Texts.WriteString(W, M.name);
+		Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf);
+	END VerboseMod;
+	
+	PROCEDURE Start*;
+	BEGIN	Interchange.Start; Texts.WriteString(W, "OMI enabled"); Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
+	END Start;
+	
+	PROCEDURE Stop*;
+	BEGIN	Interchange.Stop; Texts.WriteString(W, "OMI disabled"); Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
+	END Stop;
+	
+	PROCEDURE Verbose*;
+	BEGIN	Interchange.Verbose; Texts.WriteString(W, "OMI verbose enabled"); Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
+	END Verbose;
+
+	PROCEDURE ChecksOn*;
+	BEGIN	Interchange.ChecksOn; Texts.WriteString(W, "OMI run-time checks enabled"); Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
+	END ChecksOn;
+	
+	PROCEDURE ChecksOff*;
+	BEGIN	Interchange.ChecksOff; Texts.WriteString(W, "OMI run-time checks disabled"); Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
+	END ChecksOff;
+*)
+
+	PROCEDURE RefsOn*;
+	BEGIN	PLV.EnableRefs; Texts.WriteString(W, "OMI reference info enabled"); Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
+	END RefsOn;
+	
+	PROCEDURE RefsOff*;
+	BEGIN	PLV.DisableRefs; Texts.WriteString(W, "OMI reference info disabled"); Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
+	END RefsOff;
+	
+	PROCEDURE AssertsOn*;
+	BEGIN	PLV.EnableAssert; Texts.WriteString(W, "OMI ASSERT function enabled"); Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
+	END AssertsOn;
+	
+	PROCEDURE AssertsOff*;
+	BEGIN	PLV.DisableAssert; Texts.WriteString(W, "OMI ASSERT function disabled"); Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
+	END AssertsOff;
+
+BEGIN
+	(* Interchange.verboseHook:=VerboseMod; *)
+	Texts.OpenWriter(W); Texts.WriteString(W, "Oberon Module Interchange (OMI) / mf, tk 8.2.96"); Texts.WriteLn(W);
+	Texts.Append(Oberon.Log, W.buf)
+END OMI.

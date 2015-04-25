@@ -1,20 +1,19 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE Installer; (* ejz,  *)
+MODULE Installer; (** non-portable *)	(* ejz,  *)
 	IMPORT Registry, FileDir, Files, Strings, Texts, Oberon, Compress, Display3, Documents, Desktops, OOPM, Compiler, Watson;
 
 	CONST
@@ -23,11 +22,16 @@ MODULE Installer; (* ejz,  *)
 		NoPaths = 7;
 		CurPath = NoPaths-1;
 
+	TYPE
+		FileName = ARRAY 256 OF CHAR;
+
 	VAR
 		W: Texts.Writer;
 		paths: ARRAY NoPaths OF RECORD name: ARRAY 32 OF CHAR;
-				path: FileDir.FileName
+				path: FileName
 			END;
+		crypt, key: ARRAY 64 OF CHAR;
+		installerPath: ARRAY 128 OF CHAR;
 
 	PROCEDURE GetText(arc, name: ARRAY OF CHAR): Texts.Text;
 		VAR
@@ -69,20 +73,20 @@ MODULE Installer; (* ejz,  *)
 		RETURN -1
 	END NextLine;
 
-	PROCEDURE install*(archive, script: ARRAY OF CHAR);
+	PROCEDURE install*(archive, script: ARRAY OF CHAR): BOOLEAN;
 		VAR
 			S: Texts.Scanner;
 			F: Files.File;
 			R: Files.Rider;
 			Script, T: Texts.Text;
 			r: Texts.Reader;
-			arc, arg1, arg2, out, temp: FileDir.FileName;
+			arc, arg1, arg2, out, temp: FileName;
 			D: Documents.Document;
 			cmd: ARRAY 32 OF CHAR;
-			beg, len, i: LONGINT;
+			beg, len, i, t, d: LONGINT;
 			res: INTEGER;
 			col: SHORTINT;
-			done: BOOLEAN;
+			done, reg: BOOLEAN;
 	BEGIN
 		FileDir.GetWorkingDirectory(paths[CurPath].path); COPY(OOPM.outputPath, out);
 		F := Files.Old(archive);
@@ -91,7 +95,7 @@ MODULE Installer; (* ejz,  *)
 		ELSE
 			COPY(archive, arc)
 		END;
-		Texts.WriteString(W, arc);
+		Texts.WriteString(W, arc); reg := FALSE;
 		COPY(paths[CurPath].path, temp); Strings.AppendCh(temp, FileDir.PathChar);
 		Strings.Append(temp, Temp);
 		Script := GetText(arc, script);
@@ -103,6 +107,7 @@ MODULE Installer; (* ejz,  *)
 				Strings.Upper(S.s, cmd);
 				Texts.Scan(S); done := FALSE; res := 0;
 				IF (cmd = "DEST") & (S.class IN {Texts.Name, Texts.String}) THEN
+					FileDir.ChangeDirectory(paths[CurPath].path, done);
 					Texts.WriteString(W, "change directory to ");
 					Strings.Upper(S.s, cmd);
 					i := 0;
@@ -207,7 +212,21 @@ MODULE Installer; (* ejz,  *)
 							Watson.MakeDef(arg1, T);
 							Files.Delete(arg1, res); res := -1;
 							IF T.len > 0 THEN
-								COPY(S.s, arg1); Strings.ChangeSuffix(arg1, "Def");
+								i := 0; t := -1; d := -1;
+								WHILE S.s[i] # 0X DO
+									IF S.s[i] = "." THEN d := t; t := i END;
+									INC(i)
+								END;
+								IF d > 0 THEN
+									i := d+1; t := 0;
+									WHILE S.s[i] # 0X DO
+										arg1[t] := S.s[i]; INC(i); INC(t)
+									END;
+									arg1[t] := 0X
+								ELSE
+									COPY(S.s, arg1)
+								END;
+								Strings.ChangeSuffix(arg1, "Def");
 								F := Files.New(""); Files.Set(R, F, 0);
 								Texts.Store(T, F, 0, len); res := 0
 							END
@@ -221,20 +240,35 @@ MODULE Installer; (* ejz,  *)
 							ELSE
 								arg2 := "Definitions.Arc"
 							END;
+							IF crypt # "" THEN
+								Compress.ClearCrypt()
+							END;
 							Compress.DeleteFile(arg2, arg1, res);
-							Compress.AddFile(arg2, arg1, R, Files.Length(F), res);
+							Compress.AddFile(arg2, arg1, R, Files.Length(Files.Base(R)), res);
+							IF crypt # "" THEN
+								Compress.InstallCrypt(crypt, key)
+							END;
 							done := res = Compress.Done
 						END
 					END;
 					Texts.Scan(S)
 				ELSIF (cmd = "SET") & (S.class IN {Texts.Name, Texts.String}) THEN
 					Texts.WriteString(W, "set ");
-					i := 0;
-					WHILE (S.s[i] # 0X) & (S.s[i] # ".") DO
+					i := 0; beg := 0;
+					WHILE S.s[i] # 0X DO
+						IF S.s[i] = "." THEN beg := i END;
 						INC(i)
 					END;
+					i := beg;
 					IF S.s[i] = "." THEN
-						S.s[i] := 0X; COPY(S.s, arg1);
+						beg := 0;
+						WHILE beg < i DO
+							IF S.s[beg] = "." THEN
+								S.s[beg] := "\"
+							END;
+							INC(beg)
+						END;
+						S.s[i] := 0X; Registry.OberonPath(S.s, arg1);
 						Texts.WriteString(W, arg1);
 						beg := 0; INC(i);
 						WHILE S.s[i] # 0X DO
@@ -249,14 +283,25 @@ MODULE Installer; (* ejz,  *)
 								Texts.Scan(S);
 								IF S.class IN {Texts.Name, Texts.String} THEN
 									Texts.WriteString(W, " := ");
-									Registry.Set(arg1, arg2, S.s);
+									Registry.SetKeyValue(Registry.CurrentUser, arg1, arg2, S.s);
 									Texts.WriteString(W, S.s);
 									done := Registry.res = Registry.Done;
 									Texts.Scan(S)
 								END
 							END
 						END
-					END
+					END;
+					reg := TRUE
+				ELSIF (cmd = "REQUIRES") & (S.class IN {Texts.Name, Texts.String}) THEN
+					Registry.GetKeyValue(Registry.CurrentUser, installerPath, S.s, arg1);
+					done := Registry.res = Registry.Done;
+					IF ~done THEN
+						col := W.col; Texts.SetColor(W, SHORT(Display3.red));
+						Texts.WriteString(W, "requires "); Texts.WriteString(W, S.s); Texts.WriteLn(W);
+						Texts.SetColor(W, col);
+						done := install(S.s, Default)
+					END;
+					Texts.Scan(S)
 				ELSE
 					Texts.WriteString(W, cmd); cmd := ""; Texts.WriteString(W, " unknown command")
 				END;
@@ -272,17 +317,40 @@ MODULE Installer; (* ejz,  *)
 				Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
 			END;
 			Texts.WriteString(W, arc);
+			IF done THEN
+				beg := 0; i := 0;
+				WHILE arc[i] # 0X DO
+					IF arc[i] = FileDir.PathChar THEN
+						beg := i+1
+					END;
+					INC(i)
+				END;
+				i := 0;
+				WHILE arc[beg] # 0X DO
+					arc[i] := arc[beg]; INC(beg); INC(i)
+				END;
+				arc[i] := 0X;
+				Oberon.GetClock(t, d);
+				Strings.TimeToStr(t, arg1); Strings.DateToStr(d, arg2);
+				Strings.AppendCh(arg1, " "); Strings.Append(arg1, arg2);
+				Registry.SetKeyValue(Registry.CurrentUser, installerPath, arc, arg1);
+				done := Registry.res = Registry.Done
+			END;
 			IF ~done THEN
-				Texts.WriteString(W, " installation failed")
+				Texts.WriteString(W, " installation failed"); res := 1
 			ELSE
-				Texts.WriteString(W, " installed")
+				Texts.WriteString(W, " installed"); res := 0;
+				IF reg THEN
+					Texts.WriteLn(W); Texts.WriteString(W, "You must restart Oberon to load new settings!")
+				END
 			END;
 			COPY(out, OOPM.outputPath); FileDir.ChangeDirectory(paths[CurPath].path, done);
 			ASSERT(done)
 		ELSE
-			Texts.WriteString(W, " not an valid package")
+			Texts.WriteString(W, " not an valid package"); res := 1
 		END;
-		Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
+		Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf);
+		RETURN res = 0
 	END install;
 
 (** Installer.Install Archive [ Script ] ~ *)
@@ -290,8 +358,9 @@ MODULE Installer; (* ejz,  *)
 		VAR
 			S: Texts.Scanner;
 			T: Texts.Text;
-			arc: FileDir.FileName;
+			arc: FileName;
 			beg, end, time: LONGINT;
+			done: BOOLEAN;
 	BEGIN
 		Texts.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos); Texts.Scan(S);
 		IF (S.class = Texts.Char) & (S.c = "^") THEN
@@ -301,20 +370,30 @@ MODULE Installer; (* ejz,  *)
 				Texts.OpenScanner(S, T, beg); Texts.Scan(S)
 			END
 		END;
+		crypt := ""; key := "";
+		WHILE (S.class = Texts.Char) & (S.c = Oberon.OptionChar) DO
+			Texts.Scan(S); ASSERT(S.class = Texts.Name);
+			CASE CAP(S.s[0]) OF
+				"C": Texts.Scan(S); COPY(S.s, crypt); ASSERT(S.class = Texts.Name);
+						Texts.Scan(S); COPY(S.s, key); ASSERT(S.class IN {Texts.Name, Texts.String});
+						Compress.InstallCrypt(crypt, key)
+			END;
+			Texts.Scan(S)
+		END;
 		IF S.class IN {Texts.Name, Texts.String} THEN
 			COPY(S.s, arc); Texts.Scan(S);
 			IF S.class IN {Texts.Name, Texts.String} THEN
-				install(arc, S.s)
+				done := install(arc, S.s)
 			ELSE
-				install(arc, Default)
-			END
+				done := install(arc, Default)
+			END;
+			Compress.ClearCrypt();
+			crypt := ""; key := ""
 		END
 	END Install;
 
 	PROCEDURE *PathEnumerator(path: ARRAY OF CHAR);
-		VAR
-			i, j: LONGINT;
-			name: FileDir.FileName;
+		VAR name: FileName; i, j: LONGINT; done: BOOLEAN;
 	BEGIN
 		i := 0; j := -1;
 		WHILE path[i] # 0X DO
@@ -334,13 +413,17 @@ MODULE Installer; (* ejz,  *)
 			INC(i)
 		END;
 		IF (i < NoPaths) & (paths[i].path = "") THEN
-			COPY(path, paths[i].path)
+			FileDir.GetWorkingDirectory(name);
+			FileDir.ChangeDirectory(path, done); ASSERT(done);
+			FileDir.GetWorkingDirectory(paths[i].path);
+			FileDir.ChangeDirectory(name, done); ASSERT(done)		
 		END
 	END PathEnumerator;
 
 	PROCEDURE Init();
 		VAR i: LONGINT;
 	BEGIN
+		Registry.OberonPath("Installer", installerPath);
 		paths[0].name := "SYSTEM";
 		paths[1].name := "OBJ";
 		paths[2].name := "SRC";
@@ -349,12 +432,20 @@ MODULE Installer; (* ejz,  *)
 		paths[5].name := "RESOURCE";
 		paths[CurPath].name := "CUR";
 		FOR i := 0 TO NoPaths-1 DO
-			Registry.Get("Installer", paths[i].name, paths[i].path);
+			Registry.GetKeyValue(Registry.CurrentUser, installerPath, paths[i].name, paths[i].path);
 			IF Registry.res # Registry.Done THEN
 				COPY("", paths[i].path)
 			END
 		END;
-		FileDir.EnumerateSearchPaths(PathEnumerator)
+		IF paths[CurPath].path = "" THEN
+			FileDir.GetWorkingDirectory(paths[CurPath].path)
+		END;
+		FileDir.EnumerateSearchPaths(PathEnumerator);
+		FOR i := 0 TO NoPaths-1 DO
+			IF paths[i].path = "" THEN
+				COPY(paths[CurPath].path, paths[i].path)
+			END
+		END
 	END Init;
 
 BEGIN
@@ -371,3 +462,4 @@ commands
 - DEF: add a definition
 - SET: set a registry entry
 - CALL: call a command
+- REQUIRES: reqires an other package

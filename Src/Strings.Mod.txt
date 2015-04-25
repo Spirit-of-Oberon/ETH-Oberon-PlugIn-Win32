@@ -1,25 +1,24 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE Strings; (* ejz,  *)
+MODULE Strings; (** portable *)	(* ejz,  *)
 
 (** Strings is a utility module that provides procedures to manipulate strings.
 		Note: All strings MUST be 0X terminated. *)
 
-	IMPORT Registry, Dates, Reals, FileDir;
+	IMPORT Dates, Reals, FileDir, Registry;
 
 	CONST
 		CR* = 0DX; (** the Oberon end of line character *)
@@ -27,13 +26,14 @@ MODULE Strings; (* ejz,  *)
 		LF* = 0AX; (** the UNIX end of line character *) 
 
 	VAR
-		isAlpha-: ARRAY 256 OF BOOLEAN; (** all letters in the oberon charset *)
-		ISOToOberon-, OberonToISO-: ARRAY 256 OF CHAR; (** Translation tables for iso-8859-1 to oberon ascii code. *)
+		isAlpha*: ARRAY 256 OF BOOLEAN; (** all letters in the oberon charset *)
+		ISOToOberon*, OberonToISO*: ARRAY 256 OF CHAR; (** Translation tables for iso-8859-1 to oberon ascii code. *)
 		CRLF*: ARRAY 4 OF CHAR; (** end of line "string" used by MS-DOS and most TCP protocols *)
 		sDayName: ARRAY 7, 4 OF CHAR;
 		lDayName: ARRAY 7, 12 OF CHAR;
 		sMonthName: ARRAY 12, 4 OF CHAR;
 		lMonthName: ARRAY 12, 12 OF CHAR;
+		dateform, timeform: ARRAY 32 OF CHAR;
 
 (** Length of str. *)
 	PROCEDURE Length*(VAR str(** in *): ARRAY OF CHAR): LONGINT;
@@ -129,7 +129,7 @@ MODULE Strings; (* ejz,  *)
 			|"ç": ch := "C"
 			|"á": ch := "A"
 			|"ñ": ch := "N"
-			|"ß": ch := "S"
+			|"": ch := "S"
 		ELSE
 		END;
 		RETURN ch
@@ -461,7 +461,7 @@ MODULE Strings; (* ejz,  *)
 
 (** Converts a real to a string. *)
 PROCEDURE RealToStr*(x: LONGREAL; VAR s: ARRAY OF CHAR);
-VAR e, h, l, n, len: LONGINT; i, j, pos: INTEGER; z: LONGREAL; d: ARRAY 16 OF CHAR;
+VAR e, h, l, n, len: LONGINT; i, j, pos: LONGINT; z: LONGREAL; d: ARRAY 16 OF CHAR;
 	PROCEDURE Wr(ch: CHAR);
 	BEGIN
 		IF ch = 0X THEN HALT(42) END;
@@ -586,7 +586,7 @@ END RealToFixStr;
 
 (** Convert a string into a real. Precondition: s has a well defined real syntax. Scientific notation with D and E to indicate exponents is allowed. *)
 PROCEDURE StrToReal*(s: ARRAY OF CHAR; VAR r: LONGREAL);
-VAR p, e: INTEGER; y, g: LONGREAL; neg, negE: BOOLEAN;
+VAR p, e: LONGINT; y, g: LONGREAL; neg, negE: BOOLEAN;
 BEGIN
 	p := 0;
 	WHILE (s[p] = " ") OR (s[p] = "0") DO INC(p) END;
@@ -648,16 +648,17 @@ END StrToReal;
 
 (** Convert a string to a set *)
 	PROCEDURE StrToSet*(str: ARRAY OF CHAR; VAR set: SET);
-	VAR i, d, d1: INTEGER; ch: CHAR; dot: BOOLEAN;
+	VAR i, d, d1: LONGINT; ch: CHAR; dot: BOOLEAN;
 	BEGIN
 		set := {}; dot := FALSE;
 		i := 0; ch := str[i];
 		WHILE (ch # 0X) & (ch # "}") DO
-			WHILE (ch < "0") OR (ch > "9") DO INC(i); ch := str[i] END;
+			WHILE (ch # 0X) & ((ch < "0") OR (ch > "9")) DO INC(i); ch := str[i] END;
 			d := 0; WHILE (ch >= "0") & (ch <= "9") DO d := d*10 + ORD(ch) - 30H; INC(i); ch := str[i] END;
 			IF d <= MAX(SET) THEN INCL(set, d) END;
 			IF dot THEN
-				WHILE d1 < d DO INCL(set, d1); INC(d1) END;
+				d1 := 0;
+				WHILE (d1 <= MAX(SET)) & (d1 < d) DO INCL(set, d1); INC(d1) END;
 				dot := FALSE
 			END;
 			WHILE ch = " " DO INC(i); ch := str[i] END;
@@ -667,16 +668,16 @@ END StrToReal;
 
 (** Convert a set to a string *)
 	PROCEDURE SetToStr*(set: SET; VAR str: ARRAY OF CHAR);
-	VAR i, j, k: INTEGER; noFirst: BOOLEAN;
+	VAR i, j, k: LONGINT; noFirst: BOOLEAN;
 	BEGIN
 		str[0] := "{"; i := 0; k := 1; noFirst := FALSE;
-		WHILE i < MAX(SET) DO
+		WHILE i <= MAX(SET) DO
 			IF i IN set THEN
 				IF noFirst THEN str[k] := ","; INC(k) ELSE noFirst := TRUE END;
 				IF i >= 10 THEN str[k] := CHR(i DIV 10 + 30H); INC(k) END;
 				str[k] := CHR(i MOD 10 + 30H); INC(k);
 				j := i; INC(i);
-				WHILE i IN set DO INC(i) END;
+				WHILE (i <= MAX(SET)) & (i IN set) DO INC(i) END;
 				IF i-2 > j THEN
 					str[k] := "."; str[k+1] := "."; INC(k, 2); j := i - 1;
 					IF j >= 10 THEN str[k] := CHR(j DIV 10 + 30H); INC(k) END;
@@ -693,8 +694,8 @@ END StrToReal;
 	PROCEDURE DateToStr*(date: LONGINT; VAR str: ARRAY OF CHAR);
 		VAR i, j, k, x: LONGINT; form, name: ARRAY 32 OF CHAR;
 	BEGIN
-		Registry.Get("System", "DateFormat", form);
-		IF (form = "") OR (Registry.res # Registry.Done) THEN form := "DD.MM.YY" END;
+		COPY(dateform, form);
+		IF form = "" THEN form := "DD.MM.YY" END;
 		i := 0; j := 0;
 		WHILE form[j] # 0X DO
 			IF CAP(form[j]) = "D" THEN	(* Day *)
@@ -736,7 +737,7 @@ END StrToReal;
 					str[i] := CHR(x MOD 10 + ORD("0")); INC(i)
 				END
 			ELSIF CAP(form[j]) = "Y" THEN	(* Year *)
-				INC(j,2); x := date DIV 512 MOD 128;
+				INC(j, 2); x := date DIV 512;
 				IF CAP(form[j]) = "Y" THEN
 					INC(j, 2); INC(x, 1900);
 					str[i] := CHR(x DIV 1000 + ORD("0")); str[i + 1] := CHR(x DIV 100 MOD 10 + ORD("0"));
@@ -753,14 +754,14 @@ END StrToReal;
 	END DateToStr;
 
 (** Returns a month's name (set short to get the abbreviation) *) 
-	PROCEDURE MonthToStr*(month: INTEGER; VAR str: ARRAY OF CHAR; short: BOOLEAN);
+	PROCEDURE MonthToStr*(month: LONGINT; VAR str: ARRAY OF CHAR; short: BOOLEAN);
 	BEGIN
 		month := (month - 1) MOD 12;
 		IF short THEN COPY(sMonthName[month], str) ELSE COPY(lMonthName[month], str) END
 	END MonthToStr;
 
 (** Returns a day's name (set short to get the abbreviation) *) 
-	PROCEDURE DayToStr*(day: INTEGER; VAR str: ARRAY OF CHAR; short: BOOLEAN);
+	PROCEDURE DayToStr*(day: LONGINT; VAR str: ARRAY OF CHAR; short: BOOLEAN);
 	BEGIN
 		IF short THEN COPY(sDayName[day MOD 7], str) ELSE COPY(lDayName[day MOD 7], str) END
 	END DayToStr;
@@ -769,8 +770,8 @@ END StrToReal;
 	PROCEDURE TimeToStr*(time: LONGINT; VAR str: ARRAY OF CHAR);
 		VAR i, j, x, h, hPos: LONGINT; form: ARRAY 32 OF CHAR; shortH, leadingH: BOOLEAN;
 	BEGIN
-		Registry.Get("System", "TimeFormat", form);
-		IF (form = "") OR (Registry.res # Registry.Done) THEN form := "HH:MM:SS" END;
+		COPY(timeform, form);
+		IF form = "" THEN form := "HH:MM:SS" END;
 		i := 0; j := 0; h:= time DIV 4096 MOD 32; shortH := FALSE;
 		WHILE form[j] # 0X DO
 			IF ((CAP(form[j]) = "A") OR (CAP(form[j]) = "P")) & (CAP(form[j+1]) = "M") THEN
@@ -840,12 +841,18 @@ END StrToReal;
 		StrToIntPos(str, m, i);
 		WHILE (str[i] # 0X) & ((str[i] < "0") OR (str[i] > "9")) DO INC(i) END;
 		StrToIntPos(str, y, i);
+		IF y >= 1900 THEN y := y-1900 END;
 		date := (y*16 + m)*32 + d
 	END StrToDate;
 
 	PROCEDURE Init();
 		VAR i: LONGINT;
 	BEGIN
+		Registry.GetKeyValue(Registry.CurrentUser, Registry.oberonSystem, "DateFormat", dateform);
+		IF Registry.res # Registry.Done THEN dateform := "" END;
+		Registry.GetKeyValue(Registry.CurrentUser, Registry.oberonSystem, "TimeFormat", timeform);
+		IF Registry.res # Registry.Done THEN timeform := "" END;
+
 		sDayName[0] := "Mon";	sDayName[1] := "Tue";	sDayName[2] := "Wed";	sDayName[3] := "Thu";
 		sDayName[4] := "Fri";	sDayName[5] := "Sat";	sDayName[6] := "Sun";
 
@@ -871,11 +878,12 @@ END StrToReal;
 		isAlpha[ORD("è")] := TRUE; isAlpha[ORD("ì")] := TRUE; isAlpha[ORD("ò")] := TRUE;
 		isAlpha[ORD("ù")] := TRUE; isAlpha[ORD("é")] := TRUE; isAlpha[ORD("ë")] := TRUE;
 		isAlpha[ORD("ï")] := TRUE; isAlpha[ORD("ç")] := TRUE; isAlpha[ORD("á")] := TRUE;
-		isAlpha[ORD("ñ")] := TRUE; isAlpha[ORD("ß")] := TRUE;
+		isAlpha[ORD("ñ")] := TRUE; isAlpha[ORD("")] := TRUE;
 		FOR i := 0 TO 255 DO
 			ISOToOberon[i] := CHR(i); OberonToISO[i] := CHR(i)
 		END;
 		ISOToOberon[8] := CHR(127);
+		ISOToOberon[146] := CHR(39);
 		ISOToOberon[160] := CHR(32);
 		ISOToOberon[162] := CHR(99);
 		ISOToOberon[166] := CHR(124);

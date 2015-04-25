@@ -1,0 +1,55 @@
+﻿(* OBERON System 3, Release 2.3.
+
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE ADVAPI32; (** non-portable / source: Win32.ADVAPI32.Mod *)	(* ejz  *)
+	IMPORT S := SYSTEM, Kernel32;
+
+	CONST
+		HKEYClassesRoot* = 080000000H; HKEYCurrentUser* = 080000001H;
+		RegOptionNonVolatile* = 00H;
+		KeyAllAccess* = 0F003FH; KeyQueryValue* = 01H; KeySetValue* = 02H; KeyCreateSubKey* = 04H;
+		KeyEnumerateSubKeys* = 08H;
+		RegSZ* = 01H;
+		Success* = 0; ErrorMoreData* = 234;
+
+	VAR
+		RegCloseKey*: PROCEDURE (key: LONGINT): LONGINT;
+		RegCreateKeyEx*: PROCEDURE (key, subKey, res, class, options, sam, lpSa: LONGINT; VAR resKey, disp: LONGINT): LONGINT;
+		RegDeleteKey*: PROCEDURE (key, subKey: LONGINT): LONGINT;
+		RegDeleteValue*: PROCEDURE (key, name: LONGINT): LONGINT;
+		RegEnumKeyEx*: PROCEDURE (key, ind, name: LONGINT; VAR nameLen: LONGINT; lpRes: LONGINT; class: LONGINT; VAR classLen: LONGINT; filetime: LONGINT): LONGINT;
+		RegEnumValueEx*: PROCEDURE (key, ind, name: LONGINT; VAR nameLen: LONGINT; lpRes: LONGINT; VAR type: LONGINT; data: LONGINT; VAR len: LONGINT): LONGINT;
+		RegOpenKeyEx*: PROCEDURE (key, name, res, sam: LONGINT; VAR resKey: LONGINT): LONGINT;
+		RegQueryValueEx*: PROCEDURE (key, name, lpRes: LONGINT; VAR type: LONGINT; data: LONGINT; VAR len: LONGINT): LONGINT;
+		RegSetValueEx*: PROCEDURE (key, name, res, type, data, len: LONGINT): LONGINT;
+
+	PROCEDURE InitAPI();
+		VAR mod: LONGINT;
+	BEGIN
+		mod := Kernel32.LoadLibrary("ADVAPI32.DLL");
+		Kernel32.GetAdr(mod, "RegCloseKey", S.VAL(LONGINT, RegCloseKey));
+		Kernel32.GetAdr(mod, "RegCreateKeyExA", S.VAL(LONGINT, RegCreateKeyEx));
+		Kernel32.GetAdr(mod, "RegDeleteKeyA", S.VAL(LONGINT, RegDeleteKey));
+		Kernel32.GetAdr(mod, "RegDeleteValueA", S.VAL(LONGINT, RegDeleteValue));
+		Kernel32.GetAdr(mod, "RegEnumKeyExA", S.VAL(LONGINT, RegEnumKeyEx));
+		Kernel32.GetAdr(mod, "RegEnumValueA", S.VAL(LONGINT, RegEnumValueEx));
+		Kernel32.GetAdr(mod, "RegOpenKeyExA", S.VAL(LONGINT, RegOpenKeyEx));
+		Kernel32.GetAdr(mod, "RegQueryValueExA", S.VAL(LONGINT, RegQueryValueEx));
+		Kernel32.GetAdr(mod, "RegSetValueExA", S.VAL(LONGINT, RegSetValueEx))
+	END InitAPI;
+
+BEGIN
+	InitAPI()
+END ADVAPI32.

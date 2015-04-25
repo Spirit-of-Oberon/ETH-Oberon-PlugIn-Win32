@@ -1,20 +1,19 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE ColorTools;  (** jm 19.1.95 *)
+MODULE ColorTools; (** portable *)	(** jm 19.1.95 *)
 
 (** ColorPicker implementation *)
 (*
@@ -28,8 +27,6 @@ IMPORT
 	
 CONST
 	VersionNo = 2; ModName = "ColorTools";
-	
-	DisplayUnit = LONG(10000);
 	
 TYPE
 	ColorPicker* = POINTER TO ColorPickerDesc;
@@ -128,7 +125,7 @@ END ColorPickerAttr;
 PROCEDURE Grid(F: ColorPicker; R: Display3.Mask; b, x, y, w, h: INTEGER);
 VAR i, j, c, max: INTEGER;
 BEGIN
-	IF Display.Depth(Display.ColLeft) >= 8 THEN max := 16 ELSE max := 4 END; 
+	IF Display.Depth(0) >= 8 THEN max := 16 ELSE max := 4 END; 
 	c := 0; j := max - 1;
 	WHILE j >= 0 DO
 		 i := 0;
@@ -172,7 +169,7 @@ VAR keys, keysum: SET; X, Y, i, j, li, lj, ofs, px, py, b, max: INTEGER; block: 
 	PROCEDURE CalcPlace(VAR px, py: INTEGER);
 	VAR cx, cy, cw, ch: INTEGER; (* clipping area *) f: Objects.Object;
 	BEGIN
-		cx := 0; cy := 0; cw := Display.Width + Display.ColLeft; ch := Display.Height;
+		cx := 0; cy := 0; cw := Display.Width; ch := Display.Height;
 		f := Gadgets.context;
 		WHILE f # NIL DO
 			IF f IS Gadgets.View THEN
@@ -190,7 +187,7 @@ VAR keys, keysum: SET; X, Y, i, j, li, lj, ofs, px, py, b, max: INTEGER; block: 
 	END CalcPlace;
 
 BEGIN
-	IF Display.Depth(Display.ColLeft) >= 8 THEN bw := 112; max := 16 ELSE bw := 80; max := 4 END;
+	IF Display.Depth(0) >= 8 THEN bw := 112; max := 16 ELSE bw := 80; max := 4 END;
 	bw4 := bw + 4; b := bw DIV max;
 	CalcPlace(px, py);
 	ofs := 0;
@@ -225,7 +222,7 @@ END PickColor;
 PROCEDURE RestoreColorPicker(R: Display3.Mask; F: ColorPicker; x, y, w, h: INTEGER);
 VAR b, max: INTEGER;
 BEGIN
-	IF Display.Depth(Display.ColLeft) >= 8 THEN max := 16 ELSE max := 4 END;
+	IF Display.Depth(0) >= 8 THEN max := 16 ELSE max := 4 END;
 	b := (w - 4) DIV max;
 	Display3.ReplConst(R, Display3.black, x, y, w, h, Display.replace);
 	Grid(F, R, b, x+2, y+2, w-4, h-4);
@@ -236,19 +233,23 @@ PROCEDURE PrintColorPicker(F: ColorPicker; VAR M: Display.DisplayMsg);
 VAR R: Display3.Mask; x, y, w, h, b, i, j, c, max: INTEGER;
 
 	PROCEDURE P(x: INTEGER): INTEGER;
-	BEGIN RETURN SHORT(x * DisplayUnit DIV Printer.Unit)
+	BEGIN RETURN SHORT(x * Display.Unit DIV Printer.Unit)
 	END P;
 
 BEGIN
 	Gadgets.MakePrinterMask(F, M.x, M.y, M.dlink, R);
 	x := M.x; y := M.y; w := P(F.W); h := P(F.H);
 	Printer3.ReplConst(R, Display3.black, x, y, w, h, Display.replace);
-	IF Display.Depth(Display.ColLeft) >= 8 THEN max := 16 ELSE max := 4 END; 
+	IF Display.Depth(0) >= 8 THEN max := 16 ELSE max := 4 END; 
 	b := (F.W - 4) DIV max;
+	x := M.x + P(2); y := M.y + P(2);
 	c := 0; j := max - 1;
 	WHILE j >= 0 DO
 		 i := 0;
-		 WHILE i < max DO Printer3.ReplConst(R, F.colors[c] , x + P(i * b), y + P(j * b), P(b), P(b), Display.replace); INC(i); INC(c) END;
+		 WHILE i < max DO
+		 	Printer3.ReplConst(R, F.colors[c] , x + P(i * b), y + P(j * b), P(b), P(b), Display.replace);
+		 	INC(i); INC(c)
+		 END;
 		DEC(j);
 	END;
 END PrintColorPicker;

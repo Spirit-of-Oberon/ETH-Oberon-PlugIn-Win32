@@ -1,20 +1,19 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE Lists; (* jm 18.4.95 *)
+MODULE Lists; (** portable *)	(* jm 18.4.95 *)
 
 (**Implementation of scrollable lists.
 *)
@@ -29,8 +28,7 @@ MODULE Lists; (* jm 18.4.95 *)
 	15.5.95 - changed scrolling behaviour back
 	9.5.95 - changed copy over, now works even when focus ist alredy set (ps - 9.5.96)
 *)
-IMPORT Files, Fonts, Display, Display3, Printer, Printer3, Effects, Objects, Gadgets, Oberon, Input, Texts, Attributes,
-	FileDir (*Floppy := Diskette,*);
+IMPORT Files, Fonts, Display, Display3, Printer, Printer3, Effects, Objects, Gadgets, Oberon, Input, Texts, Attributes, FileDir;
 	
 CONST
 	barw = 18;
@@ -66,6 +64,7 @@ VAR
 	W: Texts.Writer;
 	mayscroll, waittime: LONGINT;
 	pat, ss: ARRAY 32 OF CHAR;
+	pos: INTEGER;
 
 (* ---------------------- SLIDER ------------------------- *)
 
@@ -660,7 +659,7 @@ END SelectItem;
 
 PROCEDURE TimeOk(): BOOLEAN;
 BEGIN
-	IF Oberon.Time() <= mayscroll THEN RETURN FALSE
+	IF Oberon.Time() - mayscroll <= 0 THEN RETURN FALSE
 	ELSE mayscroll := Oberon.Time() + waittime; RETURN TRUE
 	END
 END TimeOk;
@@ -851,8 +850,7 @@ BEGIN
 		IF ~F.focus THEN
 			Oberon.Defocus;
 			F.focus := TRUE; Gadgets.Update(F); keysum:= {};
-			REPEAT Effects.TrackMouse(M.keys, M.X, M.Y, Effects.Arrow); keysum := keysum + M.keys UNTIL M.keys = {};
-			IF keysum = {2, 1} THEN (* copy over *)
+			REPEAT Effects.TrackMouse(M.keys, M.X, M.Y, Effects.Arrow); keysum := keysum + M.keys UNTIL M.keys = {}; 			IF keysum = {2, 1} THEN (* copy over *)
 				Oberon.GetSelection(T, beg, end, time);
 				IF time > 0 THEN InsertItems(F, T, beg, end) END
 			END
@@ -889,7 +887,7 @@ END Search;
 
 PROCEDURE ListHandler*(F: Objects.Object; VAR M: Objects.ObjMsg);
 VAR x, y, w, h: INTEGER; F0: List; R: Display3.Mask; redraw: BOOLEAN; T: Texts.Text;
-	ver: LONGINT; l, new: Item;
+	ver, noitems: LONGINT; l, new: Item;
 BEGIN
 	WITH F: List DO
 		IF M IS Display.FrameMsg THEN
@@ -961,28 +959,40 @@ BEGIN
 		ELSIF M IS Objects.FileMsg THEN
 			WITH M: Objects.FileMsg DO
 				IF M.id = Objects.store THEN (* store private data here *)
-					Files.WriteNum(M.R, 3);
+					Files.WriteNum(M.R, 4);
 					Files.WriteString(M.R, F.cmd);
+					(* paranoia count *)
+					l := F.items; F.noitems := 0;
+					WHILE l # NIL DO l := l.next; INC(F.noitems) END;
+					Files.WriteNum(M.R, F.noitems);
+
 					l := F.items;
 					WHILE l # NIL DO Files.WriteString(M.R, l.s); l := l.next END;
-					Files.WriteString(M.R, "");
 					Files.WriteBool(M.R, F.scrollbar);
 					Files.WriteBool(M.R, F.sorted);
 					Gadgets.framehandle(F, M)
 				ELSIF M.id = Objects.load THEN (* load private data here *)
 					Files.ReadNum(M.R, ver);
-					IF (ver = 1) OR (ver = 2) OR (ver = 3) THEN
+					IF (1 <= ver) & (ver <= 4) THEN
 						Files.ReadString(M.R, F.cmd);
-						l := NIL; NEW(new);
-						Files.ReadString(M.R, new.s); F.noitems := 0;
-						WHILE new.s # "" DO
-							IF l = NIL THEN F.items := new ELSE l.next := new; new.prev := l; END; l := new;
-							INC(F.noitems);
-							NEW(new); 
-							Files.ReadString(M.R, new.s);
+						F.noitems := 0; l := NIL;
+						IF ver < 4 THEN
+							NEW(new); Files.ReadString(M.R, new.s);
+							WHILE new.s # "" DO
+								IF l = NIL THEN F.items := new ELSE l.next := new; new.prev := l; END;
+								INC(F.noitems); l := new; 
+								NEW(new); Files.ReadString(M.R, new.s)
+							END
+						ELSE
+							Files.ReadNum(M.R, noitems);
+							WHILE F.noitems < noitems DO
+								NEW(new); Files.ReadString(M.R, new.s);
+								IF l = NIL THEN F.items := new ELSE l.next := new; new.prev := l; END;
+								INC(F.noitems); l := new
+							END
 						END;
 						IF ver >= 2 THEN Files.ReadBool(M.R, F.scrollbar) ELSE F.scrollbar := FALSE END;
-						IF ver = 3 THEN Files.ReadBool(M.R, F.sorted) END
+						IF ver >= 3 THEN Files.ReadBool(M.R, F.sorted) END
 					ELSE HALT(99)
 					END;
 					Gadgets.framehandle(F, M);
@@ -1036,8 +1046,8 @@ END NewList;
 
 (* --- tools for lists --- *)
 
-(* DOS-Oberon version
-PROCEDURE *ListFiles(name: FileDir.FileName; adr: LONGINT; VAR cont: BOOLEAN);
+(* Native-Oberon version
+PROCEDURE *ListFiles(name: ARRAY OF CHAR; time, date, size: LONGINT; VAR cont: BOOLEAN);
 VAR i0, i1, j0, j1: INTEGER; f: BOOLEAN; 
 BEGIN i0 := pos; j0 := pos; f := TRUE;
 	LOOP
@@ -1073,13 +1083,11 @@ BEGIN
 	i := 0;
 	WHILE pat[i] > "*" DO pre[i] := pat[i]; INC(i) END;
 	pre[i] := 0X; pos := i;
-	(*
-	FileDir.Enumerate(pre,ListFiles);
-	*)
+	FileDir.Enumerate(pre,FALSE,ListFiles);
 	Texts.Append(text,W.buf);
-END GetDir;
-*)
-	
+END GetDir; *)
+
+(* Windows version *)
 PROCEDURE ListFiles(path, name: ARRAY OF CHAR; time, date, size: LONGINT; isdir: BOOLEAN);
 BEGIN
 	IF ~isdir THEN
@@ -1095,7 +1103,7 @@ VAR path, filename: ARRAY 128 OF CHAR;
 	BEGIN
 		pos := 0; i := 0;
 		WHILE mask[i] # 0X DO
-			IF FileDir.SpecialChar(mask[i]) THEN pos := i+1 END;
+			IF mask[i] = FileDir.PathChar THEN pos := i+1 END;
 			INC(i)
 		END;
 		COPY(mask, path);
@@ -1149,6 +1157,55 @@ BEGIN
 	END
 END Directory;
 
+(* Native-Oberon version
+PROCEDURE Match(name,pat : ARRAY OF CHAR): BOOLEAN;
+	CONST  VAR i0, i1, j0, j1,pos: INTEGER; f: BOOLEAN; 
+BEGIN pos := 0;
+	pos := 0; WHILE (pat[pos] # "*") & (pat[pos] # 0X) & (pat[pos] = name[pos]) DO INC(pos) END;
+	IF name[pos] = 0X THEN RETURN TRUE END;  
+	i0 := pos; j0 := pos; f := TRUE;
+	LOOP
+		IF pat[i0] = "*" THEN INC(i0);
+			IF pat[i0] = 0X THEN EXIT END
+		ELSE
+			IF name[j0] # 0X THEN f := FALSE END;
+			EXIT
+		END;
+		f := FALSE;
+		LOOP
+			IF name[j0] = 0X THEN EXIT END;
+			i1 := i0; j1 := j0;
+			LOOP
+				IF (pat[i1] = 0X) OR (pat[i1] = "*") THEN f := TRUE; EXIT END ;
+				IF pat[i1] # name[j1] THEN EXIT END;
+				INC(i1); INC(j1)
+			END ;
+			IF f THEN j0 := j1; i0 := i1; EXIT END;
+			INC(j0)
+		END;
+		IF ~f THEN EXIT END
+	END ;
+	RETURN f
+END Match;
+
+PROCEDURE *EntryHandler(name: ARRAY OF CHAR; date, time, size: LONGINT);
+BEGIN
+	IF (name[0] > " ") & (name[0] < CHR(127)) & Match(name,pat) THEN Texts.WriteString(W,name); Texts.WriteLn(W) END
+END EntryHandler;
+
+PROCEDURE GetDiskette(mask: ARRAY OF CHAR; text: Texts.Text);
+	VAR i, a, b: INTEGER; 
+BEGIN
+	i := 0;
+	WHILE (mask[i] > " ") & (mask[i] # "/") DO pat[i] := mask[i]; INC(i);  END;
+	pat[i] := 0X;
+	Floppy.OpenVol(a, b);
+	Floppy.Enumerate(EntryHandler);
+	Floppy.CloseVol();
+	Texts.Append(text,W.buf);
+END GetDiskette; *)
+
+(* Windows version *)
 PROCEDURE GetDiskette(mask: ARRAY OF CHAR; text: Texts.Text);
 	VAR  i : INTEGER; 
 BEGIN
@@ -1225,10 +1282,19 @@ BEGIN
 	END
 END Library;
 
+PROCEDURE Init;
+	VAR s: Texts.Scanner;
+BEGIN
+	Oberon.OpenScanner(s, "Gadgets.ListScrollDelay");
+	IF (s.class = Texts.Int) & (s.i > 0) THEN waittime := s.i
+	ELSE waittime := 100
+	END;
+	waittime := waittime * Input.TimeUnit DIV 1000
+END Init;
+
 BEGIN
 	Texts.OpenWriter(W);
-	(* 100 msec wait time *)
-	waittime := 100 * Input.TimeUnit DIV 1000;
+	Init()
 END Lists.
 
 (** Remarks:

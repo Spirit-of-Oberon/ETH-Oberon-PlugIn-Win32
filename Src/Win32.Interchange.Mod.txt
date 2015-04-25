@@ -1,69 +1,42 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
-	"ftp://ftp@ftp.inf.ethz.ch/pub/software/Oberon/System3/License.Text;A"
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE Interchange;	(*mf 11.11.94 / od Jan 95 / tk  *)
+MODULE Interchange; (** non-portable / source: Win32.Interchange.Mod *)	(*mf 11.11.94 / od Jan 95 / tk  *)
 
 	IMPORT SYS := SYSTEM, Kernel, Modules, Files, PLT := OPLT, PLO := OPLO, PLL := OPLL, PLC := OPLC, PLV := OPLV;
 
-	TYPE
-		CommandDesc = RECORD
-			name: ARRAY 24 OF CHAR;
-			offset: INTEGER
-		END;
-
 	CONST
-		Var = 1; Par = 2; VarPar = 3; Con = 4; LProc = 6; XProc = 7; TypDynArr = 8;
+		Var = 1; Con = 4; XProc = 7; TypDynArr = 8;
 		TypArray = 9; TypPointer = 10; TypRecord = 11; TypProcTyp = 12;
-		Byte = 1; Bool = 2; Char = 3; SInt = 4; Int = 5; LInt = 6; Real = 7; LReal = 8;
-		Set = 9; String = 10; Pointer = 13; Comp = 15;
-		Array = 2; DynArr = 3; Record = 4;
 		
 		Local=FALSE; Global=TRUE;
-			
-		inxchk = 0; ovflchk = 1; ranchk = 2; typchk = 3; ptrinit = 5;
-		
+
+		(*	inxchk = 0; ovflchk = 1; ranchk = 2; typchk = 3; ptrinit = 5;	*)
+
+		DefMaxImport = 64; DefMaxStruct = 32; DefMaxReimp = 32;
+
 	VAR
-		verbose : BOOLEAN;
+		first: BOOLEAN; theMod: Modules.Module;
+		(*	verbose: BOOLEAN;
 		verboseHook*: PROCEDURE (M: Modules.Module);
-		options: SET;
-
-	PROCEDURE Str(s: ARRAY OF CHAR);
-		VAR i: INTEGER;
-	BEGIN	i:=0; REPEAT Modules.resMsg[Modules.resMsgLen]:=s[i]; INC(i); INC(Modules.resMsgLen) UNTIL s[i-1]=0X; DEC(Modules.resMsgLen);
-	END Str;
-
-	PROCEDURE Ln;
-	BEGIN	Modules.resMsg[Modules.resMsgLen]:=0DX; INC(Modules.resMsgLen); Modules.resMsg[Modules.resMsgLen]:=0X
-	END Ln;
-	
-	PROCEDURE err(n: INTEGER; VAR name: ARRAY OF CHAR);
-	BEGIN Modules.res := n; 
-		IF n > 0 THEN
-			IF n < 20 THEN Str("Call error: "); Str(name) END;
-			IF n = 1 THEN Str(" not found")
-			ELSIF n = 2 THEN Str(" not a valid object file")
-			ELSIF n = 8 THEN Str(" no symbols")
-			END
-		END
-	END err;
+		options: SET;	*)
 
 	PROCEDURE^ Import(VAR R: Files.Rider; M: Modules.Module);
 
 	PROCEDURE BuildSym(VAR R: Files.Rider; M: Modules.Module);
-		VAR mnolev: SHORTINT; ent: INTEGER; nofEntries, adr, nofRecs, s: LONGINT;
+		VAR nofEntries, adr, nofRecs, s: LONGINT;
 			mod: Modules.Module; obj: PLT.Object;
 	BEGIN	Import(R, M);
 		IF Modules.res = 0 THEN	M.nofstrc := 1; obj := NIL;
@@ -74,10 +47,20 @@ MODULE Interchange;	(*mf 11.11.94 / od Jan 95 / tk  *)
 				CASE obj.mode OF
 					| Var: PLL.TypSize(obj.typ); s := obj.typ.size; PLL.AlignVar(adr, s); PLL.AllocVar(adr, obj.linkadr, s); 
 						obj.linkadr := obj.linkadr + M.sb;
-					| XProc: obj.linkadr := M.entries[nofEntries];
+					| XProc: IF nofEntries >= M.nofEntries THEN
+								M.publics := 0;
+								Modules.ErrMsg(16 (*Modules.incompImport*), M.name);
+								RETURN
+							END;
+							obj.linkadr := M.entries[nofEntries];
 							INC(nofEntries); IF nofEntries > 127 THEN HALT(33) END;
 							obj.adr := 0; PLL.ParamAdr(obj);
-					| TypRecord: PLL.TypSize(obj.typ); obj.typ.tdadr := M.tdescs[nofRecs]; INC(nofRecs); obj.linkadr := -1;
+					| TypRecord: IF nofRecs >= M.nofTds THEN
+								M.publics := 0;
+								Modules.ErrMsg(16 (*Modules.incompImport*), M.name);
+								RETURN
+							END;
+							PLL.TypSize(obj.typ); obj.typ.tdadr := M.tdescs[nofRecs]; INC(nofRecs); obj.linkadr := -1;
 					| TypDynArr, TypArray, TypPointer, TypProcTyp: PLL.TypSize(obj.typ); obj.linkadr := -1;
 					| Con:
 				ELSE
@@ -89,10 +72,13 @@ MODULE Interchange;	(*mf 11.11.94 / od Jan 95 / tk  *)
 
 	(*append object list to module descriptor*)
 	PROCEDURE Decorate*(M: Modules.Module);
-	VAR done: BOOLEAN; ch0, ch1: CHAR; i: INTEGER; symSize: LONGINT;
+	VAR ch0, ch1: CHAR; i: INTEGER; symSize: LONGINT;
 		R: Files.Rider; fname: Modules.ModuleName; F: Files.File;
 	BEGIN
 		IF M.publics = 0 THEN
+			IF M.import = NIL THEN M.nofimp := 0; NEW(M.import, DefMaxImport) END;
+			IF M.struct = NIL THEN M.nofstrc := 0; NEW(M.struct, DefMaxStruct) END;
+			IF M.reimp = NIL THEN M.nofreimp := 0; NEW(M.reimp, DefMaxReimp) END;
 			i := 0; ch0 := M.name[0];
 			WHILE ch0 # 0X DO fname[i] := ch0; INC(i); ch0 := M.name[i] END;
 			fname[i] := "."; fname[i+1] := "O"; fname[i+2] := "b"; fname[i+3] := "j"; fname[i+4] := 0X;
@@ -101,9 +87,9 @@ MODULE Interchange;	(*mf 11.11.94 / od Jan 95 / tk  *)
 				Files.Read(R, ch0);
 				IF ch0 = 0BBX THEN Files.Read(R, ch1); 
 					Files.ReadNum(R, symSize); BuildSym(R, M)
-				ELSE err(2, M.name) END;
+				ELSE Modules.ErrMsg(2 (*Modules.invalidObjFile*), M.name) END;
 				Files.Close(Files.Base(R))
-			ELSE err(8, M.name) END
+			ELSE Modules.ErrMsg(16 (*Modules.incompImport*), M.name) END
 		END
 	END Decorate;
 
@@ -134,8 +120,8 @@ MODULE Interchange;	(*mf 11.11.94 / od Jan 95 / tk  *)
 	END Unlink;
 
 	PROCEDURE* Load(VAR R: Files.Rider; M: Modules.Module);
-		VAR nofcmds, nofptrs: INTEGER; above, below, c, d, i, sfSize: LONGINT;
-		body: PROCEDURE; R1: Files.Rider; m1: Modules.Module; globals, obj: PLT.Object;
+		VAR nofcmds, nofptrs: INTEGER; above, below, c, i, sfSize: LONGINT;
+		body: Modules.Command; R1: Files.Rider; m1: Modules.Module; globals, obj: PLT.Object;
 			
 		PROCEDURE LSW (x: LONGINT): LONGINT;
 		BEGIN (* least significant word (unsigned) *)
@@ -143,7 +129,10 @@ MODULE Interchange;	(*mf 11.11.94 / od Jan 95 / tk  *)
 		END LSW;
 	
 	BEGIN
-		M.init := FALSE;
+		M.init := FALSE; nofcmds := 0;
+		IF M.import = NIL THEN M.nofimp := 0; NEW(M.import, DefMaxImport) END;
+		IF M.struct = NIL THEN M.nofstrc := 0; NEW(M.struct, DefMaxStruct) END;
+		IF M.reimp = NIL THEN M.nofreimp := 0; NEW(M.reimp, DefMaxReimp) END;
 		Kernel.DisableGC(); Files.ReadNum(R, sfSize); R1 := R;
 		Files.Set(R1, Files.Base(R1), Files.Pos(R1) + sfSize); Import(R, M); 
 		IF Modules.res = 0 THEN
@@ -151,7 +140,7 @@ MODULE Interchange;	(*mf 11.11.94 / od Jan 95 / tk  *)
 			Import(R1, M);															
 			m1 := Modules.modList; WHILE m1 # NIL DO m1.nofreimp := 0; m1 := m1.link END;
 			PLT.ReadScope(R, M, 0, globals, Global); R := R1;
-			IF Modules.res = 0 THEN PLT.theMod:=M; PLL.Open; PLO.Open;
+			IF Modules.res = 0 THEN theMod:=M; PLL.Open; PLO.Open;
 				M.publics:=SYS.VAL(LONGINT, globals); PLT.ReadScope(R, M, 0, globals, Local);
 				M.privates:=SYS.VAL(LONGINT, globals);	
 				PLC.Init({0, 3, 5});
@@ -257,25 +246,23 @@ MODULE Interchange;	(*mf 11.11.94 / od Jan 95 / tk  *)
 						i := 0; WHILE i < PLL.refSize DO M.refs[i] := PLL.refs[i]; INC(i) END;
 					END;
 	
-					IF verbose & (verboseHook#NIL) THEN verboseHook(M) END;
-					M.init := TRUE; PLL.Close; (* M.privates := 0; *)
-					SYS.PUT(SYS.ADR(body), M.entries[0]);
+					(*	IF verbose & (verboseHook#NIL) THEN verboseHook(M) END;	*)
+					M.init := TRUE; M.link := Modules.modList; Modules.modList := M; PLL.Close; (* M.privates := 0; *)
+					body := SYS.VAL(Modules.Command, M.entries[0]);
 					m1 := NIL; globals := NIL; obj := NIL;
-					above := 0; below := 0; c := 0; d := 0; i := 0; sfSize := 0;
-					Kernel.EnableGC();
-(*Kernel.getCodeSize(c, d);
-IF (Kernel.HeapSize() - Kernel.Available() - c - d) < (256*1024) THEN*)
-	Kernel.GC();
-(*END;*)
-
+					above := 0; below := 0; c := 0; i := 0; sfSize := 0;
+					Kernel.EnableGC(); Modules.res := 0;
+					IF ~first THEN Kernel.GC() ELSE first := FALSE END;
 					body();
-					Modules.res := 0; RETURN
+					Modules.res := 0;
+					RETURN
 				ELSE Unlink(M, FALSE); Files.Close(Files.Base(R)) END
 			ELSE Unlink(M, FALSE); Files.Close(Files.Base(R)) END
 		ELSE Unlink(M, FALSE); Files.Close(Files.Base(R)) END;
 		Kernel.EnableGC()
 	END Load;
 
+(*
 	PROCEDURE Start*;
 	BEGIN	Modules.extended.Load := Load
 	END Start;
@@ -295,8 +282,10 @@ IF (Kernel.HeapSize() - Kernel.Available() - c - d) < (256*1024) THEN*)
 	PROCEDURE ChecksOff*;
 	BEGIN	options := {}
 	END ChecksOff;
+*)
 
 BEGIN
-	options := {inxchk, ovflchk, ranchk, typchk, ptrinit};
+	(*	options := {inxchk, ovflchk, ranchk, typchk, ptrinit};	*)
+	first := TRUE;
 	Modules.extended.Load:=Load; Modules.extended.Unlink:=Unlink
 END Interchange.

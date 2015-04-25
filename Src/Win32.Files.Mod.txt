@@ -1,779 +1,731 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;type=A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE Files;  (* MH Feb 93 / 5.5.94 *)
+MODULE Files; (** portable, except where noted / source: Win32.Files.Mod *)	(* Files for Oberon for Windows 95/NT, ejz  *)
+	IMPORT S := SYSTEM, Kernel32, Kernel, FileDir;
 
-(**
-The Files module provided access to the file system of the host operating system by simulating an Oberon-like file system.
-*)
-	(* jm 9.8.95 - added support for read-only directories *)
-	
-IMPORT
-	S := SYSTEM, Kernel, Kernel32, FileDir, C := Console;
+(* Based on Files from MH Feb 93 / 5.5.95
+	31.1.96 - adapted for Windows 95/NT Threads (ejz) *)
 
-CONST
-	BufSize = 4096;
-	NofBuffers = 4;	(* nof buffers per file *)
-	MaxFiles = 128+64;	(* max number of open files *)
-	HeaderLen = 2 (* FileTag *) + FileDir.NameLen (* oberon file name *) ;
-	OberonFileTag = "oB";
-	dos = 0; registered = 1;	(* file flags *)
-	
-TYPE
-	LPSZ = LONGINT;	(* Win32: pointer to zero terminated string *)
-	Win32Handle = LONGINT;
+(** The Files module provided access to the file system of the host operating system by simulating an Oberon-like file system. *)
 
-	File* = POINTER TO Handle;
-	Buffer = POINTER TO BufDesc;
+	CONST
+		BufSize = 4*1024; MaxBufs = 4; WinPathChar = "\";
 
-	Handle = RECORD
-		reg: FileDir.Entry;
-		flags: SET;	(* {dos}; dos IN flags => no file header *)
-		fd: Win32Handle;	(* Win32 file descriptor *)
-		ind: INTEGER;	(* index in FileTab, or -1 *)
-		buf: ARRAY NofBuffers OF Buffer;
-		len: LONGINT;	(* length of file w/o header *)
-		pos: LONGINT;	(* cached file pointer position of fd *)
-		swap: INTEGER;	(* next buffer to be swapped *)
-	END;
-
-	BufDesc = RECORD
-		f: File;
-		dirty: BOOLEAN;
-		org, size: LONGINT;
-		data: ARRAY BufSize OF S.BYTE
-	END;
-
-	Rider* = RECORD	(** Riders are the access mechanisms for files. *)
-		res*: LONGINT;	(** Rider operation result code. *)
-		eof*: BOOLEAN;	(** Rider has reached the end of the file. *)
-		buf: Buffer;
-		org, offset: LONGINT;	(* w/o header *)
-	END;
-
-	Array2 = ARRAY 2 OF CHAR;
-	Array4 = ARRAY 4 OF CHAR;
-	Array8 = ARRAY 8 OF CHAR;
-
-VAR
-	FileTab: ARRAY MaxFiles OF (*File*) LONGINT;	(* table of opened, physical files *)
-
-	Tag: ARRAY 3 OF CHAR;
-	TempPrefix: ARRAY 8 OF CHAR;
-	mod: LONGINT;
-
-
-PROCEDURE Capitalize (VAR s: ARRAY OF CHAR);
-	VAR i: INTEGER; ch: CHAR;
-BEGIN
-	i := 0; ch := s[0];
-	WHILE (ch # 0X) DO
-		IF ("a" <= ch) & (ch <= "z") THEN s[i] := CAP(ch) END;
-		INC(i); ch := s[i];
-	END;
-END Capitalize;
-
-(* validate a dos file name to 8+3 convention, jm *)
-PROCEDURE Validate(s: ARRAY OF CHAR; VAR t: ARRAY OF CHAR);
-VAR i, j, k: INTEGER;
-BEGIN
-	i := 0; j := 0;
-	WHILE (s[i] # 0X) & (s[i] # ".") DO
-		IF j < 8 THEN t[j] := s[i]; INC(j) END;
-		INC(i)
-	END;
-	IF s[i] = "." THEN
-		t[j] := "."; INC(j);
-		WHILE s[i] # 0X DO INC(i) END; (* skip to end *)
-		DEC(i);
-		WHILE (i > 0) & (s[i] # ".") DO DEC(i) END;
-		INC(i); k := 0;
-		WHILE (s[i] # 0X) & (s[i] # ".") DO
-			IF k < 3 THEN t[j] := s[i]; INC(j); INC(k) END;
-			INC(i)
+	TYPE
+		Buffer = POINTER TO BufDesc;
+		BufDesc = RECORD
+			data: ARRAY BufSize OF S.BYTE;
+			org, size: LONGINT;
+			dirty: BOOLEAN
 		END;
-	END;
-	t[j] := 0X
-END Validate;
 
-PROCEDURE SplitName (VAR name: ARRAY OF CHAR; VAR path: FileDir.Path;
-									VAR filename: FileDir.FileName; VAR native: BOOLEAN);
-	VAR i, pos: INTEGER; (* pos = position of first filename character *)
-		curDir: FileDir.Directory; onFloppy: BOOLEAN; mappedname: FileDir.FileName;
-BEGIN
-	pos := 0; i := 0;
-	WHILE name[i] # 0X DO
-		IF name[i] = "/" THEN name[i] := "\" END; (* jm conversion *)
-		IF name[i] = "\" THEN pos := i+1 END;
-		INC(i)
-	END;
-	native := name[pos] = FileDir.DOSFilePrefix;
-	COPY(name, path);
-	IF pos = 0 THEN (* no path *) path[0] := 0X;
-	ELSIF (pos = 1) OR (pos = 3) & (name[1] = ":") THEN (* keep trailing \ *) path[pos] := 0X
-	ELSE (* cut last \ *) path[pos-1] := 0X;
-	END;
-	i := 0;
-	IF native THEN INC(pos) END;
-	WHILE (name[pos] # 0X) & (i < LEN(filename)-1) DO
-		filename[i] := name[pos]; INC(pos); INC(i)
-	 END;
-	filename[i] := 0X;
-	curDir := FileDir.CurrentDirectory();
-	onFloppy :=  (*((path[0] = 0X) & ((CAP(curDir.path[0]) = "A") OR (CAP(curDir.path[0]) = "B")) & (curDir.path[1] = ":"))
-					OR*) (((CAP(path[0]) = "A") OR (CAP(path[0]) = "B")) & (path[1] = ":"));
-	IF onFloppy THEN FileDir.Map(filename, mappedname); filename := mappedname END;
-	native := native OR onFloppy;
-	IF native THEN Capitalize(filename); Validate(filename, filename) END;
-END SplitName;
-
-PROCEDURE Append (VAR path: ARRAY OF CHAR; filename: ARRAY OF CHAR);
-	VAR i, j, max: LONGINT;
-BEGIN
-	i := 0; j := 0; max := LEN(path)-1;
-	WHILE path[i] # 0X DO INC(i) END;
-	IF (i > 0) & (path[i-1] # "\") THEN path[i] := "\"; INC(i) END;
-	WHILE (i < max) & (filename[j] # 0X) DO path[i] := filename[j]; INC(i); INC(j) END;
-	path[i] := 0X;
-END Append;
-
-PROCEDURE FullPathName (VAR path: FileDir.Path; name: ARRAY OF CHAR; VAR fullname: FileDir.Path);
-BEGIN
-	fullname := path; Append(fullname, name);
-END FullPathName;
-
-PROCEDURE SetFilePos (f: File; pos: LONGINT);
-	CONST FileBegin = 0;
-	VAR res: LONGINT; err: LONGINT;
-BEGIN
-	IF ~(dos IN f.flags) THEN INC(pos, HeaderLen) END;
-	res := Kernel32.SetFilePointer(f.fd, pos, Kernel32.NULL, Kernel32.FileBegin); f.pos := pos;
-	IF res = 0FFFFFFFFH THEN err := Kernel32.GetLastError(); HALT(99) END;
-END SetFilePos;
-
-PROCEDURE CreateTempFile (VAR path: ARRAY OF CHAR; VAR name: ARRAY OF CHAR);
-	(* creates and closes a temporary file in directory path; its name is returned in name *)
-	VAR dummy: LONGINT;
-		fullname: FileDir.Path;
-		i, j: INTEGER;
-BEGIN
-	dummy := Kernel32.GetTempFileName(S.ADR(path), S.ADR(TempPrefix), 0, S.ADR(fullname));
-	i := 0; j := 0;
-	WHILE fullname[i] # 0X DO
-		IF fullname[i] = "\" THEN j := 0 ELSE name[j] := fullname[i]; INC(j) END;
-		INC(i);
-	END;
-	name[j] := 0X;
-END CreateTempFile;
-
-PROCEDURE GetEmpty (VAR i: INTEGER);	(* returns index of empty file entry in FileTab, or else -1 *)
-	VAR firstTry: BOOLEAN;
-BEGIN firstTry := TRUE;
-	LOOP i := 0;
-		WHILE i < MaxFiles DO
-			IF FileTab[i] = Kernel32.NULL THEN RETURN END;
-			INC(i);
+		File* = POINTER TO Handle; (** file descriptor *)
+		Handle = RECORD (Kernel32.ObjectDesc) (** file descriptor *)
+			name: FileDir.FileName;
+			temp: POINTER TO RECORD temp, name: FileDir.FileName END;
+			bufs: ARRAY MaxBufs OF Buffer;
+			pos, len, swap: LONGINT;
+			next: File
 		END;
-		IF ~firstTry THEN EXIT END;
-		(* no empty handle, close unused files *)
-		Kernel.GC; firstTry := FALSE;
-	END;
-	i := -1;
-END GetEmpty;
 
-PROCEDURE Win32Create (VAR name: ARRAY OF CHAR; readonly: BOOLEAN; VAR err: LONGINT): LONGINT;
-	VAR fd: LONGINT;
-BEGIN
-	err := 0;
-	IF readonly THEN
-		fd := Kernel32.CreateFile(S.ADR(name), Kernel32.GenericRead, Kernel32.FileShareRead, Kernel32.NULL, Kernel32.OpenExisting, Kernel32.FileAttributeNormal, Kernel32.NULL);
-		IF fd = Kernel32.InvalidHandleValue THEN err := Kernel32.GetLastError() END
-	ELSE
-		fd := Kernel32.CreateFile(S.ADR(name), Kernel32.LongOr(Kernel32.GenericRead, Kernel32.GenericWrite), Kernel32.LongOr(Kernel32.FileShareRead, Kernel32.FileShareWrite), Kernel32.NULL, Kernel32.OpenExisting, Kernel32.FileAttributeNormal, Kernel32.NULL);
-		IF fd = Kernel32.InvalidHandleValue THEN err := Kernel32.GetLastError();
-			(*IF (err = AccessDenied) OR (err = WriteProtect) OR (err = SharingViolation) OR (NetworkAccessDenied) THEN*)
-			fd := Kernel32.CreateFile(S.ADR(name), Kernel32.GenericRead, Kernel32.LongOr(Kernel32.FileShareRead, Kernel32.FileShareWrite), Kernel32.NULL, Kernel32.OpenExisting, Kernel32.FileAttributeNormal, Kernel32.NULL);
-			IF fd = Kernel32.InvalidHandleValue THEN err := Kernel32.GetLastError() END;
+		Rider* = RECORD (** Riders are the access mechanisms for files. *)
+			F: File; buf: Buffer;
+			res*, org, offset: LONGINT;	(** Rider operation result code. *)
+			eof*: BOOLEAN (** Rider has reached the end of the file. *)
+		END;
+
+	VAR
+		OpenFlags, NewFlags, GenericReadWrite, ShareReadWrite: LONGINT;
+		moduleCS: Kernel32.CriticalSection;
+		root: File;
+
+	PROCEDURE FindOpenFile(VAR name: ARRAY OF CHAR): File;
+		VAR F: File;
+	BEGIN
+		F := root.next;
+		WHILE (F # NIL) & ~FileDir.SameName(F.name, name) DO
+			F := F.next
+		END;
+		RETURN F
+	END FindOpenFile;
+
+	PROCEDURE Error(unlock: BOOLEAN);
+		VAR err: LONGINT;
+	BEGIN
+		err := Kernel32.GetLastError();
+(* error string *)
+		IF unlock THEN Kernel32.LeaveCriticalSection(S.ADR(moduleCS)) END;
+		HALT(99)
+	END Error;
+
+	PROCEDURE ClosePhysical(F: File): BOOLEAN;
+	BEGIN
+		IF (F.handle # Kernel32.InvalidHandleValue) & (Kernel32.CloseHandle(F.handle) = Kernel32.False) THEN
+			RETURN FALSE
+		ELSE
+			F.handle := Kernel32.InvalidHandleValue;
+			RETURN TRUE
 		END
-	END;
-	RETURN fd;
-END Win32Create;
+	END ClosePhysical;
 
-PROCEDURE Win32Write (fd: Win32Handle; VAR data: ARRAY OF S.BYTE; n: LONGINT; VAR done: BOOLEAN);
-	VAR nofWritten: LONGINT;
-BEGIN
-	done := Kernel32.WriteFile(fd, S.ADR(data), n, nofWritten, Kernel32.NULL) # Kernel32.False;
-	done := done & (nofWritten = n);
-END Win32Write;
+	PROCEDURE DeletePhysical(VAR name: ARRAY OF CHAR): BOOLEAN;
+	BEGIN
+		RETURN Kernel32.DeleteFile(S.ADR(name)) # Kernel32.False
+	END DeletePhysical;
 
-PROCEDURE OpenPhysical (f: File);
-	VAR i: INTEGER; done: BOOLEAN; fd: Win32Handle;
-		tag: ARRAY 4 OF CHAR; temp: BOOLEAN;
-		err: LONGINT;
-		filename: FileDir.Path;
-BEGIN temp := FALSE;
-	GetEmpty(i);
-	IF i < 0 THEN C.Str("Too many open Oberon file handles"); C.Ln; Kernel.Exit(1) END;
-	IF f.reg.hostname = "" THEN CreateTempFile(f.reg.dir.path, f.reg.hostname); temp := TRUE END;
-	FullPathName(f.reg.dir.path, f.reg.hostname, filename);
-	fd := Win32Create(filename, FileDir.ReadOnly(f.reg.dir), err);
-	IF err = Kernel32.ErrorTooManyOpenFiles THEN (* too many open DOS files *)
-		C.Str("Too many open DOS files. Trying to close some."); C.Ln;
-		Kernel.GC; fd := Win32Create(filename, FileDir.ReadOnly(f.reg.dir), err);
-		IF err = Kernel32.ErrorTooManyOpenFiles THEN C.Str("Still too many open DOS files: fatal error"); C.Ln; Kernel.Exit(1) END;
-	END;
-	f.fd := fd;
-	IF fd # Kernel32.InvalidHandleValue THEN
-		FileTab[i] := S.VAL(LONGINT, f); f.ind := i; tag[0] := 0X;
-		SetFilePos(f, 0)
-	END;
-END OpenPhysical;
-
-PROCEDURE ClosePhysical (f: File);
-	VAR done: BOOLEAN;
-BEGIN
-	done := Kernel32.CloseHandle(f.fd) # Kernel32.False;
-	FileTab[f.ind] := Kernel32.NULL; f.fd := Kernel32.InvalidHandleValue; f.ind := -1;
-END ClosePhysical;
-
-PROCEDURE Flush (buf: Buffer);
-	VAR nofWritten: LONGINT; done: BOOLEAN; f: File; err: LONGINT;
-BEGIN
-	IF buf.dirty THEN f := buf.f;
-		IF f.fd = Kernel32.InvalidHandleValue THEN OpenPhysical(f) END;
-		IF buf.org # f.pos THEN SetFilePos(f, buf.org) END;
-		done :=  Kernel32.WriteFile(f.fd, S.ADR(buf.data), buf.size, nofWritten, Kernel32.NULL) # Kernel32.False;
-		IF ~done THEN err := Kernel32.GetLastError(); HALT(99) END;
-		INC(f.pos, buf.size);
-		buf.dirty := FALSE;
-	END
-END Flush;
-
-PROCEDURE Finalize (f: PTR);
-BEGIN
-	WITH f: File DO
-		IF f.fd = Kernel32.InvalidHandleValue THEN (* not physically open *) RETURN END;
-		ClosePhysical(f);
-		IF ~(registered IN f.flags) & (f.reg.hostname[0] # 0X) THEN (* delete the dos file *)
-			FileDir.Delete(f.reg.dir, f.reg.hostname);
+	PROCEDURE SetPhysicalPos(F: File; pos: LONGINT);
+	BEGIN
+		IF Kernel32.SetFilePointer(F.handle, pos, Kernel32.NULL, Kernel32.FileBegin) # pos THEN
+			HALT(99)
 		END;
-	END
-END Finalize;
+		F.pos := pos
+	END SetPhysicalPos;
 
-PROCEDURE Lookup  (VAR name: FileDir.FileName; dir: FileDir.Directory; native: BOOLEAN; VAR f: File);
-	(* search for registered open file with oberon name name in directory dir *)
-	VAR i: INTEGER;
-BEGIN i := 0;
-	WHILE i < MaxFiles DO f := S.VAL(File, FileTab[i]);
-		IF (f # NIL) & (registered IN f.flags) & (f.reg.name = name) & (native = (dos IN f.flags)) & (f.reg.dir = dir) THEN
-			RETURN 
-		END;
-		INC(i);
-	END;
-	f := NIL;
-END Lookup;
+	PROCEDURE MovePhysical(VAR from, to: ARRAY OF CHAR): BOOLEAN;
+	BEGIN
+		IF Kernel32.MoveFileEx(S.ADR(from), S.ADR(to), Kernel32.LongOr(Kernel32.MoveFileReplaceExisting, Kernel32.MoveFileCopyAllowed)) = Kernel32.False THEN
+			IF Kernel32.CopyFile(S.ADR(from), S.ADR(to), Kernel32.False) = Kernel32.False THEN
+				RETURN FALSE
+			ELSE
+				RETURN DeletePhysical(from)
+			END
+		ELSE
+			RETURN TRUE
+		END
+	END MovePhysical;
 
-PROCEDURE LookupHost  (VAR name: FileDir.HostName; dir: FileDir.Directory; VAR f: File);
-	VAR i: INTEGER;
-BEGIN
-	i := 0;
-	WHILE i < MaxFiles DO
-		f := S.VAL(File, FileTab[i]);
-		IF (f # NIL) & (f.reg.dir = dir) & (f.reg.hostname = name) THEN RETURN END;
-		INC(i);
-	END;
-	f := NIL;
-END LookupHost;
-
-PROCEDURE old0 (VAR filename: FileDir.FileName; dir: FileDir.Directory; native: BOOLEAN): File;
-	VAR f: File; e: FileDir.Entry;
-BEGIN
-	Lookup(filename, dir, native, f);
-	IF f = NIL THEN
-		IF native THEN
-			IF FileDir.Exists(dir, filename) THEN
-				IF FileDir.ThisHostEntry(dir, filename) # NIL THEN  (* do not allow to open oberon files as dos files *) 
-					RETURN NIL
-				END;
-			ELSE (* the file does not exist in dir *)
-				RETURN NIL
+	PROCEDURE *FinalizeFile(F: PTR);
+		VAR prev, cur: File;
+	BEGIN
+		WITH F: File DO
+			ClosePhysical(F);
+			IF F.temp # NIL THEN DeletePhysical(F.temp.temp); F.temp := NIL END;
+			prev := root; cur := root.next;
+			WHILE cur # F DO
+				prev := cur; cur := cur.next
 			END;
-			(* the file exists and is not an oberon file *)
-			NEW(e); e.name := filename; COPY(filename, e.hostname); e.dir := dir;
-		ELSE e := FileDir.ThisEntry(dir, filename);
+			prev.next := cur.next; F.next := NIL
+		END
+	END FinalizeFile;
+
+	PROCEDURE init(F: File);
+		VAR i: LONGINT;
+	BEGIN
+		FOR i := 0 TO MaxBufs-1 DO F.bufs[i] := NIL END;
+		F.pos := 0; F.len := 0; F.swap := -1;
+		F.next := root.next; root.next := F;
+		Kernel.RegisterObject(F, FinalizeFile, TRUE)
+	END init;
+
+	PROCEDURE old(VAR fName: ARRAY OF CHAR): File;
+		VAR F: File; ret: LONGINT;
+	BEGIN
+		Kernel32.EnterCriticalSection(S.ADR(moduleCS));
+		F := FindOpenFile(fName);
+		IF F = NIL THEN
+			ret := Kernel32.CreateFile(S.ADR(fName), Kernel32.GenericRead, ShareReadWrite, Kernel32.NULL, Kernel32.OpenExisting, OpenFlags, Kernel32.NULL);
+			IF ret # Kernel32.InvalidHandleValue THEN
+				NEW(F); init(F);
+				F.temp := NIL; COPY(fName, F.name); F.handle := ret;
+				F.len := Kernel32.GetFileSize(F.handle, Kernel32.NULL); SetPhysicalPos(F, 0)
+			END
 		END;
-		IF e # NIL THEN
-			NEW(f); Kernel.RegisterObject(f, Finalize, TRUE);
-			f.fd := Kernel32.InvalidHandleValue; f.len := 0; f.pos := -1; f.swap := -1; (*all f.buf[i] = NIL*)
-			f.reg := e; f.flags := {registered};
-			IF native THEN INCL(f.flags, dos) END;
-			OpenPhysical(f);
-			IF f.fd = Kernel32.InvalidHandleValue THEN f := NIL
-			ELSE f.len := Kernel32.GetFileSize(f.fd, Kernel32.NULL);
-				IF ~(dos IN f.flags) THEN DEC(f.len, HeaderLen) END;
-			END;
-		END;
-	END;
-	RETURN f;
-END old0;
+		Kernel32.LeaveCriticalSection(S.ADR(moduleCS));
+		RETURN F
+	END old;
 
 (** Open an existing file. The same file descriptor is returned if a file is opened multiple times. *)
-PROCEDURE Old* (name: ARRAY OF CHAR): File;
-	VAR f: File; dir: FileDir.Directory; path: FileDir.Path; filename: FileDir.FileName; native: BOOLEAN; pathno: LONGINT;
-BEGIN
-	IF name = "" THEN RETURN NIL END;
-	SplitName(name, path, filename, native); f := NIL;
-	IF path # "" THEN (* search only in directory given by path *)
-		dir := FileDir.ThisDirectory(path);
-		IF dir # NIL THEN f := old0(filename, dir, native) END;
-	ELSE (* search for file in search path *)
-		FileDir.OpenSearchPath(pathno); FileDir.GetNextInSearchPath(pathno, dir);
-		WHILE (f = NIL) & (dir # NIL) DO
-			f := old0(filename, dir, native);
-			FileDir.GetNextInSearchPath(pathno, dir);
-		END;
-	END;
-	RETURN f;
-END Old;
-
-(** Creates a new file with the specified name. The same file descriptor is not returned with multiple calls the New with the same filename (this results in multiple copies of a file with the same name. i.e. the files are not registered in the directory). An invalid filename returns NIL. *)
-PROCEDURE New* (name: ARRAY OF CHAR): File;
-	VAR f: File; path: FileDir.Path; filename: FileDir.FileName;
-		dir: FileDir.Directory; native, done: BOOLEAN;
-		i: INTEGER; ch: CHAR;
-BEGIN
-	SplitName(name, path, filename, native);
-	IF path = "" THEN dir := FileDir.CurrentDirectory();
-	ELSE dir := FileDir.ThisDirectory(path);
-	END;
-	(* IF dir = NIL THEN RETURN NIL END; *)
-	IF dir = NIL THEN
-		FileDir.CreateDirectory(path, done); IF ~done THEN RETURN NIL END;
-		dir:= FileDir.ThisDirectory(path); IF dir = NIL THEN RETURN NIL END
-	END;
-	
-	(* Check filename characters *)
-	i := 0;
-	ch := filename[i];
-	WHILE ch # 0X DO
-		IF ~(((CAP(ch) >= "A") & (CAP(ch) <= "Z")) OR
-		((ch >= "0") & (ch <= "9")) OR (ch = ".") OR FileDir.SpecialChar(ch)) THEN RETURN NIL
-		END;
-		INC(i); ch := filename[i]
-	END;
-	
-	NEW(f); Kernel.RegisterObject(f, Finalize, TRUE);
-	NEW(f.reg); f.reg.hostname := ""; f.reg.name := filename; f.reg.dir := dir;
-	f.ind := -1; f.fd := Kernel32.InvalidHandleValue; f.len := 0; f.pos := -1; f.swap := -1; f.flags := {};
-	IF native THEN INCL(f.flags, dos) END;
-	(*all f.buf[i] = NIL*)
-	RETURN f;
-END New;
-
-(** Flushes the changes made to a file to disk. Register will automatically Close a file. *) 
-PROCEDURE Close* (f: File);
-	VAR i: INTEGER;
-BEGIN i := 0;
-	IF f.fd = Kernel32.InvalidHandleValue THEN OpenPhysical(f) END;
-	WHILE (i < NofBuffers) & (f.buf[i] # NIL) DO Flush(f.buf[i]); INC(i) END;
-END Close;
-
-(** Register a file created with New in the directory, replacing the previous file in the directory with the same name. The file is automatically closed. *)
-PROCEDURE Register* (f: File);
-	VAR hashName, hashName2: FileDir.HostName;
-		f1: File; e: FileDir.Entry;
-		pos: LONGINT; done: BOOLEAN; i: INTEGER;
-BEGIN
-	IF f = NIL THEN RETURN END;
-	Close(f); (* f is now physically allocated *)
-	IF registered IN f.flags THEN RETURN END;
-	IF FileDir.ReadOnly(f.reg.dir) THEN HALT(99) END;
-	
-	IF ~(dos IN f.flags) THEN (* write file header *)
-		INCL(f.flags, dos); pos := f.pos; SetFilePos(f, 0);
-		Win32Write(f.fd, Tag, 2, done); Win32Write(f.fd, f.reg.name, 32, done);
-		SetFilePos(f, pos); EXCL(f.flags, dos);
-	END;
-	(* check if a dos file with same name exists already and in case rename it *)
-	FileDir.Map(f.reg.name, hashName);
-	IF FileDir.Exists(f.reg.dir, hashName) THEN
-		FileDir.NextMapping(hashName, hashName2);
-		WHILE FileDir.Exists(f.reg.dir, hashName2) DO FileDir.NextMapping(hashName2, hashName2) END;
-		LookupHost(hashName, f.reg.dir, f1);
-		IF f1 # NIL THEN
-			ClosePhysical(f1);
-			FileDir.Rename(f1.reg, hashName2);
-			OpenPhysical(f1);
+	PROCEDURE Old*(name: ARRAY OF CHAR): File;
+		VAR fName: FileDir.FileName;
+	BEGIN
+		IF (name # "") & FileDir.FindFile(name, fName, TRUE) THEN
+			FileDir.ConvertChar(fName, FileDir.PathChar, WinPathChar);
+			RETURN old(fName)
 		ELSE
-			e := FileDir.ThisHostEntry(f.reg.dir, hashName);
-			IF e # NIL THEN FileDir.Rename(e, hashName2);
-			ELSE (* delete host file with same name *) FileDir.Delete(f.reg.dir, hashName);
-			END
+			RETURN NIL
 		END
-	END;
-	IF ~(dos IN f.flags) THEN
-		(* if f is already in file register, then remove it *)
-		e := FileDir.ThisEntry(f.reg.dir, f.reg.name);
-		IF e # NIL THEN
-			Lookup(f.reg.name, f.reg.dir, FALSE, f1);
-			IF f1 # NIL THEN (* let the garbage collector delete the file *)
-				EXCL(f1.flags, registered); FileDir.RemoveEntry(f1.reg.dir, e);
-			ELSE (* no references to that file: delete it *)
-				FileDir.RemoveEntry(f.reg.dir, e);
-				FileDir.Delete(f.reg.dir, e.hostname);
-			END
-		END
-	END;
-	(* finally, rename f and insert it into file register if it's not a dos file *)
-	ClosePhysical(f);
-	FileDir.Rename(f.reg, hashName);
-	OpenPhysical(f);
-	IF ~(dos IN f.flags) THEN FileDir.InsertEntry(f.reg.dir, f.reg) END;
-	INCL(f.flags, registered);
-END Register;
+	END Old;
 
-(** Renames a file. res = 0 indicates success. *)
-PROCEDURE Rename* (old, new: ARRAY OF CHAR; VAR res: INTEGER);
-	VAR f: File; e: FileDir.Entry; oldnative, newnative: BOOLEAN;
-		oldpath, newpath: FileDir.Path; oldname, newname: FileDir.FileName;
-		hostname: FileDir.HostName; dir: FileDir.Directory;
-BEGIN
-	res := 2;
-	SplitName(old, oldpath, oldname, oldnative); SplitName(new, newpath, newname, newnative);
-	IF (oldpath = newpath) & (oldnative = newnative) THEN
-		IF oldpath = "" THEN dir := FileDir.CurrentDirectory() ELSE dir := FileDir.ThisDirectory(oldpath) END;
-		IF (dir # NIL) & ~FileDir.ReadOnly(dir) THEN
-			f := old0(oldname, dir, oldnative);
-			IF f # NIL THEN
-				IF dos IN f.flags THEN
-					ClosePhysical(f); FileDir.Rename(f.reg, newname);
-				ELSE
-					e := FileDir.ThisEntry(f.reg.dir, oldname);
-					FileDir.RemoveEntry(f.reg.dir, e); EXCL(f.flags, registered);
-					e.name := newname; f.reg := e;
-					Register(f);
-				END;
-				res := 0;
-			END
-		END
-	END
-END Rename;
+	PROCEDURE TempName(VAR name: ARRAY OF CHAR);
+		VAR tempDir: FileDir.FileName; pref: ARRAY 8 OF CHAR;
+	BEGIN
+		FileDir.GetTempDirectory(tempDir); FileDir.ConvertChar(tempDir, FileDir.PathChar, WinPathChar);
+		pref := "Oberon";
+		Kernel32.GetTempFileName(S.ADR(tempDir), S.ADR(pref), 0, S.ADR(name))
+	END TempName;
 
-(** Deletes a file. res = 0 indicates success. *)
-PROCEDURE Delete* (name: ARRAY OF CHAR; VAR res: INTEGER);
-	VAR f: File; e: FileDir.Entry; path: FileDir.Path; filename: FileDir.FileName;
-		dir: FileDir.Directory; native: BOOLEAN;
-BEGIN
-	SplitName(name, path, filename, native); res := 1;
-	IF path # "" THEN dir := FileDir.ThisDirectory(path) ELSE dir := FileDir.CurrentDirectory() END;
-	IF (dir # NIL) & ~FileDir.ReadOnly(dir) THEN
-		Lookup(filename, dir, native, f);
-		IF f # NIL THEN
-			IF ~native THEN FileDir.RemoveEntry(dir, f.reg) END;
-			EXCL(f.flags, registered);
-			res := 0;
+	PROCEDURE new(anonymous: BOOLEAN): File;
+		VAR F: File;
+	BEGIN
+		Kernel32.EnterCriticalSection(S.ADR(moduleCS));
+		NEW(F); init(F);
+		NEW(F.temp); F.name := ""; F.handle := Kernel32.InvalidHandleValue;
+		IF ~anonymous THEN TempName(F.temp.temp) END;
+		Kernel32.LeaveCriticalSection(S.ADR(moduleCS));
+		RETURN F
+	END new;
+
+(** Creates a new file with the specified name. The same file descriptor is not returned with multiple calls of New with the
+	same filename (this results in multiple copies of a file with the same name. i.e. the files are not registered in the directory). *)
+	PROCEDURE New*(name: ARRAY OF CHAR): File;
+		VAR F: File;
+	BEGIN
+		IF name = "" THEN
+			F := new(TRUE); F.temp.name := ""
+		ELSIF FileDir.CheckName(name) THEN
+			F := new(FALSE); FileDir.ConvertChar(name, FileDir.PathChar, WinPathChar); COPY(name, F.temp.name)
 		ELSE
-			e := FileDir.ThisEntry(dir, filename);
-			IF e # NIL THEN
-				FileDir.RemoveEntry(dir, e);
-				FileDir.Delete(dir, e.hostname);
-			ELSE FileDir.Delete(dir, filename);
-			END;
-			res := 0;
-		END
-	END
-END Delete;
-
-(*(** Deletes a file. *)
-PROCEDURE Purge* (f: File);
-	VAR fullname: FileDir.Path; res: INTEGER;
-BEGIN
-	IF ~FileDir.ReadOnly(f.reg.dir) THEN
-		ClosePhysical(f);
-		IF ~(dos IN f.flags) THEN FileDir.RemoveEntry(f.reg.dir, f.reg) END;
-		IF f.reg.hostname[0] # 0X THEN FileDir.Delete(f.reg.dir, f.reg.hostname) END
-	END
-END Purge;*)
-
-PROCEDURE Length* (f: File): LONGINT;
-BEGIN RETURN f.len
-END Length;
-
-(** Returns the time (t) and date (d) of a file. *)
-PROCEDURE GetDate* (f: File; VAR t, d: LONGINT);
-	VAR ft, lft: Kernel32.FileTime; st: Kernel32.SystemTime; ret: LONGINT;
-BEGIN
-	ret := Kernel32.GetFileTime(f.fd, Kernel32.NULL, Kernel32.NULL, S.ADR(ft));
-	ret := Kernel32.FileTimeToLocalFileTime(S.ADR(ft), S.ADR(lft));
-	ret := Kernel32.FileTimeToSystemTime(S.ADR(lft), S.ADR(st));
-	d := LONG(st.year-1900)*200H + st.month*20H + st.day;
-	t := LONG(st.hour)*1000H + st.min*40H + st.sec;
-END GetDate;
-
-(** Sets the time (t) and date (d) of a file. *)
-PROCEDURE SetDate*(F: File; t, d: LONGINT);
-	VAR ft, lft: Kernel32.FileTime; st: Kernel32.SystemTime; ret: LONGINT;
-BEGIN
-	st.day := SHORT(d MOD 20H); d := ASH(d, -5);
-	st.month := SHORT(d MOD 10H); d := ASH(d, -4);
-	st.year := SHORT(d MOD 80H) + 1900;
-	st.millisec := 0;
-	st.sec := SHORT(t MOD 40H); t := ASH(t, -6);
-	st.min := SHORT(t MOD 40H); t := ASH(t, -6);
-	st.hour := SHORT(t MOD 20H);
-	ret := Kernel32.SystemTimeToFileTime(S.ADR(st), S.ADR(lft));
-	ret := Kernel32.LocalFileTimeToFileTime(S.ADR(lft), S.ADR(ft));
-	ret := Kernel32.SetFileTime(F.fd, Kernel32.NULL, Kernel32.NULL, S.ADR(ft))
-END SetDate;
-
-(** Positions a Rider at a certain position in a file. Multiple Riders can be positioned at different locations in a file. A Rider cannot be positioned beyond the end of a file. *)
-PROCEDURE Set* (VAR r: Rider; f: File; pos: LONGINT);
-	VAR i, nofRead, offset, org, err: LONGINT;
-		buf: Buffer;
-		done: BOOLEAN;
-BEGIN
-	IF f # NIL THEN
-		IF pos > f.len THEN pos := f.len ELSIF pos < 0 THEN pos := 0 END;
-		offset := pos MOD BufSize; org := pos - offset;
-		i := 0;
-		WHILE (i < NofBuffers) & (f.buf[i] # NIL) & (org # f.buf[i].org) DO INC(i) END;
-		IF i < NofBuffers THEN
-			IF f.buf[i] = NIL THEN NEW(buf); buf.dirty := FALSE; buf.org := -1; buf.f := f; f.buf[i] := buf;
-			ELSE buf := f.buf[i];
-			END
-		ELSE
-			f.swap := (f.swap + 1) MOD NofBuffers;
-			buf := f.buf[f.swap]; Flush(buf);
+			F := NIL
 		END;
-		IF buf.org # org THEN
-			IF org = f.len THEN buf.size := 0;
+		RETURN F
+	END New;
+
+	PROCEDURE ReOpen(F: File);
+		VAR ret: LONGINT;
+	BEGIN
+		Kernel32.EnterCriticalSection(S.ADR(moduleCS));
+		IF ~ClosePhysical(F) THEN Error(TRUE) END;
+		IF F.temp # NIL THEN
+			IF F.temp.temp # "" THEN
+				ret := Kernel32.CreateFile(S.ADR(F.temp.temp), GenericReadWrite, Kernel32.FileShareRead, Kernel32.NULL, Kernel32.OpenExisting, OpenFlags, Kernel32.NULL)
 			ELSE
-				IF f.fd = Kernel32.InvalidHandleValue THEN OpenPhysical(f) END;
-				IF f.pos # org THEN SetFilePos(f, org) END;
-				done := Kernel32.ReadFile(f.fd, S.ADR(buf.data), BufSize, nofRead, Kernel32.NULL) # Kernel32.False;
-				IF ~done THEN err := Kernel32.GetLastError(); HALT(99) END;
-				INC(f.pos, nofRead); buf.size := nofRead;
-			END;
-			buf.org := org; buf.dirty := FALSE;
+				TempName(F.temp.temp);
+				ret := Kernel32.CreateFile(S.ADR(F.temp.temp), GenericReadWrite, Kernel32.FileShareRead, Kernel32.NULL, Kernel32.CreateAlways, NewFlags, Kernel32.NULL)
+			END
+		ELSE
+			ret := Kernel32.CreateFile(S.ADR(F.name), GenericReadWrite, Kernel32.FileShareRead, Kernel32.NULL, Kernel32.OpenExisting, OpenFlags, Kernel32.NULL)
 		END;
-	ELSE buf := NIL; org := 0; offset := 0
-	END;
-	r.buf := buf; r.org := org; r.offset := offset; r.eof := FALSE; r.res := 0;
-END Set;
+		IF ret = Kernel32.InvalidHandleValue THEN
+			IF F.temp = NIL THEN
+				ret := Kernel32.CreateFile(S.ADR(F.name), Kernel32.GenericRead, ShareReadWrite, Kernel32.NULL, Kernel32.OpenExisting, OpenFlags, Kernel32.NULL)
+			END;
+			IF ret = Kernel32.InvalidHandleValue THEN Error(TRUE) END
+		END;
+		F.handle := ret; SetPhysicalPos(F, F.pos);
+		Kernel32.LeaveCriticalSection(S.ADR(moduleCS))
+	END ReOpen;
 
-(** Returns the offset of a Rider positioned on a file. *)
-PROCEDURE Pos* (VAR r: Rider): LONGINT;
-BEGIN RETURN r.org + r.offset
-END Pos;
+	PROCEDURE WriteBuf(F: File; buf: Buffer);
+		VAR nWr: LONGINT;
+	BEGIN
+		IF buf.dirty & (buf.size > 0) THEN
+			IF F.pos # buf.org THEN SetPhysicalPos(F, buf.org) END;
+			IF (Kernel32.WriteFile(F.handle, S.ADR(buf.data), buf.size, nWr, Kernel32.NULL) = Kernel32.False) OR (nWr # buf.size) THEN
+				ReOpen(F);
+				IF (Kernel32.WriteFile(F.handle, S.ADR(buf.data), buf.size, nWr, Kernel32.NULL) = Kernel32.False) OR (nWr # buf.size) THEN
+					Error(FALSE)
+				END
+			END;
+			IF (buf.org+buf.size) > F.len THEN
+				F.len := buf.org+buf.size
+			END;
+			INC(F.pos, nWr)
+		END;
+		buf.dirty := FALSE
+	END WriteBuf;
+
+	PROCEDURE ReadBuf(F: File; buf: Buffer);
+		VAR nRe: LONGINT;
+	BEGIN
+		IF (buf.org+BufSize) > F.len THEN
+			buf.size := F.len-buf.org
+		ELSE
+			buf.size := BufSize
+		END;
+		IF buf.size > 0 THEN
+			IF F.pos # buf.org THEN SetPhysicalPos(F, buf.org) END;
+			IF (Kernel32.ReadFile(F.handle, S.ADR(buf.data), buf.size, nRe, Kernel32.NULL) = Kernel32.False) OR (nRe # buf.size) THEN
+				Error(FALSE)
+			END;
+			INC(F.pos, nRe)
+		ELSE
+			buf.size := 0
+		END;
+		buf.dirty := FALSE
+	END ReadBuf;
+
+(** Positions a Rider at a certain position in a file. Multiple Riders can be positioned at different locations in a file. A Rider
+	cannot be positioned beyond the end of a file. *)
+	PROCEDURE Set*(VAR R: Rider; F: File; pos: LONGINT);
+		VAR buf: Buffer; org, offset, i: LONGINT;
+	BEGIN
+		IF F # NIL THEN
+			offset := pos MOD BufSize; org := pos - offset;
+			buf := NIL; i := 0;
+			WHILE (i < MaxBufs) & (F.bufs[i] # NIL) & (F.bufs[i].org # org) DO
+				INC(i)
+			END;
+			IF i < MaxBufs THEN
+ 				IF F.bufs[i] # NIL THEN
+ 					buf := F.bufs[i]
+ 				ELSE
+ 					NEW(buf); F.bufs[i] := buf; buf.dirty := FALSE;
+ 					buf.org := -1; buf.size := 0
+ 				END
+ 			ELSE
+ 				F.swap := (F.swap+1) MOD MaxBufs;
+ 				buf := F.bufs[F.swap]; WriteBuf(F, buf)
+ 			END;
+ 			IF buf.org # org THEN
+ 				buf.org := org;
+ 				IF org = F.len THEN
+ 					buf.size := 0; buf.dirty := FALSE
+ 				ELSE
+ 					buf.org := org; ReadBuf(F, buf)
+ 				END
+ 			END
+		ELSE
+			buf := NIL; org := 0; offset := 0
+		END;
+		R.F := F; R.buf := buf; R.org := org; R.offset := offset;
+		R.eof := FALSE; R.res := 0
+	END Set;
 
 (** Returns the File a Rider is based on. *)
-PROCEDURE Base* (VAR r: Rider): File;
-BEGIN RETURN r.buf.f
-END Base;
+	PROCEDURE Base*(VAR R: Rider): File;
+	BEGIN
+		RETURN R.F
+	END Base;
 
-(** Returns the absolute name of the file *)
-PROCEDURE GetName*(f: File; VAR name: ARRAY OF CHAR);
-VAR i: INTEGER;
-BEGIN
-	name[0] := 0X;
-	IF f # NIL THEN
-		COPY(f.reg.dir.path, name);
-		Append(name, f.reg.name);
-		i := 0;
+(** Returns the current length of a file. *)
+	PROCEDURE Length*(F: File): LONGINT;
+	BEGIN
+		RETURN F.len
+	END Length;
+
+(** Returns the offset of a Rider positioned on a file. *)
+	PROCEDURE Pos*(VAR R: Rider): LONGINT;
+	BEGIN
+		RETURN R.org+R.offset
+	END Pos;
+
+(** Returns the full name of a file. *)
+	PROCEDURE GetName*(F: File; VAR name: ARRAY OF CHAR);
+		VAR FD: Kernel32.FindData; h, i, j: LONGINT;
+	BEGIN
+		COPY(F.name, name); h := Kernel32.FindFirstFile(S.ADR(name), S.ADR(FD));
+		IF h = Kernel32.InvalidHandleValue THEN Error(FALSE) END;
+		Kernel32.FindClose(h); 
+		i := 0; j := 0;
 		WHILE name[i] # 0X DO
-			IF name[i] = "\" THEN name[i] := "/" END;
+			IF name[i] = WinPathChar THEN j := i+1 END;
 			INC(i)
 		END;
-	END
-END GetName;
-
-(** Read a byte from a file, advancing the Rider one byte further. R.eof indicates if the end of the file has been reached. *)
-PROCEDURE Read* (VAR r: Rider; VAR x: S.BYTE);
-	VAR offset: LONGINT; buf: Buffer;
-BEGIN
-	buf := r.buf; offset := r.offset;
-	IF r.org # buf.org THEN Set(r, buf.f, r.org + offset); buf := r.buf; offset := r.offset END;
-	IF offset < buf.size THEN
-		x := buf.data[offset]; r.offset := offset + 1;
-	ELSIF r.org + offset < buf.f.len THEN (* beyond buffer *)
-		Set(r, r.buf.f, r.org + offset);
-		x := r.buf.data[0]; r.offset := 1;
-	ELSE (* end of file *)
-		x := 0X; r.eof := TRUE;
-	END;
-END Read;
-
-(** Reads a sequence of length n bytes into the buffer x, advancing the Rider. Less bytes will be read when reading over the length of the file. *)
-PROCEDURE ReadBytes* (VAR r: Rider; VAR x: ARRAY OF S.BYTE; n: LONGINT);
-	VAR xpos, min, remaining, offset: LONGINT; buf: Buffer;
-BEGIN
-	xpos := 0; buf := r.buf; offset := r.offset;
-	WHILE n > 0 DO
-		IF (r.org # buf.org) OR (offset >= BufSize) THEN
-			Set(r, buf.f, r.org + offset);
-			buf := r.buf; offset := r.offset;
+		i := 0;
+		WHILE FD.name[i] # 0X DO
+			name[j] := FD.name[i];
+			INC(i); INC(j)
 		END;
-		remaining := buf.size - offset;
-		IF remaining = 0 THEN r.res := n; r.eof := TRUE; RETURN
-		ELSE (* min := MIN(remaining, n) *)
-			IF n > remaining THEN min := remaining ELSE min := n END;
+		name[j] := 0X;
+		FileDir.ConvertChar(name, WinPathChar, FileDir.PathChar)
+	END GetName;
+
+(** Flushes the changes made to a file to disk. Register will automatically Close a file.
+		Note: Close will only do a flush, the file is closed by the GC!*)
+	PROCEDURE Close*(F: File);
+		VAR i: LONGINT;
+	BEGIN
+		i := 0;
+		WHILE (i < MaxBufs) & (F.bufs[i] # NIL) DO
+			WriteBuf(F, F.bufs[i]); INC(i)
+		END
+	END Close;
+
+	(** *)
+	PROCEDURE Dispose*(F: File);	(** non-portable *)
+		VAR i: LONGINT;
+	BEGIN
+		Close(F); FinalizeFile(F);
+		F.pos := -1; F.len := 0; F.swap := -1;
+		FOR i := 0 TO MaxBufs-1 DO
+			IF F.bufs[i] # NIL THEN F.bufs[i] := NIL END
+		END
+	END Dispose;
+
+(** Deletes a file. res = 0 indicates success. *)
+	PROCEDURE Delete*(name: ARRAY OF CHAR; VAR res: INTEGER);
+		VAR fName: FileDir.FileName; F: File; ret: LONGINT;
+	BEGIN
+		res := 1;
+		IF (name # "") & FileDir.FindFile(name, fName, FALSE) THEN
+			FileDir.ConvertChar(fName, FileDir.PathChar, WinPathChar);
+			Kernel32.EnterCriticalSection(S.ADR(moduleCS));
+			F := FindOpenFile(fName);
+			IF F # NIL THEN
+				Close(F); IF ~ClosePhysical(F) THEN Error(TRUE) END;
+				NEW(F.temp); COPY(F.name, F.temp.name); F.name := "";
+				TempName(F.temp.temp);
+				IF ~MovePhysical(F.temp.name, F.temp.temp) THEN res := 2 ELSE res := 0 END;
+				ret := Kernel32.CreateFile(S.ADR(F.temp.temp), GenericReadWrite, Kernel32.FileShareRead, Kernel32.NULL, Kernel32.OpenExisting, NewFlags, Kernel32.NULL);
+				IF ret = Kernel32.InvalidHandleValue THEN Error(TRUE) END;
+				F.handle := ret; SetPhysicalPos(F, F.pos)
+			ELSIF ~DeletePhysical(fName) THEN
+				res := 2
+			ELSE
+				res := 0
+			END;
+			Kernel32.LeaveCriticalSection(S.ADR(moduleCS))
+		END
+	END Delete;
+
+(** Returns the time (t) and date (d) when a file was last modified. *)
+	PROCEDURE GetDate*(F: File; VAR t, d: LONGINT);
+		VAR ft, lft: Kernel32.FileTime; st: Kernel32.SystemTime;
+	BEGIN
+		IF Kernel32.GetFileTime(F.handle, Kernel32.NULL, Kernel32.NULL, S.ADR(ft)) = Kernel32.False THEN
+			Error(FALSE)
 		END;
-		S.MOVE(S.ADR(buf.data) + offset, S.ADR(x) + xpos, min);
-		INC(offset, min); r.offset := offset; INC(xpos, min); DEC(n, min);
-	END;
-	r.res := 0; r.eof := FALSE;
-END ReadBytes;
+		Kernel32.FileTimeToLocalFileTime(S.ADR(ft), S.ADR(lft));
+		Kernel32.FileTimeToSystemTime(S.ADR(lft), S.ADR(st));
+		d := LONG(st.year-1900)*200H + LONG(st.month)*20H + LONG(st.day);
+		t := LONG(st.hour)*1000H + LONG(st.min)*40H + LONG(st.sec)
+	END GetDate;
+
+(** Sets the modification time (t) and date (d) of a file. *)
+	PROCEDURE SetDate*(F: File; t, d: LONGINT);
+		VAR ft, lft: Kernel32.FileTime; st: Kernel32.SystemTime;
+	BEGIN
+		st.day := SHORT(d MOD 20H); d := ASH(d, -5);
+		st.month := SHORT(d MOD 10H); d := ASH(d, -4);
+		st.year := SHORT(d MOD 80H) + 1900;
+		st.millisec := 0;
+		st.sec := SHORT(t MOD 40H); t := ASH(t, -6);
+		st.min := SHORT(t MOD 40H); t := ASH(t, -6);
+		st.hour := SHORT(t MOD 20H);
+		Kernel32.SystemTimeToFileTime(S.ADR(st), S.ADR(lft));
+		Kernel32.LocalFileTimeToFileTime(S.ADR(lft), S.ADR(ft));
+		IF Kernel32.SetFileTime(F.handle, Kernel32.NULL, Kernel32.NULL, S.ADR(ft)) = Kernel32.False THEN
+			Error(FALSE)
+		END
+	END SetDate;
+
+(** Register a file created with New in the directory, replacing the previous file in the directory with the same name. The file
+	is automatically closed. *)
+	PROCEDURE Register*(F: File);
+		VAR ret: LONGINT; res: INTEGER;
+	BEGIN
+		Close(F);
+		IF (F.temp # NIL) & (F.temp.name # "") THEN
+			IF F.handle = Kernel32.InvalidHandleValue THEN
+				ReOpen(F); Close(F)
+			END;
+			Kernel32.EnterCriticalSection(S.ADR(moduleCS));
+			IF FileDir.FindFile(F.temp.name, F.name, FALSE) THEN
+				Delete(F.name, res);
+				IF res # 0 THEN Error(TRUE) END;
+				FileDir.ConvertChar(F.name, FileDir.PathChar, WinPathChar)
+			ELSE
+				COPY(F.temp.name, F.name)
+			END;
+			IF ~ClosePhysical(F) THEN Error(TRUE) END;
+			ret := Kernel32.CreateFile(S.ADR(F.name), Kernel32.GenericRead, ShareReadWrite, Kernel32.NULL, Kernel32.CreateAlways, OpenFlags, Kernel32.NULL);
+			IF ret = Kernel32.InvalidHandleValue THEN Error(TRUE) END;
+			F.handle := ret; IF ~ClosePhysical(F) THEN Error(TRUE) END;
+			COPY(F.name, F.temp.name);
+			IF FileDir.FindFile(F.temp.name, F.name, FALSE) THEN
+				FileDir.ConvertChar(F.name, FileDir.PathChar, WinPathChar);
+				IF ~MovePhysical(F.temp.temp, F.name) THEN Error(TRUE) END;
+				ret := Kernel32.CreateFile(S.ADR(F.name), GenericReadWrite, Kernel32.FileShareRead, Kernel32.NULL, Kernel32.OpenExisting, OpenFlags, Kernel32.NULL);
+				IF ret = Kernel32.InvalidHandleValue THEN Error(TRUE) END;
+				F.handle := ret; SetPhysicalPos(F, F.pos)
+			ELSE
+				Error(TRUE)
+			END;
+			F.temp := NIL; Kernel32.LeaveCriticalSection(S.ADR(moduleCS))
+		END
+	END Register;
+
+(** Read a byte from a file, advancing the Rider one byte further. R.eof indicates if the end of the file has been passed. *)
+	PROCEDURE Read*(VAR R: Rider; VAR x: S.BYTE);
+		VAR F: File; buf: Buffer; offset: LONGINT;
+	BEGIN
+		buf := R.buf; F := R.F; offset := R.offset;
+		IF R.org # buf.org THEN
+			Set(R, F, R.org+offset); buf := R.buf; offset := R.offset
+		END;
+		IF offset < buf.size THEN
+			x := buf.data[offset]; R.offset := offset+1
+		ELSIF (R.org+offset) < F.len THEN
+			Set(R, F, R.org+offset); x := R.buf.data[0]; R.offset := 1
+		ELSE
+			x := 0X; R.eof := TRUE
+		END
+	END Read;
+
+(** Reads a sequence of length n bytes into the buffer x, advancing the Rider. Less bytes will be read when reading over the
+	length of the file. r.res indicates the number of unread bytes. x must be big enough to hold n bytes.*)
+	PROCEDURE ReadBytes*(VAR R: Rider; VAR x: ARRAY OF S.BYTE; n: LONGINT);
+		VAR F: File; buf: Buffer; xpos, min, remaining, offset: LONGINT;
+	BEGIN
+		ASSERT(LEN(x) >= n);
+		buf := R.buf; F := R.F; xpos := 0; offset := R.offset;
+		WHILE n > 0 DO
+			IF (R.org # buf.org) OR (offset >= BufSize) THEN
+				Set(R, F, R.org + offset); buf := R.buf; offset := R.offset
+			END;
+			remaining := buf.size - offset;
+			IF remaining = 0 THEN
+				R.res := n; R.eof := TRUE; RETURN
+			ELSE (* min := MIN(remaining, n) *)
+				IF n > remaining THEN min := remaining ELSE min := n END
+			END;
+			S.MOVE(S.ADR(buf.data) + offset, S.ADR(x) + xpos, min);
+			INC(offset, min); R.offset := offset; INC(xpos, min); DEC(n, min)
+		END;
+		R.res := 0; R.eof := FALSE
+	END ReadBytes;
 
 (** Writes a byte into the file at the Rider position, advancing the Rider by one. *)
-PROCEDURE Write* (VAR r: Rider; x: S.BYTE);
-	VAR buf: Buffer; offset: LONGINT;
-BEGIN
-	buf := r.buf; offset := r.offset;
-	IF (r.org # buf.org) OR (offset >= BufSize) THEN
-		Set(r, buf.f, r.org + offset);
-		buf := r.buf; offset := r.offset;
-	END;
-	buf.data[offset] := x;
-	buf.dirty := TRUE;
-	IF offset = buf.size THEN (* a byte was appended at end of file *)
-		INC(buf.size); INC(buf.f.len);
-	END;
-	r.offset := offset + 1; r.res := 0;
-END Write;
+	PROCEDURE Write*(VAR R: Rider; x: S.BYTE);
+		VAR F: File; buf: Buffer; offset: LONGINT;
+	BEGIN
+		buf := R.buf; F := R.F; offset := R.offset;
+		IF (R.org # buf.org) OR (offset >= BufSize) THEN
+			Set(R, F, R.org+offset); buf := R.buf; offset := R.offset
+		END;
+		buf.data[offset] := x; buf.dirty := TRUE;
+		IF offset = buf.size THEN
+			INC(buf.size); INC(F.len)
+		END;
+		R.offset := offset+1; R.res := 0 
+	END Write;
 
 (** Writes the buffer x containing n bytes into a file at the Rider position. *)
-PROCEDURE WriteBytes* (VAR r: Rider; VAR x: ARRAY OF S.BYTE; n: LONGINT);
-	VAR xpos, min, restInBuf, offset: LONGINT; buf: Buffer;
-BEGIN
-	xpos := 0; buf := r.buf; offset := r.offset;
-	WHILE n > 0 DO
-		IF (r.org # buf.org) OR (offset >= BufSize) THEN
-			Set(r, buf.f, r.org + offset);
-			buf := r.buf; offset := r.offset;
+	PROCEDURE WriteBytes*(VAR R: Rider; VAR x: ARRAY OF S.BYTE; n: LONGINT);
+		VAR F: File; buf: Buffer; xpos, min, restInBuf, offset: LONGINT;
+	BEGIN
+		ASSERT(LEN(x) >= n);
+		buf := R.buf; F := R.F; xpos := 0; offset := R.offset;
+		WHILE n > 0 DO
+			IF (R.org # buf.org) OR (offset >= BufSize) THEN
+				Set(R, F, R.org + offset); buf := R.buf; offset := R.offset;
+			END;
+			restInBuf := BufSize - offset;
+			IF n < restInBuf THEN min := n ELSE min := restInBuf END;
+			S.MOVE(S.ADR(x) + xpos, S.ADR(buf.data) + offset, min);
+			INC(offset, min); R.offset := offset;
+			IF offset > buf.size THEN INC(F.len, offset - buf.size); buf.size := offset END;
+			INC(xpos, min); DEC(n, min); buf.dirty := TRUE
 		END;
-		restInBuf := BufSize - offset;
-		IF n < restInBuf THEN min := n ELSE min := restInBuf END;
-		S.MOVE(S.ADR(x) + xpos, S.ADR(buf.data) + offset, min);
-		INC(offset, min); r.offset := offset;
-		IF offset > buf.size THEN INC(buf.f.len, offset - buf.size); buf.size := offset END;
-		INC(xpos, min); DEC(n, min); buf.dirty := TRUE
-	END;
-	r.res := 0;
-END WriteBytes;
+		R.res := 0 
+	END WriteBytes;
 
-(* ------------ portable formatted I/O ------------ *)
+(** Portable routines to read the standard Oberon types. *)
 
-(**
-Portable routines to write and read the standard Oberon types. Each procedure is provided in a read and write pair.
-*)
+	PROCEDURE ReadInt*(VAR R: Rider; VAR x: INTEGER);
+	BEGIN
+		ReadBytes(R, x, 2)
+	END ReadInt;
 
-PROCEDURE ReadInt* (VAR R: Rider; VAR x: INTEGER);
-BEGIN ReadBytes(R, S.VAL(Array2, x), 2);
-END ReadInt;
+	PROCEDURE ReadLInt*(VAR R: Rider; VAR x: LONGINT);
+	BEGIN
+		ReadBytes(R, x, 4)
+	END ReadLInt;
 
-PROCEDURE ReadLInt* (VAR R: Rider; VAR x: LONGINT);
-BEGIN ReadBytes(R, S.VAL(Array4, x), 4);
-END ReadLInt;
+	PROCEDURE ReadSet*(VAR R: Rider; VAR x: SET);
+	BEGIN
+		ReadBytes(R, x, 4)
+	END ReadSet;
 
-PROCEDURE ReadSet* (VAR R: Rider; VAR x: SET);
-BEGIN ReadBytes(R, S.VAL(Array4, x), 4);
-END ReadSet;
+	PROCEDURE ReadBool*(VAR R: Rider; VAR x: BOOLEAN);
+	BEGIN
+		Read(R, S.VAL(S.BYTE, x))
+	END ReadBool;
 
-PROCEDURE ReadBool* (VAR R: Rider; VAR x: BOOLEAN);
-BEGIN Read(R, S.VAL(CHAR, x));
-END ReadBool;
+	PROCEDURE ReadReal*(VAR R: Rider; VAR x: REAL);
+	BEGIN
+		ReadBytes(R, x, 4)
+	END ReadReal;
 
-PROCEDURE ReadReal* (VAR R: Rider; VAR x: REAL);
-BEGIN ReadBytes(R, S.VAL(Array4, x), 4);
-END ReadReal;
+	PROCEDURE ReadLReal*(VAR R: Rider; VAR x: LONGREAL);
+	BEGIN
+		ReadBytes(R, x, 8)
+	END ReadLReal;
 
-PROCEDURE ReadLReal* (VAR R: Rider; VAR x: LONGREAL);
-BEGIN ReadBytes(R, S.VAL(Array8, x), 8);
-END ReadLReal;
-
-PROCEDURE ReadString* (VAR R: Rider; VAR x: ARRAY OF CHAR);
-	VAR i: INTEGER; ch: CHAR; len: LONGINT;
-BEGIN i := 0; len := LEN(x);
-	REPEAT Read(R, ch);
-		x[i] := ch; INC(i)
-	UNTIL ch = 0X
-END ReadString;
+	PROCEDURE ReadString*(VAR R: Rider; VAR x: ARRAY OF CHAR);
+		VAR i: LONGINT; ch: CHAR;
+	BEGIN
+		i := 0;
+		REPEAT
+			Read(R, ch); x[i] := ch; INC(i)
+		UNTIL ch = 0X
+	END ReadString;
 
 (** Reads a number in compressed variable length notation using the minimum amount of bytes. *)
-PROCEDURE ReadNum* (VAR R: Rider; VAR x: LONGINT);
-	VAR s: SHORTINT; ch: CHAR; n: LONGINT;
-BEGIN s := 0; n := 0; Read(R, ch);
-	WHILE ORD(ch) >= 128 DO INC(n, ASH(ORD(ch) - 128, s) ); INC(s, 7); Read(R, ch) END;
-	x := n + ASH(ORD(ch) MOD 64 - ORD(ch) DIV 64 * 64, s)
-END ReadNum;
+	PROCEDURE ReadNum*(VAR R: Rider; VAR x: LONGINT);
+		VAR n: LONGINT; s: SHORTINT; ch: CHAR;
+	BEGIN
+		s := 0; n := 0; Read(R, ch);
+		WHILE ORD(ch) >= 128 DO INC(n, ASH(ORD(ch) - 128, s) ); INC(s, 7); Read(R, ch) END;
+		x := n + ASH(ORD(ch) MOD 64 - ORD(ch) DIV 64 * 64, s)
+	END ReadNum;
 
-PROCEDURE WriteInt* (VAR R: Rider; x: INTEGER);
-BEGIN WriteBytes(R, S.VAL(Array2, x), 2);
-END WriteInt;
+(** Portable routines to write the standard Oberon types. *)
 
-PROCEDURE WriteLInt* (VAR R: Rider; x: LONGINT);
-BEGIN WriteBytes(R, S.VAL(Array4, x), 4);
-END WriteLInt;
+	PROCEDURE WriteInt*(VAR R: Rider; x: INTEGER);
+	BEGIN
+		WriteBytes(R, x, 2)
+	END WriteInt;
 
-PROCEDURE WriteSet* (VAR R: Rider; x: SET);
-BEGIN WriteBytes(R, S.VAL(Array4, x), 4);
-END WriteSet;
+	PROCEDURE WriteLInt*(VAR R: Rider; x: LONGINT);
+	BEGIN
+		WriteBytes(R, x, 4)
+	END WriteLInt;
 
-PROCEDURE WriteBool* (VAR R: Rider; x: BOOLEAN);
-BEGIN Write(R, S.VAL(CHAR, x));
-END WriteBool;
+	PROCEDURE WriteSet*(VAR R: Rider; x: SET);
+	BEGIN
+		WriteBytes(R, x, 4)
+	END WriteSet;
 
-PROCEDURE WriteReal* (VAR R: Rider; x: REAL);
-BEGIN WriteBytes(R, S.VAL(Array4, x), 4);
-END WriteReal;
+	PROCEDURE WriteBool*(VAR R: Rider; x: BOOLEAN);
+	BEGIN
+		Write(R, S.VAL(S.BYTE, x))
+	END WriteBool;
 
-PROCEDURE WriteLReal* (VAR R: Rider; x: LONGREAL);
-BEGIN WriteBytes(R, S.VAL(Array8, x), 8);
-END WriteLReal;
+	PROCEDURE WriteReal*(VAR R: Rider; x: REAL);
+	BEGIN
+		WriteBytes(R, x, 4)
+	END WriteReal;
 
-PROCEDURE WriteString* (VAR R: Rider; x: ARRAY OF CHAR);
-	VAR i: INTEGER;
-BEGIN i := 0;
-	WHILE x[i] # 0X DO INC(i) END ;
-	WriteBytes(R, x, i+1)
-END WriteString;
+	PROCEDURE WriteLReal*(VAR R: Rider; x: LONGREAL);
+	BEGIN
+		WriteBytes(R, x, 8)
+	END WriteLReal;
+
+	PROCEDURE WriteString*(VAR R: Rider; x: ARRAY OF CHAR);
+		VAR i: LONGINT;
+	BEGIN
+		i := 0;
+		WHILE x[i] # 0X DO INC(i) END;
+		WriteBytes(R, x, i+1)
+	END WriteString;
 
 (** Writes a number in a compressed format. *)
-PROCEDURE WriteNum* (VAR R: Rider; x: LONGINT);
-BEGIN
-	WHILE (x < - 64) OR (x > 63) DO Write(R, CHR(x MOD 128 + 128)); x := x DIV 128 END;
-	Write(R, CHR(x MOD 128))
-END WriteNum;
+	PROCEDURE WriteNum*(VAR R: Rider; x: LONGINT);
+	BEGIN
+		WHILE (x < - 64) OR (x > 63) DO Write(R, CHR(x MOD 128 + 128)); x := x DIV 128 END;
+		Write(R, CHR(x MOD 128))
+	END WriteNum;
 
+	PROCEDURE copy(VAR src, dest: ARRAY OF CHAR; move: BOOLEAN; VAR res: INTEGER);
+		VAR
+			srcName, destName: FileDir.FileName;
+			srcF, destF: File;
+			srcR, destR: Rider;
+			t, d: LONGINT;
+			buf: ARRAY 1024 OF CHAR;
+	BEGIN
+		res := 1;
+		IF (src # "") & FileDir.FindFile(src, srcName, ~move) THEN
+			FileDir.ConvertChar(srcName, FileDir.PathChar, WinPathChar);
+			Kernel32.EnterCriticalSection(S.ADR(moduleCS));
+			srcF := FindOpenFile(srcName);
+			IF srcF = NIL THEN
+				IF FileDir.FindFile(dest, destName, FALSE) THEN
+					FileDir.ConvertChar(destName, FileDir.PathChar, WinPathChar);
+					destF := FindOpenFile(destName)
+				ELSE
+					COPY(dest, destName);
+					FileDir.ConvertChar(destName, FileDir.PathChar, WinPathChar);
+					destF := NIL
+				END;
+				IF destF = NIL THEN
+					IF move THEN
+						IF ~MovePhysical(srcName, destName) THEN res :=2 ELSE res := 0 END
+					ELSE
+						IF Kernel32.CopyFile(S.ADR(srcName), S.ADR(destName), Kernel32.False) = Kernel32.False THEN res := 2 ELSE res := 0 END
+					END;
+					Kernel32.LeaveCriticalSection(S.ADR(moduleCS)); RETURN
+				END;
+				srcF := old(srcName)
+			END;
+			Kernel32.LeaveCriticalSection(S.ADR(moduleCS));
+			IF srcF # NIL THEN
+				GetDate(srcF, t, d); Set(srcR, srcF, 0);
+				destF := New(dest);
+				IF destF # NIL THEN
+					Register(destF); Set(destR, destF, 0);
+					ReadBytes(srcR, buf, 1024);
+					WHILE ~srcR.eof DO
+						WriteBytes(destR, buf, 1024); ReadBytes(srcR, buf, 1024)
+					END;
+					WriteBytes(destR, buf, 1024-srcR.res);
+					Close(destF); SetDate(destF, t, d);
+					IF move THEN
+						Delete(src, res)
+					ELSE
+						res := 0
+					END
+				ELSE
+					res := 3
+				END
+			END
+		END
+	END copy;
+
+	(** Renames a file. res = 0 indicates success. *)
+	PROCEDURE Rename*(old, new: ARRAY OF CHAR; VAR res: INTEGER);
+	BEGIN
+		copy(old, new, TRUE, res)
+	END Rename;
+
+	(** Copies a file. res = 0 indicates success. *)	(** non-portable *)
+	PROCEDURE Copy*(src, dest: ARRAY OF CHAR; VAR res: INTEGER);
+	BEGIN
+		copy(src, dest, FALSE, res)
+	END Copy;
+
+	PROCEDURE *Shutdown();
+	BEGIN
+		Kernel32.DeleteCriticalSection(S.ADR(moduleCS))
+	END Shutdown;
+
+	PROCEDURE Init();
+	BEGIN
+		Kernel32.InitCriticalSection(S.ADR(moduleCS));
+		Kernel32.EnterCriticalSection(S.ADR(moduleCS));
+		Kernel.InstallQ(Kernel.quitQ, Shutdown);
+		NEW(root); root.next := NIL;
+		Kernel.DisableTracing(S.ADR(root^), S.ADR(root.next));
+		OpenFlags := Kernel32.LongOr(Kernel32.FileAttributeNormal, Kernel32.FileFlagRandomAccess);
+		NewFlags := Kernel32.LongOr(OpenFlags, Kernel32.FileAttributeTemporary);
+		GenericReadWrite := Kernel32.LongOr(Kernel32.GenericRead, Kernel32.GenericWrite);
+		ShareReadWrite := Kernel32.LongOr(Kernel32.FileShareRead, Kernel32.FileShareWrite);
+		Kernel32.LeaveCriticalSection(S.ADR(moduleCS))
+	END Init;
 
 BEGIN
-	Tag := OberonFileTag; TempPrefix := "~T";
-	mod := Kernel32.SetHandleCount(MaxFiles)
+	Init()
 END Files.
 
 (** Remarks:
 
 1. Oberon uses the little-endian byte ordering for exchanging files between different Oberon platforms.
 
-2. Files are separate entities from directory entries. Files may be anonymous by having no name and not being registered in a directory. Files only become visible to other clients of the Files module by explicitly passing a File descriptor or by registering a file and then openening it from the other client. Deleting a file of which a file descriptor is still used, results in the file being renamed to a temporary file. The deleted file may be re-registered at any time.
+2. Files are separate entities from directory entries. Files may be anonymous by having no name and not being registered in a
+	directory. Files only become visible to other clients of the Files module by explicitly passing a File descriptor or by registering
+	a file and then opening it from the other client. Deleting a file of which a file descriptor is still available, results in the file
+	becoming anonymous. The deleted file may be re-registered at any time.
 
-3. Files and their access mechanism (Riders) are separated. A file might have more than one rider operating on it at different offsets in the file.
+3. Files and their access mechanism (Riders) are separated. A file might have more than one rider operating on it at different
+	offsets in the file.
 
-4. The garbage collector will automatically close files when they are not required any more. File buffers will be discarded without flushing them to disk.
+4. The garbage collector will automatically close files when they are not required any more. File buffers will be discarded
+	without flushing them to disk. Use the Close procedure to update modified files on disk.
 
-5. Relative and absolute filenames written in the directory syntax of the host operating system is used. By convention, Oberon filenames consists of the letters A..Z, a..z, 0..9, and ".". The directory separator is typically /, \ or :. Oberon filenames are case sensitive.
-IMPORTANT: On Windows, URL notation is used for filenames. An MSDOS/Windows filename can be converted to URL notation by exchanging all \ with / (i.e. UNIX filename convention).
-*)
+5. Relative and absolute filenames written in the directory syntax of the host operating system are used. By convention, Oberon
+	filenames consists of the letters A..Z, a..z, 0..9, and ".". The directory separator is typically / or :. Oberon filenames are
+	case sensitive (not true for this implementation!!!). *)

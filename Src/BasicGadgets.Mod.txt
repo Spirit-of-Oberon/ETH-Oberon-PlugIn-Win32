@@ -1,20 +1,19 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE BasicGadgets; (* jm 18.1.95 *)
+MODULE BasicGadgets; (** portable *)	(* jm 18.1.95 *)
 
 (**Contains an implementation of the model gadgets Boolean, String, Integer, and Real, and of the visual gadgets Button, Checkbox and Slider. The buttons and checkboxes can also be used as radio-buttons by linking to them an Integer model gadget.
 *)
@@ -48,8 +47,6 @@ CONST
 	VersionNewCheckbox = 3;
 	
 	MaxLen = 64;
-
-	DisplayUnit = LONG(10000);
 	
 TYPE
 	(* --- Things --- *)
@@ -619,7 +616,7 @@ PROCEDURE PrintButton(F: Button; VAR M: Display.DisplayMsg);
 VAR R: Display3.Mask; x, y, w, h: INTEGER; D: Display.DisplayMsg; L: Gadgets.Frame; O: Display3.OverlapMsg;
 
 	PROCEDURE P(x: INTEGER): INTEGER;
-	BEGIN RETURN SHORT(x * DisplayUnit DIV Printer.Unit)
+	BEGIN RETURN SHORT(x * Display.Unit DIV Printer.Unit)
 	END P;
 
 BEGIN
@@ -958,7 +955,7 @@ BEGIN
 END CheckBoxAttr;
 
 PROCEDURE RestoreCheckBox(R: Display3.Mask; F: CheckBox; x, y, w, h: INTEGER);
-VAR A: Objects.AttrMsg; col: INTEGER;
+VAR A: Objects.AttrMsg; dx, dy, col: INTEGER;
 BEGIN
 	Oberon.RemoveMarks(x, y, w, h);
 	A.id := Objects.get; A.name := "Color"; A.class := Objects.Inval; A.i := Display3.textbackC; A.res := -1;
@@ -969,25 +966,40 @@ BEGIN
 	IF (A.res >= 0) & (A.class = Objects.Int) THEN (* change look if integers are involved *)
 		Display3.FilledRect3D(R, Display3.bottomC, Display3.topC, col, x, y, w, h, 1, Display.replace);
 		IF F.val THEN
-			Display3.FilledRect3D(R, Display3.topC, Display3.bottomC, Display3.groupC, x + 3, y + 3, w - 6, h - 6, 1, Display.replace);
+			Display3.FilledRect3D(R, Display3.topC, Display3.bottomC, Display3.groupC, x + 3, y + 3, w - 6, h - 6, 1, Display.replace)
 		END
 	ELSE
 		Display3.FilledRect3D(R, Display3.bottomC, Display3.topC, col, x, y, w, h, 1, Display.replace);
 		IF F.val THEN
-			Display3.ReplConst(R, Display3.white, x + 5, y + 4, 1, 10, Display.replace);
+			(*Display3.ReplConst(R, Display3.white, x + 5, y + 4, 1, 10, Display.replace);
 			Display3.ReplConst(R, Display3.black, x + 6, y + 4, 1, 10, Display.replace);
 			Display3.Line(R, Display3.white, Display.solid, x + 5, y + 5, x + 17, y + 17, 1, Display.replace);
-			Display3.Line(R, Display3.black, Display.solid, x + 5, y + 4, x + 17, y + 16, 1, Display.replace);
+			Display3.Line(R, Display3.black, Display.solid, x + 5, y + 4, x + 17, y + 16, 1, Display.replace);*)
+
+IF w <= h THEN
+	dx := 2; dy := 3 + (h-w) DIV 2
+ELSE
+	dx := 2 + (w-h) DIV 2; dy := 3
+END;
+Display3.Line(R, Display3.white, Display.solid, x + dx, y + h-dy-1, x + w-dx-3, y + dy, 1, Display.replace);
+Display3.Line(R, Display3.downC, Display.solid, x + dx+1, y + h-dy, x + w-dx-2, y + dy+1, 1, Display.replace);
+Display3.Line(R, Display3.black, Display.solid, x + dx, y + h-dy, x + w-dx-2, y + dy, 1, Display.replace);
+Display3.Line(R, Display3.white, Display.solid, x + dx, y + dy, x + w-dx-3, y + h-dy-1, 1, Display.replace);
+Display3.Line(R, Display3.downC, Display.solid, x + dx+1, y + dy-1, x + w-dx-2, y + h-dy-2, 1, Display.replace);
+Display3.Line(R, Display3.black, Display.solid, x + dx, y + dy-1, x + w-dx-2, y + h-dy-1, 1, Display.replace)
+
 		END
 	END;
-	IF Gadgets.selected IN F.state THEN Display3.FillPattern(R, Display3.white, Display3.selectpat, x, y, x, y, w, h, Display.paint); END;
+	IF Gadgets.selected IN F.state THEN
+		Display3.FillPattern(R, Display3.white, Display3.selectpat, x, y, x, y, w, h, Display.paint)
+	END
 END RestoreCheckBox;
 
 PROCEDURE PrintCheckBox(F: CheckBox; VAR M: Display.DisplayMsg);
-VAR A: Objects.AttrMsg; R: Display3.Mask; x, y, w, h, col: INTEGER;
+VAR A: Objects.AttrMsg; R: Display3.Mask; x, y, w, h, dx, dy, col: INTEGER;
 
 	PROCEDURE P(x: INTEGER): INTEGER;
-	BEGIN RETURN SHORT(x * DisplayUnit DIV Printer.Unit)
+	BEGIN RETURN SHORT(x * Display.Unit DIV Printer.Unit)
 	END P;
 
 BEGIN
@@ -998,15 +1010,28 @@ BEGIN
 	IF (F.obj # NIL) & (F.obj IS Integer) THEN
 		Printer3.FilledRect3D(R, Display3.bottomC, Display3.topC, col, x, y, w, h, P(1), Display.replace);
 		IF F.val THEN
-			Printer3.FilledRect3D(R, Display3.topC, Display3.bottomC, Display3.groupC, x + P(3), y + P(3), w - P(6), h - P(6), 1, Display.replace);
+			Printer3.FilledRect3D(R, Display3.topC, Display3.bottomC, Display3.groupC, x + P(3), y + P(3), w - P(6), h - P(6), 1, Display.replace)
 		END
 	ELSE
 		Printer3.FilledRect3D(R, Display3.bottomC, Display3.topC, col, x, y, w, h, P(1), Display.replace);
 		IF F.val THEN
-			Printer3.ReplConst(R, Display3.white, x + P(5), y + P(4), P(1), P(10), Display.replace);
+			(*Printer3.ReplConst(R, Display3.white, x + P(5), y + P(4), P(1), P(10), Display.replace);
 			Printer3.ReplConst(R, Display3.black, x + P(6), y + P(4), P(1), P(10), Display.replace);
 			Printer3.Line(R, Display3.white, Display.solid, x + P(5), y + P(5), x + P(17), y + P(17), P(1), Display.replace);
-			Printer3.Line(R, Display3.black, Display.solid, x + P(5), y + P(4), x + P(17), y + P(16), P(1), Display.replace);
+			Printer3.Line(R, Display3.black, Display.solid, x + P(5), y + P(4), x + P(17), y + P(16), P(1), Display.replace);*)
+
+IF w <= h THEN
+	dx := P(2); dy := P(3) + (h-w) DIV 2
+ELSE
+	dx := P(2) + (w-h) DIV 2; dy := P(3)
+END;
+Printer3.Line(R, Display3.white, Display.solid, x + dx, y + h-dy-P(1), x + w-dx-P(3), y + dy, P(1), Display.replace);
+Printer3.Line(R, Display3.downC, Display.solid, x + dx+P(1), y + h-dy, x + w-dx-P(2), y + dy+P(1), P(1), Display.replace);
+Printer3.Line(R, Display3.black, Display.solid, x + dx, y + h-dy, x + w-dx-P(2), y + dy, 1, Display.replace);
+Printer3.Line(R, Display3.white, Display.solid, x + dx, y + dy, x + w-dx-P(3), y + h-dy-P(1), P(1), Display.replace);
+Printer3.Line(R, Display3.downC, Display.solid, x + dx+P(1), y + dy-P(1), x + w-dx-P(2), y + h-dy-P(2), P(1), Display.replace);
+Printer3.Line(R, Display3.black, Display.solid, x + dx, y + dy-P(1), x + w-dx-P(2), y + h-dy-P(1), P(1), Display.replace)
+
 		END
 	END
 END PrintCheckBox;
@@ -1204,7 +1229,7 @@ PROCEDURE PrintSlider(F: Slider; VAR M: Display.DisplayMsg);
 VAR R: Display3.Mask; x, y, w, h, X0, Y0, B, BW: INTEGER;
 
 	PROCEDURE P(x: INTEGER): INTEGER;
-	BEGIN RETURN SHORT(x * LONG(10000) DIV Printer.Unit)
+	BEGIN RETURN SHORT(x * Display.Unit DIV Printer.Unit)
 	END P;
 
 BEGIN

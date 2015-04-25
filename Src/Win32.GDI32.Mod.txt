@@ -1,0 +1,219 @@
+﻿(* OBERON System 3, Release 2.3.
+
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE GDI32; (** non-portable / source: Win32.GDI32.Mod *)	(* ejz  *)
+	IMPORT S := SYSTEM, Kernel32;
+
+	CONST
+		PATCOPY* = 0F00021H; PATINVERT* = 5A0049H; PATAND* = 0A000C9H; PATPAINT* = 0FA0089H; SRCCOPY* = 0CC0020H;
+		DSTINVERT* = 0550009H; SRCINVERT* = 0660046H; SRCAND* = 08800C6H; SRCPAINT* = 0EE0086H; NOTSRCCOPY* = 0330008H;
+		RasterFontType* = 1; DeviceFontType* = 2; TrueTypeFontType* = 4; BLACKNESS* = 00000042H; WHITENESS* = 00FF0062H;
+		Transparent* = 1; Opaque* = 2;
+		BitsPixel* = 12;
+		HORZRES* = 8; VERTRES* = 10;
+		LOGPIXELSX* = 88; LOGPIXELSY* = 90;
+		PHYSICALWIDTH* = 110; PHYSICALHEIGHT* = 111;
+		PHYSICALOFFSETX* = 112; PHYSICALOFFSETY* = 113;
+		RCBitBlt* = 1;
+		TABaseline* = 24; TALeft* = 0;
+		MMText* = 1;
+		PSSolid* = 0;
+		FWThin* = 100; FWLight* = 300; FWNormal* = 400; FWMedium* = 500; FWBold* = 700; FWBlack* = 900;
+		BIRGB* = 0; DIBRGBColors* = 0; DIBPalColors* = 1;
+
+	TYPE
+		COLORREF* = LONGINT;
+		LogPalette* = RECORD
+			version*, numEntries*: INTEGER;
+			entries*: ARRAY 256 OF LONGINT
+		END;
+		LOGFONT* = RECORD
+			height*, width*, escapement*, orientation*, weight*: LONGINT;
+			italic*, underline*, strikeout*: SHORTINT;
+			charset*: SHORTINT;
+			outprec*, clipprec*: SHORTINT;
+			quality*: SHORTINT;
+			pitchAndFamily*: SHORTINT;
+			facename*: ARRAY 32 OF CHAR
+		END;
+		ENUMLOGFONT* = RECORD (LOGFONT)
+		    fullName*: ARRAY 64 OF CHAR;
+		    style*: ARRAY 32 OF CHAR 
+		END; 
+		TEXTMETRIC* = RECORD
+			height*, ascent*, descent*: LONGINT;
+			intLead*, extLead*: LONGINT;
+			avgCharWidth*, maxCharWidth*: LONGINT;
+			weight*, overhang*: LONGINT;
+			aspectX*, aspectY*: LONGINT;
+			firstCh*, lastCh*, defaultCh*, breakCh*: CHAR;
+			italic*, underlined*, struckout*: SHORTINT;
+			pitchAndFamily*, charset*: SHORTINT
+		END;
+		BITMAPINFOHEADER* = RECORD
+			size*, width*, height*: LONGINT;
+			planes*, bits*: INTEGER;
+			compression*, sizeImage*, xPelsPerMeter*, yPelsPerMeter*, clrUsed*, clrImportant*: LONGINT
+		END;
+		DocInfo* = RECORD
+			size*: LONGINT;
+			docName*, output*: LONGINT
+		END;
+		EnumFontsProc* = PROCEDURE (lplf, lptm, type, data: LONGINT): LONGINT;
+		EnumFontFamProc* = PROCEDURE (lpelf, lpntm, type, data: LONGINT): LONGINT;
+
+	VAR
+		AddFontResource-: PROCEDURE (fileName: LONGINT): LONGINT;
+		AnimatePalette-: PROCEDURE (hpal, start, nofentries, ppe: LONGINT);
+		BitBlt-: PROCEDURE (hDC, x, y, w, h, hDCSrc, xSrc, ySrc, rop: LONGINT): LONGINT;
+		CreateBitmap-: PROCEDURE (w, h, planes, bitsPerPixel, bits: LONGINT): LONGINT;
+		CreateCompatibleBitmap-: PROCEDURE (hDC, w, h: LONGINT): LONGINT;
+		CreateCompatibleDC-: PROCEDURE (hDC: LONGINT): LONGINT;
+		CreateDC-: PROCEDURE (driver, device, output, initData: LONGINT): LONGINT;
+		CreateFontIndirect-: PROCEDURE (lplf: LONGINT): LONGINT;
+		CreateHatchBrush-: PROCEDURE (style, colRef: LONGINT): LONGINT;
+		CreatePalette-: PROCEDURE (logPal: LONGINT): LONGINT;
+		CreatePatternBrush-: PROCEDURE (hBm: LONGINT): LONGINT;
+		CreatePen-: PROCEDURE (style, width, colRef: LONGINT): LONGINT;
+		CreateRectRgn-: PROCEDURE (left, top, right, bottom: LONGINT): LONGINT;
+		CreateSolidBrush-: PROCEDURE (colRef: LONGINT): LONGINT;
+		DeleteDC-: PROCEDURE (hDC: LONGINT): LONGINT;
+		DeleteObject-: PROCEDURE (hObj: LONGINT): LONGINT;
+		Ellipse-: PROCEDURE (hDC, left, top, right, bottom: LONGINT): LONGINT;
+		EndDoc-: PROCEDURE (hDC: LONGINT): LONGINT;
+		EndPage-: PROCEDURE (hDC: LONGINT): LONGINT;
+		EnumFontFamilies-: PROCEDURE (hDC, family: LONGINT; fontFamProc: EnumFontFamProc; param: LONGINT): LONGINT;
+		EnumFonts-: PROCEDURE (hDC, faceName: LONGINT; fontFunc: EnumFontsProc; param: LONGINT): LONGINT;
+		GdiFlush-: PROCEDURE (): LONGINT;
+		GdiSetBatchLimit-: PROCEDURE (limit: LONGINT): LONGINT;
+		GetBitmapBits-: PROCEDURE (hbmp, buffer, bits: LONGINT): LONGINT;
+		GetCharABCWidths-: PROCEDURE (hDC, firstCh, lastCh, lpABC: LONGINT): LONGINT;
+		GetCharWidth32-: PROCEDURE (hDC, firstCh, lastCh, lpBuffer: LONGINT): LONGINT;
+		GetDeviceCaps-: PROCEDURE (hDC, index: LONGINT): LONGINT;
+		GetDIBits-: PROCEDURE [stdcall] (hdc, hbmp, uStartScanLine, cScanLines, lpvBits, lpbi, uUsage: LONGINT): LONGINT;
+		GetNearestColor-: PROCEDURE (hDC, colRef: LONGINT): LONGINT;
+		GetPaletteEntries-: PROCEDURE (hPal, start, entries, palEntries: LONGINT): LONGINT;
+		GetPixel-: PROCEDURE (hDC, x, y: LONGINT): LONGINT;
+		GetStockObject-: PROCEDURE (object: LONGINT): LONGINT;
+		GetSystemPaletteEntries-: PROCEDURE (hPal, start, entries, palEntries: LONGINT): LONGINT;
+		GetTextExtentPoint-: PROCEDURE (hDC, str, len, size: LONGINT): LONGINT;
+		GetTextMetrics-: PROCEDURE (hDC, lptm: LONGINT): LONGINT;
+		LineTo-: PROCEDURE (hDC, x, y: LONGINT): LONGINT;
+		MoveToEx-: PROCEDURE (hDC, x, y, point: LONGINT): LONGINT;
+		PatBlt-: PROCEDURE (hDC, x, y, w, h, rop: LONGINT): LONGINT;
+		RealizePalette-: PROCEDURE (hDC: LONGINT): LONGINT;
+		RemoveFontResource-: PROCEDURE (fileName: LONGINT): LONGINT;
+		SelectClipRgn-: PROCEDURE (hDC, hRgn: LONGINT): LONGINT;
+		SelectObject-: PROCEDURE (hDC, hObj: LONGINT): LONGINT;
+		SelectPalette-: PROCEDURE (hwDC, hPal, forceBack: LONGINT): LONGINT;
+		SetBkColor-: PROCEDURE (hDC, colRef: LONGINT): LONGINT;
+		SetBkMode-: PROCEDURE (hDC, mode: LONGINT): LONGINT;
+		SetDIBitsToDevice-: PROCEDURE [stdcall] (hdc, XDest, YDest, dwWidth, dwHeight, XSrc, YSrc, uStartScan, cScanLines, lpvBits, lpbmi, fuColorUse: LONGINT): LONGINT;
+		SetBrushOrgEx-: PROCEDURE (hDC, x, y, prev: LONGINT): LONGINT;
+		SetMapMode-: PROCEDURE (hDC, mapMode: LONGINT): LONGINT;
+		SetPaletteEntries-: PROCEDURE (hPal, start, entries, palEntries: LONGINT): LONGINT;
+		SetPixelV-: PROCEDURE (hDC, x, y, colRef: LONGINT): LONGINT;
+		SetSystemPaletteUse-: PROCEDURE (hdc, usage: LONGINT): LONGINT;
+		SetTextAlign-: PROCEDURE (hDC, mode: LONGINT): LONGINT;
+		SetTextColor-: PROCEDURE (hDC, colRef: LONGINT): LONGINT;
+		StartDoc-: PROCEDURE (hDC, lpDi: LONGINT): LONGINT;
+		StartPage-: PROCEDURE (hDC: LONGINT): LONGINT;
+		StretchDIBits-: PROCEDURE (hDC, dx, dy, dw, dh, sx, sy, sw, sh, bits, bmi, use, rop: LONGINT): LONGINT;
+		TextOut-: PROCEDURE (hDC, xStart, yStart, str, len: LONGINT): LONGINT;
+		T-, iT-: ARRAY 256 OF CHAR;
+
+	PROCEDURE RotateBytes*(VAR b: ARRAY OF S.BYTE);
+		VAR i: LONGINT;
+	BEGIN
+		FOR i := 0 TO LEN(b)-1 DO b[i] := T[ORD(S.VAL(CHAR, b[i]))] END
+	END RotateBytes;
+
+	PROCEDURE InitAPI();
+		VAR mod, i, j, k, bit, val: LONGINT;
+	BEGIN
+		mod := Kernel32.LoadLibrary("GDI32.DLL");
+		Kernel32.GetAdr(mod, "AddFontResourceA", S.VAL(LONGINT, AddFontResource));
+		Kernel32.GetAdr(mod, "AnimatePalette", S.VAL(LONGINT, AnimatePalette));
+		Kernel32.GetAdr(mod, "BitBlt", S.VAL(LONGINT, BitBlt));
+		Kernel32.GetAdr(mod, "CreateBitmap", S.VAL(LONGINT, CreateBitmap));
+		Kernel32.GetAdr(mod, "CreateCompatibleBitmap", S.VAL(LONGINT, CreateCompatibleBitmap));
+		Kernel32.GetAdr(mod, "CreateCompatibleDC", S.VAL(LONGINT, CreateCompatibleDC));
+		Kernel32.GetAdr(mod, "CreateDCA", S.VAL(LONGINT, CreateDC));
+		Kernel32.GetAdr(mod, "CreateFontIndirectA", S.VAL(LONGINT, CreateFontIndirect));
+		Kernel32.GetAdr(mod, "CreateHatchBrush", S.VAL(LONGINT, CreateHatchBrush));
+		Kernel32.GetAdr(mod, "CreatePalette", S.VAL(LONGINT, CreatePalette));
+		Kernel32.GetAdr(mod, "CreatePatternBrush", S.VAL(LONGINT, CreatePatternBrush));
+		Kernel32.GetAdr(mod, "CreatePen", S.VAL(LONGINT, CreatePen));
+		Kernel32.GetAdr(mod, "CreateRectRgn", S.VAL(LONGINT, CreateRectRgn));
+		Kernel32.GetAdr(mod, "CreateSolidBrush", S.VAL(LONGINT, CreateSolidBrush));
+		Kernel32.GetAdr(mod, "DeleteDC", S.VAL(LONGINT, DeleteDC));
+		Kernel32.GetAdr(mod, "DeleteObject", S.VAL(LONGINT, DeleteObject));
+		Kernel32.GetAdr(mod, "Ellipse", S.VAL(LONGINT, Ellipse));
+		Kernel32.GetAdr(mod, "EndDoc", S.VAL(LONGINT, EndDoc));
+		Kernel32.GetAdr(mod, "EndPage", S.VAL(LONGINT, EndPage));
+		Kernel32.GetAdr(mod, "EnumFontFamiliesA", S.VAL(LONGINT, EnumFontFamilies));
+		Kernel32.GetAdr(mod, "EnumFontsA", S.VAL(LONGINT, EnumFonts));
+		Kernel32.GetAdr(mod, "GdiFlush", S.VAL(LONGINT, GdiFlush));
+		Kernel32.GetAdr(mod, "GdiSetBatchLimit", S.VAL(LONGINT, GdiSetBatchLimit));
+		Kernel32.GetAdr(mod, "GetBitmapBits", S.VAL(LONGINT, GetBitmapBits));
+		Kernel32.GetAdr(mod, "GetCharABCWidthsA", S.VAL(LONGINT, GetCharABCWidths));
+		Kernel32.GetAdr(mod, "GetCharWidth32A", S.VAL(LONGINT, GetCharWidth32));
+		Kernel32.GetAdr(mod, "GetDeviceCaps", S.VAL(LONGINT, GetDeviceCaps));
+		Kernel32.GetAdr(mod, "GetDIBits", S.VAL(LONGINT, GetDIBits));
+		Kernel32.GetAdr(mod, "GetNearestColor", S.VAL(LONGINT, GetNearestColor));
+		Kernel32.GetAdr(mod, "GetPaletteEntries", S.VAL(LONGINT, GetPaletteEntries));
+		Kernel32.GetAdr(mod, "GetPixel", S.VAL(LONGINT,GetPixel));
+		Kernel32.GetAdr(mod, "GetStockObject", S.VAL(LONGINT, GetStockObject));
+		Kernel32.GetAdr(mod, "GetSystemPaletteEntries", S.VAL(LONGINT, GetSystemPaletteEntries));
+		Kernel32.GetAdr(mod, "GetTextExtentPointA", S.VAL(LONGINT, GetTextExtentPoint));
+		Kernel32.GetAdr(mod, "GetTextMetricsA", S.VAL(LONGINT, GetTextMetrics));
+		Kernel32.GetAdr(mod, "LineTo", S.VAL(LONGINT, LineTo));
+		Kernel32.GetAdr(mod, "MoveToEx", S.VAL(LONGINT, MoveToEx));
+		Kernel32.GetAdr(mod, "PatBlt", S.VAL(LONGINT, PatBlt));
+		Kernel32.GetAdr(mod, "RealizePalette", S.VAL(LONGINT, RealizePalette));
+		Kernel32.GetAdr(mod, "RemoveFontResourceA", S.VAL(LONGINT, RemoveFontResource));
+		Kernel32.GetAdr(mod, "SelectClipRgn", S.VAL(LONGINT, SelectClipRgn));
+		Kernel32.GetAdr(mod, "SelectObject", S.VAL(LONGINT, SelectObject));
+		Kernel32.GetAdr(mod, "SelectPalette", S.VAL(LONGINT, SelectPalette));
+		Kernel32.GetAdr(mod, "SetBkColor", S.VAL(LONGINT, SetBkColor));
+		Kernel32.GetAdr(mod, "SetBkMode", S.VAL(LONGINT, SetBkMode));
+		Kernel32.GetAdr(mod, "SetDIBitsToDevice", S.VAL(LONGINT, SetDIBitsToDevice));
+		Kernel32.GetAdr(mod, "SetBrushOrgEx", S.VAL(LONGINT, SetBrushOrgEx));
+		Kernel32.GetAdr(mod, "SetMapMode", S.VAL(LONGINT, SetMapMode));
+		Kernel32.GetAdr(mod, "SetPaletteEntries", S.VAL(LONGINT, SetPaletteEntries));
+		Kernel32.GetAdr(mod, "SetPixelV", S.VAL(LONGINT, SetPixelV));
+		Kernel32.GetAdr(mod, "SetSystemPaletteUse", S.VAL(LONGINT, SetSystemPaletteUse));
+		Kernel32.GetAdr(mod, "SetTextAlign", S.VAL(LONGINT, SetTextAlign));
+		Kernel32.GetAdr(mod, "SetTextColor", S.VAL(LONGINT, SetTextColor));
+		Kernel32.GetAdr(mod, "StartDocA", S.VAL(LONGINT, StartDoc));
+		Kernel32.GetAdr(mod, "StartPage", S.VAL(LONGINT, StartPage));
+		Kernel32.GetAdr(mod, "StretchDIBits", S.VAL(LONGINT, StretchDIBits));
+		Kernel32.GetAdr(mod, "TextOutA", S.VAL(LONGINT, TextOut));
+		i := 0;
+		WHILE i < 256 DO
+			k := i; bit := 0; val := 0;
+			WHILE bit < 8 DO
+				val := val * 2;
+				IF ODD(k) THEN INC(val) END;
+				k := k DIV 2; INC(bit)
+			END;
+			j := (-i-1) MOD 256; iT[j] := CHR(val);
+			T[i] := CHR(val); INC(i)
+		END
+	END InitAPI;
+
+BEGIN
+	InitAPI()
+END GDI32.

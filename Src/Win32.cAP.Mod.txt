@@ -1,22 +1,21 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE cAP; (* jm 13.3.95 *)
+MODULE cAP; (** non-portable / source: Win32.cAP.Mod *)	(* jm 13.3.95 *)
 
-IMPORT Kernel32;
+IMPORT SYSTEM, Kernel32;
 
 CONST NameLen = 32; StackSize = 128;
 	
@@ -41,7 +40,9 @@ TYPE
 		mod*: ARRAY StackSize OF Module;
 		proc*: ARRAY StackSize OF INTEGER;
 	END;
-	Timer = ARRAY 2 OF LONGINT;
+	Timer = RECORD
+			LowPart, HighPart: LONGINT
+		END;
 	
 VAR
 	mods*: Module;
@@ -78,20 +79,20 @@ BEGIN
 END Pop;
 
 PROCEDURE Start;
-VAR r: LONGINT;
+VAR ret: LONGINT;
 BEGIN
-	r := Kernel32.QueryPerformanceCounter(timer[0]);
+	ret := Kernel32.QueryPerformanceCounter(SYSTEM.ADR(timer))
 END Start;
 
 PROCEDURE Stop(VAR elapsed: LONGINT);
-VAR t: Timer; r: LONGINT;
+VAR t: Timer; ret: LONGINT;
 BEGIN
-	r := Kernel32.QueryPerformanceCounter(t[0]);
-	IF t[1] = timer[1] THEN (* no wrap around *)
-		elapsed := t[0] - timer[0]
+	ret := Kernel32.QueryPerformanceCounter(SYSTEM.ADR(t));
+	IF t.HighPart = timer.HighPart THEN (* no wrap around *)
+		elapsed := t.LowPart - timer.LowPart
 	ELSE (* wrap around *)
-		elapsed := MAX(LONGINT) - timer[0] + t[0]
-	END;
+		elapsed := MAX(LONGINT) - timer.LowPart + t.LowPart
+	END
 END Stop;
 
 PROCEDURE B*(m: Module; proc: INTEGER);
@@ -127,7 +128,7 @@ BEGIN
 	END;
 	COPY(name, m.name);
 	m.noprocs := noprocs;
-	NEW(m.p, noprocs);
+	IF noprocs > 0 THEN NEW(m.p, noprocs) ELSE m.p := NIL END
 END Mod;
 
 PROCEDURE R*(m: Module; procno: INTEGER; name: ARRAY OF CHAR);

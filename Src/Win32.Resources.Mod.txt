@@ -1,20 +1,19 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE Resources;
+MODULE Resources; (** portable / source: Win32.Resources.Mod *)
 
 (*
 	tk 15.12.95 - Portable ReadReal and ReadLReal
@@ -98,7 +97,7 @@ TYPE
 
 	VAR
 		log*: Texts.Text;
-		outputDir: ARRAY 128 OF CHAR;
+		outputDir, sectionPath: ARRAY 128 OF CHAR;
 		W: Texts.Writer;
 
 	PROCEDURE InputBit(VAR R: Files.Rider): LONGINT;
@@ -327,7 +326,7 @@ BEGIN
 	ELSE
 		Texts.WriteString(W, " ok");
 		Strings.IntToStr(r.version, s);
-		Registry.Set(SectionName, r.name, s);
+		Registry.SetKeyValue(Registry.CurrentUser, sectionPath, r.name, s);
 	END;
 	OPS.Get := NIL
 END Compile;
@@ -358,7 +357,7 @@ BEGIN
 		Files.Register(F);
 		Texts.WriteInt(W, i, 0); Texts.WriteString(W, " bytes");
 		Strings.IntToStr(r.version, s);
-		Registry.Set(SectionName, r.name, s);
+		Registry.SetKeyValue(Registry.CurrentUser, sectionPath, r.name, s);
 	ELSE Texts.WriteString(W, " can't-create")
 	END
 END Unpack;
@@ -366,7 +365,7 @@ END Unpack;
 PROCEDURE NewVersion(name: ARRAY OF CHAR; version: LONGINT): BOOLEAN;
 VAR val: ARRAY StrLen OF CHAR; old: LONGINT;
 BEGIN
-	Registry.Get(SectionName, name, val);
+	Registry.GetKeyValue(Registry.CurrentUser, sectionPath, name, val);
 	IF Registry.res = Registry.Done THEN (* entry exists *)
 		Strings.StrToInt(val, old);
 		IF (version > old) THEN Texts.WriteString(W, "  new")
@@ -489,7 +488,7 @@ BEGIN
 	
 	(* output path *)
 	COPY(OPM.outputPath, old);
-	Registry.Get(SectionName, "OutputDir", outputDir);
+	Registry.GetKeyValue(Registry.CurrentUser, sectionPath, "OutputDir", outputDir);
 	IF Registry.res = Registry.Done THEN
 		IF outputDir # "" THEN
 			x := 0; WHILE outputDir[x] # 0X DO INC(x) END;
@@ -625,7 +624,8 @@ BEGIN
 	NEW(obj); Init(obj);  Objects.NewObj := obj;
 END New;
 
-BEGIN Texts.OpenWriter(W); NEW(Tree); NEW(identtable); outputDir := ""; NEW(log); Texts.Open(log, "")
+BEGIN Texts.OpenWriter(W); NEW(Tree); NEW(identtable); outputDir := ""; NEW(log); Texts.Open(log, "");
+	Registry.OberonPath(SectionName, sectionPath)
 END Resources.
 
 System.State iOPM

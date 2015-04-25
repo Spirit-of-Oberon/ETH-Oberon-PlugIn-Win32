@@ -1,32 +1,31 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE TextFrames; (*JG 16.10.94, color version / tk bw support 12.4.95*)
+MODULE TextFrames; (** portable *)	(* JG / pjm *)
 
-  IMPORT  Input, Modules, Objects, Display, Viewers, Fonts, Texts, Oberon, Registry, MenuViewers;
+  IMPORT Input, Modules, Objects, Display, Viewers, Fonts, Texts, Oberon, MenuViewers;
 
   CONST CR = 0DX;
     replace = Display.replace; paint = Display.paint; invert = Display.invert;
     extend = Display.extend; reduce = Display.reduce;
-    BufLen = 64;
-    TAB = 09X;	SPACE = " ";	LF = 0AX;
-    LtArrow = 0C4X;	RtArrow = 0C3X;	UpArrow = 0C1X;	DnArrow = 0C2X;	(* tk *)
-	LogMenu="System.Close  System.Grow  Edit.Locate  Edit.Store ";
-	SystemMenu="System.Close  System.Copy  System.Grow  Edit.Store ";
+
 	StandardMenu = "System.Close System.Copy System.Grow Edit.Search Edit.Store";
+	LogMenu = "System.Clear Edit.Locate Edit.Search Edit.Store";
+	OpenCmd = "Edit.Open";
+
+	Modern = FALSE;
 
   TYPE
   	Line = POINTER TO LineDesc;
@@ -64,30 +63,16 @@ MODULE TextFrames; (*JG 16.10.94, color version / tk bw support 12.4.95*)
   	(*mark < 0: arrow mark
         mark = 0: no mark
         mark > 0: position mark*)
-        
-	BackRdr = RECORD
-		text: Texts.Text;
-		buf: ARRAY BufLen OF CHAR;
-		begPos: LONGINT;
-		last, next: INTEGER;
-		beg: BOOLEAN
-	END;
 
   VAR
     menuH*, barW*, left*, right*, top*, bot*, lsp*: INTEGER; (*standard sizes*)
-    MarkColor, BarColor, MenuBG, TextBG, FullColor: SHORTINT;
-    asr, dsr, selH, markW, eolW, boxW: INTEGER;
-    par: Oberon.ParList; ch: CHAR;
+    MarkColor, BarColor, MenuBG, TextBG, FullColor, mode: INTEGER;
+    asr, dsr, selH, markW, eolW: INTEGER;
+	ch: CHAR;
     W, KW: Texts.Writer; (*keyboard writer*)
     box: Fonts.Char;
-    BoxPat: ARRAY 32 OF SET;
-
-    inFnt: Fonts.Font;	(* input font *)
-	inColor: SHORTINT;	(* input color *)
-	res: ARRAY 8 OF CHAR;
-	
-	PROCEDURE^ LinesUp(text: Texts.Text; pos: LONGINT; nbr: INTEGER): LONGINT;
-
+    BoxPat: ARRAY 12 OF SET;
+    
   PROCEDURE Min (i, j: INTEGER): INTEGER;
   BEGIN IF i >= j THEN RETURN j ELSE RETURN i END
   END Min;
@@ -136,9 +121,11 @@ MODULE TextFrames; (*JG 16.10.94, color version / tk bw support 12.4.95*)
       END;
       WITH obj: Fonts.Char DO
         IF X + obj.x + obj.w <= NX THEN
-          Display.CopyPattern(R.col, obj.pat, X + obj.x, Y + obj.y, paint)
+          Display.CopyPattern(R.col, obj.pat, X + obj.x, Y + obj.y, mode);
+          X := X + obj.dx
+        ELSE
+          X := NX
         END;
-        X := X + obj.dx
       END;
       INC(len); Texts.Read(R, ch)
     END;
@@ -147,36 +134,18 @@ MODULE TextFrames; (*JG 16.10.94, color version / tk bw support 12.4.95*)
   END DisplayLine;
 
   PROCEDURE Validate (T: Texts.Text; VAR org: LONGINT);
-   VAR R: Texts.Reader; pos, org1: LONGINT;
+    VAR R: Texts.Reader; pos: LONGINT;
   BEGIN
     IF org > T.len THEN org := T.len
     ELSIF org > 0 THEN Texts.OpenReader(R, T, org - 1); Texts.Read(R, ch);
       IF ch # CR THEN
-        pos := Max(org - 200, 0); Texts.OpenReader(R, T, pos);					(* tk *)
-        LOOP
-           REPEAT Texts.Read(R, ch); INC(pos) UNTIL (pos = org) OR (ch = CR);
-           IF pos = org THEN EXIT
-           ELSE org1 := pos
-           END
-         END;
-         org := org1;
+        pos := Max(org - 100, 0); Texts.OpenReader(R, T, pos);
+        REPEAT Texts.Read(R, ch); INC(pos) UNTIL (pos = org) OR (ch = CR);
+        org := pos
       END
     ELSE org := 0
     END
   END Validate;
-
-  PROCEDURE NofLines(T: Texts.Text; pos1, pos2: LONGINT): INTEGER;	(* tk *)
-     VAR cnt: INTEGER; ch: CHAR; R: Texts.Reader;
-  BEGIN
-     IF pos1<pos2 THEN
-       Texts.OpenReader(R, T, pos1); cnt:=0;
-       REPEAT Texts.Read(R, ch); INC(pos1);
-          IF ch=CR THEN INC(cnt) END;
-       UNTIL pos1=pos2;
-       RETURN cnt;
-     ELSE RETURN 0
-     END
-  END NofLines;
 
   PROCEDURE Mark* (F: Frame; mark: INTEGER);
   BEGIN
@@ -206,7 +175,6 @@ MODULE TextFrames; (*JG 16.10.94, color version / tk bw support 12.4.95*)
     L := F.trailer; curY := F.Y + F.H - F.top - asr;
     WHILE ~L.eot & (curY >= botY) DO
       NEW(L.next); L := L.next;
-
       DisplayLine(F, L, R, F.X + F.left, curY, 0);
       curY := curY - lsp
     END;
@@ -262,38 +230,15 @@ MODULE TextFrames; (*JG 16.10.94, color version / tk bw support 12.4.95*)
   END Reduce;
 
   PROCEDURE Show* (F: Frame; pos: LONGINT);
-    VAR R: Texts.Reader; L, L0: Line;
-      org: LONGINT; l, bot, curY, midY, botY, Y0: INTEGER;
+    VAR R: Texts.Reader; L: Line;
+      org: LONGINT; curY, botY, Y0: INTEGER;
   BEGIN
     IF F.trailer.next # F.trailer THEN Validate(F.text, pos);
-      IF pos < F.org THEN 
-        (* old --- Mark(F, 0);
+      IF pos < F.org THEN Mark(F, 0);
         Display.ReplConst(F.col, F.X + F.left, F.Y, F.W - F.left, F.H, replace);
         botY := F.Y; F.Y := F.Y + F.H; F.H := 0;
         F.org := pos; F.trailer.next := F.trailer; Extend(F, botY);
         Mark(F, 1)
-        *)
-        l:=NofLines(F.text, pos, F.org); F.org:=pos; 
-        IF l*lsp > F.H - F.top THEN Restore(F); F.mark:=0; Mark(F, 1)
-        ELSE
-          curY := F.Y + F.H - F.top - asr; midY := curY - l*lsp; botY := F.Y + F.bot + dsr;
-          bot := (curY - botY) MOD lsp + F.Y + F.bot;
-          Display.CopyBlock(F.X + F.left, bot + l*lsp, F.W - F.left, F.Y + F.H - F.top - bot - l*lsp, F.X + F.left, bot, replace);
-          Display.ReplConst(F.col, F.X + F.left, F.Y + F.H - F.top - l*lsp, F.W - F.left, l*lsp, replace);
-          Texts.OpenReader(R, F.text, F.org); Texts.Read(R, ch);
-          L0 := F.trailer.next; L := F.trailer; 
-          WHILE ~L.eot & (curY > midY) DO
-            NEW(L.next); L := L.next;
-            DisplayLine(F, L, R, F.X + F.left, curY, 0);
-            curY := curY - lsp
-          END; 
-          L.next := L0;
-          WHILE ~L.eot & (curY >= botY) DO
-             L:=L.next; curY := curY - lsp;
-          END;
-          L.next := F.trailer;
-        END;
-        UpdateMark(F) 
       ELSIF pos > F.org THEN
         org := F.org; L := F.trailer.next; curY := F.Y + F.H - F.top - asr;
         WHILE (L.next # F.trailer) & (org # pos) DO
@@ -329,7 +274,7 @@ MODULE TextFrames; (*JG 16.10.94, color version / tk bw support 12.4.95*)
     END
   END Show;
 
-  PROCEDURE LocateLine* (F: Frame; y: INTEGER; VAR loc: Location);
+  PROCEDURE LocateLine (F: Frame; y: INTEGER; VAR loc: Location);
     VAR L: Line; org: LONGINT; cury: INTEGER;
   BEGIN
     org := F.org; L := F.trailer.next; cury := F.H - F.top - asr; 
@@ -409,12 +354,6 @@ MODULE TextFrames; (*JG 16.10.94, color version / tk bw support 12.4.95*)
     loc.x := F.left + Width(R, pos - org); loc.y := cury
   END LocatePos;
 
-  PROCEDURE LocateOrg(F: Frame; lin: Line; VAR org: LONGINT);	(* tk *)
-    VAR L: Line;
-  BEGIN org:=F.org;
-    L:=F.trailer.next; WHILE (L # lin) & (L.next # F.trailer) DO org:=org+L.len; L:=L.next END;
-  END LocateOrg;
-
   PROCEDURE Pos* (F: Frame; X, Y: INTEGER): LONGINT;
     VAR loc: Location;
   BEGIN LocateChar(F, X - F.X, Y - F.Y, loc);
@@ -425,17 +364,15 @@ MODULE TextFrames; (*JG 16.10.94, color version / tk bw support 12.4.95*)
   BEGIN
     IF (F.carloc.y >= 10) & (F.carloc.x + 12 < F.W) THEN
       Display.CopyPattern(FullColor, Display.hook, F.X + F.carloc.x, F.Y + F.carloc.y - 10, invert)
-   END
+    END
   END FlipCaret;
- 
-   PROCEDURE ^ RemoveMarks (F: Frame);
 
   PROCEDURE SetCaret* (F: Frame; pos: LONGINT);
   BEGIN
     IF F.car # 0 THEN FlipCaret(F); F.car := 0 END;
     LocatePos(F, pos, F.carloc);
     IF F.carloc.pos = pos THEN FlipCaret(F); F.car := 1
-    ELSE RemoveMarks(F); (* tk *) Show(F, pos - 100); LocatePos(F, pos, F.carloc);
+    ELSE Show(F, pos - 100); LocatePos(F, pos, F.carloc);
       IF F.carloc.pos = pos THEN FlipCaret(F); F.car := 1 END
     END
   END SetCaret;
@@ -484,13 +421,13 @@ MODULE TextFrames; (*JG 16.10.94, color version / tk bw support 12.4.95*)
     IF end <= beg THEN end := beg + 1 END;
     IF F.sel # 0 THEN FlipSelection(F, F.selbeg, F.selend) END;
     LocatePos(F, beg, F.selbeg);
-    IF F.selbeg.pos # beg THEN RemoveMarks(F); (* tk *) Show(F, beg); LocatePos(F, beg, F.selbeg) END;
+    IF F.selbeg.pos # beg THEN Show(F, beg); LocatePos(F, beg, F.selbeg) END;
     LocatePos(F, end, F.selend);
     FlipSelection(F, F.selbeg, F.selend); F.time := Input.Time(); F.sel := 1
   END SetSelection;
 
   PROCEDURE TrackSelection* (F: Frame; X, Y: INTEGER; VAR keysum: SET);
-    VAR loc: Location; keys: SET;
+    VAR loc: Location; modKeys, keys: SET; M: Oberon.SelectMsg;
   BEGIN
       IF F.trailer.next # F.trailer THEN
     	IF F.sel # 0 THEN FlipSelection(F, F.selbeg, F.selend) END;
@@ -499,6 +436,7 @@ MODULE TextFrames; (*JG 16.10.94, color version / tk bw support 12.4.95*)
       	LocateChar(F, F.left, Y - F.Y, F.selbeg)
     	ELSE F.selbeg := loc
     	END;
+    	F.sel := 0;
     	INC(loc.pos); loc.x := loc.x + loc.dx; F.selend := loc;
     	FlipSelection(F, F.selbeg, F.selend);
         keysum := {};
@@ -513,6 +451,19 @@ MODULE TextFrames; (*JG 16.10.94, color version / tk bw support 12.4.95*)
         	ELSIF loc.pos > F.selend.pos THEN FlipSelection(F, F.selend, loc); F.selend := loc
       	END
   	  UNTIL keys = {};
+       (* ps - 3.4.98 *)
+        Input.KeyState(modKeys);
+        IF Input.SHIFT IN modKeys THEN
+          M.id := Oberon.get; M.F := NIL; M.sel := NIL; M.text := NIL; M.time := -1; Display.Broadcast(M);
+          IF (M.time > 0) & (M.text = F.text) & (M.sel IS Frame) THEN
+            IF M.beg > F.selbeg.pos THEN M.beg := F.selbeg.pos END;
+            IF M.end < F.selend.pos THEN M.end := F.selend.pos END;
+            FlipSelection(F, F.selbeg, F.selend);
+            LocatePos(F, M.beg, F.selbeg); LocatePos(F, M.end, F.selend);
+            FlipSelection(F, F.selbeg, F.selend);
+            M.F := M.sel; M.id := Oberon.set; Display.Broadcast(M)
+          END
+        END;
         F.time := Input.Time(); F.sel := 1
       END
   END TrackSelection;
@@ -535,7 +486,7 @@ MODULE TextFrames; (*JG 16.10.94, color version / tk bw support 12.4.95*)
         	LocateLine(F, Y - F.Y, new);
         	IF new.org # old.org THEN
         	  ReplConst(FullColor, F, F.X + F.left, F.Y + old.y - dsr, old.lin.wid, 2, invert);
-        	  ReplConst(FullColor, F, F.X + F.left, F.Y + new.y - dsr, new.lin.wid, 2, invert);
+       	   ReplConst(FullColor, F, F.X + F.left, F.Y + new.y - dsr, new.lin.wid, 2, invert);
         	  old := new
       	  END
     	  UNTIL keys = {};
@@ -572,10 +523,7 @@ MODULE TextFrames; (*JG 16.10.94, color version / tk bw support 12.4.95*)
   (*------------------message handling------------------------*)
 
   PROCEDURE RemoveMarks (F: Frame);
-  BEGIN Oberon.RemoveMarks(F.X, F.Y, F.W, F.H); RemoveCaret(F); RemoveSelection(F);
- (*   IF (F.mark > 0) & (F.left >= barW) THEN	(* tk *)
-      Display.ReplConst(F.col, F.X, F.Y + F.H - 1 - F.markH, markW, 1, replace)
-    END *)
+  BEGIN RemoveCaret(F); RemoveSelection(F)
   END RemoveMarks;
 
   PROCEDURE GetAttr* (F: Frame; VAR s: ARRAY OF CHAR);
@@ -583,65 +531,26 @@ MODULE TextFrames; (*JG 16.10.94, color version / tk bw support 12.4.95*)
   BEGIN Texts.OpenScanner(S, F.text, 0); Texts.Scan(S); COPY(S.s, s)
   END GetAttr;
 
-(* old call
+  PROCEDURE CallCmd (cmd: ARRAY OF CHAR; F: Frame; pos: LONGINT; new: BOOLEAN);
+    VAR res: INTEGER; par: Oberon.ParList;
+  BEGIN
+    NEW(par); par.vwr := Viewers.This(F.X, F.Y);
+    par.frame := F; par.text := F.text; par.pos := pos;
+    Oberon.Call(cmd, par, new, res);
+    IF res > 0 THEN
+      Texts.WriteString(W, "Call error: ");
+      Texts.WriteString(W, Modules.resMsg);
+      Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
+    END
+  END CallCmd;
+
   PROCEDURE Call* (F: Frame; pos: LONGINT; new: BOOLEAN);
-    VAR S: Texts.Scanner; res: INTEGER;
+    VAR S: Texts.Scanner;
   BEGIN
     Texts.OpenScanner(S, F.text, pos); Texts.Scan(S);
-    IF (S.line = 0) & (S.class = Texts.Name) THEN
-      par.vwr := Viewers.This(F.X, F.Y);
-      par.frame := F; par.text := F.text; par.pos := pos + S.len;
-      Oberon.Call(S.s, par, new, res);
-      IF res > 0 THEN
-        Texts.WriteString(W, "Call error: "); Texts.WriteString(W, S.s);
-        IF res = 1 THEN Texts.WriteString(W, " module not found")
-        ELSIF res = 2 THEN Texts.WriteString(W, " not an obj-file")
-        ELSIF res = 3 THEN Texts.WriteString(W, " imports ");
-          Texts.WriteString(W, Modules.imported); Texts.WriteString(W, " with bad key")
-        ELSIF res = 4 THEN Texts.WriteString(W, " corrupted obj file")
-        ELSIF res = 5 THEN Texts.WriteString(W, " command not found")
-        ELSIF res = 6 THEN Texts.WriteString(W, " too many imports")
-        ELSIF res = 7 THEN Texts.WriteString(W, " not enough space")
-        END;
-        Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
-      END
-    END
+    IF (S.line = 0) & (S.class = Texts.Name) THEN CallCmd(S.s, F, pos + S.len, new) END
   END Call;
-*)
-	PROCEDURE Call* (F: Frame; pos: LONGINT; new: BOOLEAN); (* copied from windows *)
-		VAR S: Texts.Scanner; res, i, j: INTEGER;
-	BEGIN
-		Texts.OpenScanner(S, F.text, pos); Texts.Scan(S);
-		IF (S.class = Texts.Name) & (S.line = 0) THEN
-			i := 0; WHILE (i < S.len) & (S.s[i] # ".") DO INC(i) END;
-			j := i + 1; WHILE (j < S.len) & (S.s[j] # ".") DO INC(j) END;
-			IF (j >= S.len) & (S.s[i] = ".") THEN
-				par.vwr := Viewers.This(F.X, F.Y);
-				par.frame := F; par.text := F.text; par.pos := pos + S.len;
-				Oberon.Call(S.s, par, new, res);
-				IF res # 0 THEN
-					Texts.WriteString(W, "Call error: "); Texts.WriteString(W, Modules.resMsg);
-					Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
-				END
-			END
-		END
-	END Call;
 
-	PROCEDURE SetInFnt(tF: Frame; VAR inFnt: Fonts.Font; VAR inCol: SHORTINT);
-		VAR R: Texts.Reader;	ch: CHAR;
-	BEGIN
-		IF (tF.car > 0) & (tF.text.len > 0) THEN
-			Texts.OpenReader(R, tF.text, tF.carloc.pos-1);
-			Texts.Read(R, ch);
-			IF R.eot & (tF.carloc.pos > 0) THEN
-				Texts.OpenReader(R, tF.text, tF.carloc.pos-1); Texts.Read(R, ch)
-			END;
-			IF ~ R.eot & (R.lib IS Fonts.Font) THEN inFnt := R.lib(Fonts.Font); inCol := R.col END
-		ELSE inFnt := NIL; inCol := -1
-		END
-	END SetInFnt;
-
-(* old
   PROCEDURE Write* (F: Frame; ch: CHAR; lib: Objects.Library; col, voff: SHORTINT);
   BEGIN (*F.car # 0*)
     IF ch = 7FX THEN
@@ -649,70 +558,15 @@ MODULE TextFrames; (*JG 16.10.94, color version / tk bw support 12.4.95*)
         Texts.Delete(F.text, F.carloc.pos - 1, F.carloc.pos);
         SetCaret(F, F.carloc.pos - 1)
       END
+    ELSIF (ch >= 0C1X) & (ch <= 0C4X) THEN
+    ELSIF (ch >= 0A0X) & (ch <= 0A9X) THEN
+    ELSIF (ch >= 0F0X) & (ch <= 0FFX) THEN
     ELSE
       KW.lib := lib; KW.col := col; KW.voff := voff; Texts.Write(KW, ch);
       Texts.Insert(F.text, F.carloc.pos, KW.buf);
       SetCaret(F, F.carloc.pos + 1)
     END
   END Write;
-*)
-PROCEDURE Write* (F: Frame; ch: CHAR; lib: Objects.Library; col, voff: SHORTINT);
-	VAR pos, org, beg: LONGINT;
-
-	PROCEDURE Wr(ch: CHAR);
-	BEGIN
-		KW.lib := lib; KW.col := col; KW.voff := voff; Texts.Write(KW, ch);
-		Texts.Insert(F.text, F.carloc.pos, KW.buf);
-	END Wr;
-	
-	PROCEDURE SendTabs(VAR pos: LONGINT);
-	VAR tR: Texts.Reader; ch: CHAR; spos: LONGINT; T: Texts.Text;
-	BEGIN
-		T := F.text;
-		spos := LinesUp(T, pos, 1);
-		Texts.OpenReader(tR, T, spos); Texts.Read(tR, ch);
-		WHILE ~ tR.eot & ((ch = TAB) OR (ch = SPACE)) DO 
-			Wr(ch); Texts.Read(tR, ch); INC(pos);
-		END
-	END SendTabs;
-
-BEGIN (*F.car # 0*)
-	IF inFnt # NIL THEN lib := inFnt; col := inColor END;	(* adjust input font *)
-	IF ch = CR THEN
-		Wr(ch); SetCaret(F, F.carloc.pos + 1);
-		SendTabs(F.carloc.pos); SetCaret(F, F.carloc.pos);
-	ELSIF ch = LF THEN
-		Wr(CR); SetCaret(F, F.carloc.pos + 1);
-	ELSIF (ch = LtArrow) & (F.carloc.pos > 0) THEN	(* tk *)
-		RemoveCaret(F); 
-		IF (F.carloc.pos-1<F.org) & (F.org>0) THEN RemoveMarks(F); Show(F, F.org-1) END;
-		SetCaret(F, F.carloc.pos - 1)
-	ELSIF (ch = RtArrow) & (F.carloc.pos < F.text.len) THEN	(* tk *)
-		RemoveCaret(F); LocateOrg(F, F.carloc.lin, org);
-		IF (F.carloc.lin.next=F.trailer) & (F.carloc.pos=org+F.carloc.lin.len-1)  THEN RemoveMarks(F); Show(F, F.org+F.trailer.next.len) END;
-		SetCaret(F, F.carloc.pos + 1)
-	ELSIF (ch = UpArrow) & (F.carloc.pos>0) THEN	(* tk *)
-		RemoveCaret(F); pos:=F.carloc.pos;
-		org:=Pos(F, F.X+F.carloc.x+1, F.Y+F.carloc.y+lsp);
-		IF org=pos THEN RemoveMarks(F); Show(F, F.org-1) END;
-		SetCaret(F, Pos(F, F.X+F.carloc.x+1, F.Y+F.carloc.y+lsp));
-	ELSIF (ch = DnArrow) & (F.carloc.pos < F.text.len) THEN	(* tk *)
-		RemoveCaret(F); pos:=F.carloc.pos; LocateOrg(F, F.carloc.lin, beg);
-		org:=Pos(F, F.X+F.carloc.x+1, F.Y+F.carloc.y-lsp); 
-		IF (org=pos) & (beg + F.carloc.lin.len < F.text.len) THEN RemoveMarks(F); Show(F, F.org+F.trailer.next.len) END; 
-		SetCaret(F, Pos(F, F.X+F.carloc.x+1, F.Y+F.carloc.y-lsp));	
-	ELSIF ch = 7FX THEN
-		IF F.carloc.pos > F.org THEN
-			Texts.Delete(F.text, F.carloc.pos - 1, F.carloc.pos);
-			SetCaret(F, F.carloc.pos - 1)
-		END
-	ELSIF (20X <= ch) & (ch <= 96X) OR (ch = 0ABX) OR (ch = 0DX) OR (ch = 9X) THEN
-		Wr(ch);
-		SetCaret(F, F.carloc.pos + 1)
-	END;
-	SetInFnt(F, inFnt, inColor);
-     UpdateMark(F);	(* tk *)
-END Write;
 
   PROCEDURE Defocus* (F: Frame);
   BEGIN RemoveCaret(F)
@@ -770,10 +624,17 @@ END Write;
       IF F.time > M.time THEN M.sel := F; M.time := F.time;
         M.text := F.text; M.beg := F.selbeg.pos; M.end := F.selend.pos;
         IF M.end > M.text.len THEN M.end := M.text.len END
-      ELSIF (F.text = M.text) & (F.selbeg.pos < M.beg) & (M.sel IS Frame) THEN
+(*
+       ELSIF (F.text = M.text) & (F.selbeg.pos < M.beg) & (M.sel IS Frame) THEN
         IF (M.beg <= M.sel(Frame).org) & (F.selend.pos >= Pos(F, F.X+F.W, F.Y)) THEN
         	M.beg := F.selbeg.pos
         END
+*)
+     ELSIF F.text = M.text THEN	(* extend selection over frame boundaries *)
+        (* 7.4.98 - ps *)
+        IF (F.selbeg.pos < M.beg) & (F.selend.pos >= Pos(F, F.X+F.W, F.Y)) THEN M.beg := F.selbeg.pos END;
+        IF (F.selend.pos > M.end) & (F.selbeg.pos = F.org) THEN M.end := F.selend.pos END;
+        IF M.end > F.text.len THEN M.end :=  F.text.len END
       END
     END
   END GetSelection;
@@ -792,7 +653,7 @@ END Write;
   
   PROCEDURE Update* (F: Frame; beg, end, len: LONGINT);
     VAR R: Texts.Reader; L, LB, LR, LS: Line; done: BOOLEAN;
-      org, orgB, orgL, orgS, off, Llen: LONGINT;
+      org, orgB, orgS, off, Llen: LONGINT;
       botY, Y, YB, YL, YR, YS, wid, H: INTEGER;
   BEGIN
     IF end < F.org THEN F.org := F.org - (end - beg) + len;
@@ -823,7 +684,7 @@ END Write;
             END;
             org := org + Llen; Y := Y - lsp;
             IF botY <= Y THEN (* update with reusing lines *)
-              orgL := org; YL := Y; L := LR;
+              YL := Y; L := LR;
               WHILE (L.next # F.trailer) & (botY + lsp <= Y) DO
                 org := org + L.len; Y := Y - lsp; L := L.next
               END;
@@ -904,101 +765,6 @@ END Write;
     END
   END Recall;
 
-  PROCEDURE LinesOf(tF: Frame): INTEGER;
-	BEGIN
-		RETURN (tF.H - tF.top - tF.bot) DIV tF.lsp
-	END LinesOf;
-		
-	PROCEDURE OpenBackRdr(VAR bR: BackRdr; text: Texts.Text; pos: LONGINT);
-		VAR R: Texts.Reader;	i: INTEGER;	ch: CHAR;
-	BEGIN
-		bR.text := text; bR.beg := FALSE; bR.next := BufLen - 1;
-		IF pos >= BufLen THEN
-			bR.begPos := pos - BufLen; i := 0; Texts.OpenReader(R, text, bR.begPos)
-		ELSE
-		(*
-			i := 0; WHILE i < (BufLen - pos) DO bR.buf[i] := 0X; INC(i) END;
-		*)
-			i := SHORT(BufLen - pos);
-			bR.begPos := -i; Texts.OpenReader(R, text, 0)
-		END;
-		bR.last := i; Texts.Read(R, ch);
-		WHILE i < BufLen DO bR.buf[i] := ch; INC(i); Texts.Read(R, ch) END
-	END OpenBackRdr;
-	
-	PROCEDURE BackRead(VAR bR: BackRdr; VAR ch: CHAR);
-	BEGIN
-		IF bR.next >= bR.last THEN
-			ch := bR.buf[bR.next]; DEC(bR.next); bR.beg := FALSE
-		ELSIF (bR.next = -1) & (bR.begPos > 0) THEN
-			OpenBackRdr(bR, bR.text, bR.begPos); BackRead(bR, ch)
-		ELSE ch := 0X; bR.beg := TRUE
-		END
-	END BackRead;
-	
-	PROCEDURE RPos(VAR bR: BackRdr): LONGINT;
-	BEGIN
-		IF bR.next >= 0 THEN RETURN bR.begPos + bR.next + 1
-		ELSE RETURN bR.begPos
-		END
-	END RPos;
-	
-	PROCEDURE LinesUp(text: Texts.Text; pos: LONGINT; nbr: INTEGER): LONGINT;
-	(* returns the start position of nbr lines above line containing pos *)
-		VAR bR: BackRdr;	l: INTEGER;	ch: CHAR;
-	BEGIN
-		OpenBackRdr(bR, text, pos); l := 0;
-		REPEAT
-			BackRead(bR, ch);
-			IF ch = CR THEN INC(l) END
-		UNTIL bR.beg OR (l > nbr);
-		pos := RPos(bR); IF ~ bR.beg THEN INC(pos) END;	(* RPos(bR) = pos of CR *)
-		RETURN pos
-	END LinesUp;
-
-	PROCEDURE ScrollFrame(tF: Frame; X, Y: INTEGER; keys: SET);
-	CONST ML = 2;	MM = 1;	MR = 0;
-		VAR mm, mr, ml: BOOLEAN;	pos: LONGINT;	lPos: INTEGER; 	(* tk *)
-	BEGIN
-		ml := FALSE; mm := FALSE; mr := FALSE;
-		IF keys = {ML} THEN
-			TrackLine(tF, X, Y, pos, keys);
-			IF keys = {ML,MM} THEN pos := 0; (* << KR *)
-			ELSE
-				IF MM IN keys THEN mm := TRUE END;
-				IF MR IN keys THEN mr := TRUE END;
-				IF mm OR mr THEN RETURN END
-			END;
-			Oberon.FadeCursor(Oberon.Mouse); RemoveMarks(tF);
-			Show(tF, pos)	(* scroll distance up *)
-		ELSIF keys = {MM} THEN
-			WHILE keys # {} DO
-				Input.Mouse(keys, X, Y); Oberon.DrawCursor(Oberon.Mouse, Oberon.Arrow, X, Y);
-				IF ML IN keys THEN ml := TRUE END;
-				IF MR IN keys THEN mr := TRUE END
-			END;
-			IF ml & mr THEN RETURN END;
-			Oberon.FadeCursor(Oberon.Mouse); RemoveMarks(tF);
-			IF mr THEN tF.org:=0; Restore(tF); tF.mark:=0; Mark(tF, 1)	(* tk *) (* Show(tF, 0) *)	(* scroll to begin *)
-			ELSIF ml THEN	(* scroll to end *)
-				lPos := LinesOf(tF);
-				IF lPos > 1 THEN Show(tF, LinesUp(tF.text, tF.text.len, lPos - 1)) END
-			ELSE	(* relative positioning *)
-				pos := (tF.text.len DIV tF.H) * (tF.Y + tF.H - Y);
-				IF pos < 0 THEN pos := 0 END;
-				IF tF.org # pos THEN Show(tF, pos) END
-			END
-		ELSIF keys = {MR} THEN mr := TRUE;
-			TrackLine(tF, X, Y, pos, keys);	(* beginning of new bottom line *)
-			IF MM IN keys THEN mm := TRUE END;
-			IF ML IN keys THEN ml := TRUE END;
-			IF ml OR mm THEN RETURN END;	(*###*)
-			Oberon.FadeCursor(Oberon.Mouse); RemoveMarks(tF);			
-			lPos := LinesOf(tF);
-			IF lPos > 1 THEN Show(tF, LinesUp(tF.text, pos, lPos - 1)) END
-		END
-	END ScrollFrame;
-
   PROCEDURE Edit* (F: Frame; X, Y: INTEGER; Keys: SET);
     VAR
       M: Oberon.ConsumeMsg;
@@ -1010,8 +776,6 @@ END Write;
   BEGIN
     Oberon.DrawCursor(Oberon.Mouse, Oberon.Arrow, X, Y);
     IF X < F.X + Min(F.left, barW) THEN
-      ScrollFrame(F, X, Y, Keys);
-      (* old
       IF (0 IN Keys) OR (1 IN Keys) THEN keysum := Keys;
         REPEAT
           Input.Mouse(Keys, X, Y);
@@ -1024,7 +788,8 @@ END Write;
             IF 1 IN keysum THEN pos := 0
             ELSE pos := Max(F.org - LONG(F.H * 25) DIV lsp, 0)
             END
-          ELSE pos := (F.Y + F.H - Y) * (F.text.len) DIV F.H
+          ELSE
+            pos := (F.Y + F.H - Y) * (F.text.len) DIV F.H
           END;
           RemoveMarks(F); Oberon.RemoveMarks(F.X, F.Y, F.W, F.H);
           Show(F, pos)
@@ -1039,7 +804,6 @@ END Write;
           Show(F, pos)
         END
       END
-      *)
   ELSE
     IF 0 IN Keys THEN
       TrackSelection(F, X, Y, keysum);
@@ -1056,7 +820,11 @@ END Write;
       END
     ELSIF 1 IN Keys THEN
       TrackWord(F, X, Y, pos, keysum);
-      IF (pos >= 0) & ~(0 IN keysum) THEN Call(F, pos, 2 IN keysum) END
+      IF 0 IN keysum THEN
+        IF (pos >= 0) & ~(2 IN keysum) THEN CallCmd(OpenCmd, F, pos, FALSE) END
+      ELSE
+        IF pos >= 0 THEN Call(F, pos, 2 IN keysum) END
+      END
     ELSIF 2 IN Keys THEN
         Oberon.Defocus; TrackCaret(F, X, Y, keysum);
         IF F.car # 0 THEN
@@ -1072,7 +840,9 @@ END Write;
               Oberon.GetSelection(text, beg, end, time);
               IF time >= 0 THEN
                 Texts.OpenReader(R, F.text, F.carloc.pos); Texts.Read(R, ch);
-                Texts.ChangeLooks(text, beg, end, {0, 1, 2}, R.lib, R.col, R.voff)
+                IF (R.lib # NIL) & (R.lib IS Fonts.Font) THEN
+      	          Texts.ChangeLooks(text, beg, end, {0, 1, 2}, R.lib, R.col, R.voff)
+      	      END
               END
             END
          END
@@ -1080,84 +850,70 @@ END Write;
     END
   END Edit;
 
-	PROCEDURE  Handle* (F: Objects.Object; VAR M: Objects.ObjMsg);
-		VAR F1: Frame;
-	BEGIN
-		WITH F: Frame DO
-			IF M IS Display.FrameMsg THEN
-				WITH M: Display.FrameMsg DO
-					IF (M.F = NIL) OR (M.F = F) THEN
-						IF M IS Texts.UpdateMsg THEN
-							WITH M: Texts.UpdateMsg DO
-								IF F.text = M.text THEN Update(F, M.beg, M.end, M.len) END
-							END
-						ELSIF M IS Oberon.InputMsg THEN
-							WITH M: Oberon.InputMsg DO
-								IF M.id = Oberon.track THEN Edit(F, M.X, M.Y, M.keys)
-								ELSIF M.id = Oberon.consume THEN
-								IF F.car # 0 THEN Write(F, M.ch, M.fnt, M.col, M.voff) END
-								END
-							END
-						ELSIF M IS Oberon.ControlMsg THEN
-							WITH M: Oberon.ControlMsg DO
-								IF M.id = Oberon.defocus THEN Defocus(F)
-								ELSIF M.id = Oberon.neutralize THEN Neutralize(F)
-								END
-							END
-						ELSIF M IS Oberon.CaretMsg THEN
-							WITH M: Oberon.CaretMsg DO
-								IF M.id = Oberon.get THEN GetCaret(F, M)
-								ELSIF (M.car = F) & (M.text = F.text) THEN
-									IF M.id = Oberon.set THEN SetCaret(F, M.pos)
-									ELSIF M.id = Oberon.reset THEN RemoveCaret(F)
-									END
-								END
-							END
-						ELSIF M IS Oberon.SelectMsg THEN
-							WITH M: Oberon.SelectMsg DO
-								IF M.id = Oberon.get THEN GetSelection(F, M)
-								ELSIF (M.sel = F) & (M.text = F.text) THEN
-									IF M.id = Oberon.set THEN SetSelection(F, M.beg, M.end)
-									ELSIF M.id = Oberon.reset THEN RemoveSelection(F)
-									END
-								END
-							END
-						ELSIF M IS Oberon.ConsumeMsg THEN
-							WITH M: Oberon.ConsumeMsg DO
-								CopyOver(F, M.text, M.beg, M.end)
-							END
-						ELSIF M IS Oberon.RecallMsg THEN
-							WITH M: Oberon.RecallMsg DO Recall(F) END
-						ELSIF M IS Display.ModifyMsg THEN
-							WITH M: Display.ModifyMsg DO
-								IF M.F = F THEN Modify(F, M.id, M.dY, M.Y, M.H) END
-							END
-						ELSIF M IS Display.LocateMsg THEN
-							WITH M: Display.LocateMsg DO
-								IF (F.X <= M.X) & (M.X < F.X + F.W) & (F.Y <= M.Y) & (M.Y < F.Y + F.H) THEN
-								  M.loc := F; M.res := 0
-								END
-							END
-						ELSIF M IS Display.ControlMsg THEN
-							WITH M: Display.ControlMsg DO
-								IF (M.id = Display.newprinter) OR (M.id = Display.restore) THEN
-									Restore(F)
-								END
-							END
-						ELSIF M IS Display.DisplayMsg THEN
-							Restore(F)
-						END
-					END
-				END
-			ELSIF M IS Objects.AttrMsg THEN
-				WITH M: Objects.AttrMsg DO GetAttr(F, M.s); M.class := Objects.String; M.res := 0 END
-			ELSIF M IS Objects.CopyMsg THEN
-				WITH M: Objects.CopyMsg DO Copy(F, F1); M.obj := F1 END
-			ELSIF M IS Objects.LinkMsg THEN
-				WITH M: Objects.LinkMsg DO M.obj := F.text; M.res := 0 END
-			END
-		END
-	END Handle;
+  PROCEDURE  Handle* (F: Objects.Object; VAR M: Objects.ObjMsg);
+  	VAR F1: Frame;
+  BEGIN
+    WITH F: Frame DO
+  	IF M IS Texts.UpdateMsg THEN
+  	  WITH M: Texts.UpdateMsg DO
+          IF F.text = M.text THEN Update(F, M.beg, M.end, M.len) END
+  	  END
+      ELSIF M IS Oberon.InputMsg THEN
+         WITH M: Oberon.InputMsg DO
+          IF M.id = Oberon.track THEN Edit(F, M.X, M.Y, M.keys)
+          ELSIF M.id = Oberon.consume THEN
+  	      IF F.car # 0 THEN Write(F, M.ch, M.fnt, M.col, M.voff) END
+          END
+         END
+      ELSIF M IS Oberon.ControlMsg THEN
+        WITH M: Oberon.ControlMsg DO
+  	    IF M.id = Oberon.defocus THEN Defocus(F)
+  	    ELSIF M.id = Oberon.neutralize THEN Neutralize(F)
+          END
+        END
+      ELSIF M IS Oberon.CaretMsg THEN
+        WITH M: Oberon.CaretMsg DO
+          IF M.id = Oberon.get THEN GetCaret(F, M)
+          ELSIF (M.car = F) & (M.text = F.text) THEN
+            IF M.id = Oberon.set THEN SetCaret(F, M.pos)
+              ELSIF M.id = Oberon.reset THEN RemoveCaret(F)
+            END
+          END
+        END
+      ELSIF M IS Oberon.SelectMsg THEN
+        WITH M: Oberon.SelectMsg DO
+          IF M.id = Oberon.get THEN GetSelection(F, M)
+          ELSIF (M.sel = F) & (M.text = F.text) THEN
+            IF M.id = Oberon.set THEN SetSelection(F, M.beg, M.end)
+              ELSIF M.id = Oberon.reset THEN RemoveSelection(F)
+            END
+          END
+        END
+      ELSIF M IS Oberon.ConsumeMsg THEN
+        WITH M: Oberon.ConsumeMsg DO
+          CopyOver(F, M.text, M.beg, M.end)
+        END
+      ELSIF M IS Oberon.RecallMsg THEN
+        WITH M: Oberon.RecallMsg DO Recall(F) END
+      ELSIF M IS Display.ModifyMsg THEN
+        WITH M: Display.ModifyMsg DO
+          IF M.F = F THEN Modify(F, M.id, M.dY, M.Y, M.H) END
+        END
+      ELSIF M IS Display.LocateMsg THEN
+        WITH M: Display.LocateMsg DO
+          IF (F.X <= M.X) & (M.X < F.X + F.W) & (F.Y <= M.Y) & (M.Y < F.Y + F.H) THEN
+            M.loc := F; M.res := 0
+          END
+        END
+      ELSIF M IS Objects.AttrMsg THEN
+        WITH M: Objects.AttrMsg DO GetAttr(F, M.s); M.class := Objects.String; M.res := 0 END
+      ELSIF M IS Objects.CopyMsg THEN
+        WITH M: Objects.CopyMsg DO Copy(F, F1); M.obj := F1 END
+      ELSIF M IS Objects.LinkMsg THEN
+        WITH M: Objects.LinkMsg DO M.obj := F.text; M.res := 0 END
+  	END
+    END
+  END Handle;
 
   (*creation*)
 
@@ -1165,10 +921,8 @@ END Write;
     VAR T: Texts.Text;
   BEGIN
     NEW(T); Texts.Open(T, "");
-    IF Display.Depth(0) = 1 THEN Texts.SetColor(W, 0) END;
     Texts.WriteString(W, name); Texts.WriteString(W, " | "); Texts.WriteString(W, commands);
     Texts.Append(T, W.buf);
-    IF Display.Depth(0) = 1 THEN Texts.SetColor(W, 15) END;
     RETURN T
  END Menu;
 
@@ -1180,7 +934,9 @@ END Write;
   PROCEDURE NewMenu* (name, commands: ARRAY OF CHAR): Frame;
     VAR F: Frame;
   BEGIN NEW(F);
-    Open(F, Handle, Menu(name, commands), 0, MenuBG, left DIV 4, 0, 1 (*3*), 0, lsp);
+    IF Modern THEN Open(F, Handle, Menu(name, commands), 0, MenuBG, left DIV 4, 0, 3, 1, lsp)
+    ELSE Open(F, Handle, Menu(name, commands), 0, MenuBG, left DIV 4, 0, 1, 0, lsp)
+    END;
     RETURN F
   END NewMenu;
 
@@ -1191,7 +947,7 @@ END Write;
     RETURN F
   END NewText;
 
-	PROCEDURE ShowText(title: ARRAY OF CHAR; T: Texts.Text; W, H: INTEGER);
+	PROCEDURE *ShowText(title: ARRAY OF CHAR; T: Texts.Text; W, H: INTEGER);
 		VAR X, Y: INTEGER; V: Viewers.Viewer; menu: ARRAY 100 OF CHAR;
 	BEGIN
 		X := 0; WHILE (title[X] # 0X) & (title[X] # "|") DO INC(X) END;
@@ -1215,17 +971,35 @@ END Write;
 		END
 	END ShowText;
 
+(** Replace the default system editor with a textdoc. *)
+PROCEDURE ReplaceSystemEditor*;
 BEGIN
-  IF Display.Depth(0) # 1 THEN
-    MarkColor := 12; BarColor := 13; MenuBG := 13; TextBG := 14; FullColor := 15
-  ELSE
-    MarkColor := 15; BarColor := 15; MenuBG := 15; TextBG:= 0; FullColor := 15
+	Oberon.OpenText := ShowText
+END ReplaceSystemEditor;
+
+BEGIN
+  IF Oberon.OpenText = NIL THEN
+    Oberon.OpenText := ShowText
   END;
-  menuH := Fonts.Default.height + 2 (* 18 *);
-  barW := menuH (* Fonts.Default.height + 2 *);
+  IF Display.Depth(0) # 1 THEN
+    MarkColor := 12; MenuBG := 13; TextBG := 14;
+    IF Modern THEN BarColor := 12; FullColor := Display.FG - TextBG 
+    ELSE BarColor := 13; FullColor := Display.FG 
+    END;
+    mode := paint
+  ELSE
+    MarkColor := Display.FG; BarColor := Display.FG; MenuBG := Display.FG; TextBG:= Display.BG; 
+    FullColor := Display.FG;  mode := invert
+  END;
+  IF Modern THEN menuH := Fonts.Default.height + 8
+  ELSE menuH := Fonts.Default.height + 2
+  END;
+  barW := Fonts.Default.height + 2;
   left := barW + Fonts.Default.height DIV 2;
   right := Fonts.Default.height DIV 2;
-  top := Fonts.Default.height DIV 2;
+  IF Modern THEN top := Fonts.Default.height DIV 2 * 2 DIV 3
+  ELSE top := Fonts.Default.height DIV 2
+  END;
   bot := Fonts.Default.height DIV 2;
   asr := Fonts.Default.maxY;
   dsr := -Fonts.Default.minY;
@@ -1233,7 +1007,6 @@ BEGIN
   selH := Fonts.Default.height;
   markW := Fonts.Default.height DIV 3 * 2;
   eolW := Fonts.Default.height DIV 2;
-  boxW := Fonts.Default.height;
   Texts.OpenWriter(W); Texts.OpenWriter(KW);
   BoxPat[0] := {0..11}; 
   BoxPat[1] := {0, 11}; BoxPat[2] := {0, 11}; BoxPat[3] := {0, 11}; BoxPat[4] := {0, 11};
@@ -1241,10 +1014,5 @@ BEGIN
   BoxPat[9] := {0, 11}; BoxPat[10] := {0, 11}; BoxPat[11] := {0.. 11};
   NEW(box);
   box.dx := 12; box.x := 0; box.y := -3; box.w := 12; box.h := 12;
-  box.pat := Display.NewPattern(12, 12, BoxPat);
-  NEW(par);
-  inFnt := NIL; inColor := Display.FG;
-  Registry.Get("System", "InstallGadgets", res);
-  IF (Registry.res # Registry.Done) OR (res[0] = "N") THEN Oberon.OpenText := ShowText END;
+  box.pat := Display.NewPattern(12, 12, BoxPat)
 END TextFrames.
-

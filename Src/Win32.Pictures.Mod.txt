@@ -1,20 +1,19 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE Pictures; (* jm 23.5.94 *)
+MODULE Pictures; (** portable / source: Win32.Pictures.Mod *)	(* ejz , jm 23.5.94 *)
 
 (**Module Pictures implement an abstract data type (and object type) for manipulating colored bitmaps of various color depths.
 *)
@@ -30,175 +29,166 @@ Restrictions:
 	- Everything is converted into 8 bit/pixel; also stored in this format
 	- CopyPattern and ReplPattern may trap when very large patterns are used.
 	- A lot of further optimizations could still be done.
-	
-	7.7.95 - Added GIF support
-	
+
 	6.12.95 - CopyBlock works within a picture (eos)
-	
-	12.12.95 - bugs fixed in ScanScrDsc & ConvertGif (ejz)
-	13.12.95 - bug fixed in LZWDecompression (ejz)
-	15.2.96 - removed GIF
 	18.4.97 - fixed ConvertWinPat to accept TrueType fonts (eos & ps)
 *)
 
-IMPORT S := SYSTEM, Objects, Kernel, Win32, Modules, Registry, Files, Display;
+IMPORT S := SYSTEM, Objects, Kernel32, GDI32, Win32, Modules, Registry, Files, Display, Strings;
 
-CONST  
+CONST
 	redraw* = 4; resize* = 5;	(** UpdateMsg id. *)
-	PictFileId*=  - 4093; (* F003H *)	(** First two bytes of a .Pict file (0F0H, 3H). *)
-	
+	PictFileId*=  - 4093;	(** First two bytes of a .Pict file (0F0H, 3H). *)
 	PalSize = 256;
-	
-	SRCCOPY = 0CC0020H; NULL = 0;
 	ALIGN = 4; (* bitmap bits are padded to multiples of so many bytes *)
-	
+
 TYPE
 	ColorTable = ARRAY PalSize OF RECORD blue, green, red, flag: CHAR END;
 
-	BITMAPINFOHEADER = RECORD
-		size, width, height: LONGINT;
-		planes, bits: INTEGER;
-		compression, sizeImage,xPelsPerMeter, yPelsPerMeter, clrUsed, clrImportant: LONGINT;
-	END;
-	BITMAPINFO = RECORD
-		head: BITMAPINFOHEADER;
-		palette: ARRAY PalSize OF INTEGER;
-		color: ColorTable;
-	END;
-
 	Picture* = POINTER TO PictureDesc;
-	
 	UpdateMsg* = RECORD (Display.FrameMsg)
 		id*, u*, v*, w*, h*: INTEGER;
 		pict*: Picture
 	END;
-
 	PictureDesc* = RECORD (Objects.ObjDesc)
 		width*, height*, depth*: INTEGER;	(** Width, height in pixels, and depth in bits per pixel (1, 4, or 8). *)
-		address*: LONGINT;	(** Pointer to bitmap data. *)
+		address: LONGINT;	(* Pointer to bitmap data. *)
 		wth: LONGINT;
-		bits: POINTER TO RECORD END;		
-		bmi: BITMAPINFO
+		bits*: POINTER TO RECORD END;	(** non-portable *)
+		bmi*: RECORD	(** non-portable *)
+				head*: GDI32.BITMAPINFOHEADER;
+				palette*: ARRAY PalSize OF INTEGER;
+				color*: ColorTable
+			END
 	END;
-	
-	
-VAR 
-	dots*: Display.Pattern;
-	colorD*: INTEGER;	(** Default bitmap color depth. *)
 
+VAR 
+	colorD*: INTEGER;	(** Default bitmap color depth. *)
 	handler: Objects.Handler;
 	(* installable converters *)		
-	cRes: INTEGER; cName: ARRAY 128 OF CHAR; cP: Picture;
-
-VAR
-	(* Windows API's *)
-	SetDIBitsToDevice: PROCEDURE (hdc, dx, dy, dw, dh, sx, sy, startscan, scanlines, bits, bmi, use: LONGINT): LONGINT; (* not used *)
-	StretchDIBits: PROCEDURE (hdc, dx, dy, dw, dh, sx, sy, sw, sh, bits, bmi, use, rop: LONGINT): LONGINT;
-	SetStretchBltMode: PROCEDURE (hdc, mode: LONGINT); (* not used *)
-	CreateHalftonePalette: PROCEDURE (hdc: LONGINT): LONGINT; (* not used *)
-	
-	CreateBitmap: PROCEDURE (width, height, planes, bitsPerPixel, bits: LONGINT): LONGINT; (* HBITMAP *)
-	GetBitmapBits: PROCEDURE (hbmp, buffer, bits: LONGINT): LONGINT;
-
+	cRes: LONGINT; cName: ARRAY 128 OF CHAR; cP: Picture;
 	image: ARRAY 4096 OF CHAR;	(* image buffer for converting window patterns *)
 	iT, T: ARRAY 256 OF CHAR;
-	
+
 PROCEDURE InitTranslations;
 	VAR i, j, k, bit, val: LONGINT; 
-BEGIN i := 0;
+BEGIN
+	i := 0;
 	WHILE i < 256 DO k := i; bit := 0; val := 0;
 		WHILE bit < 8 DO val := val * 2;
 			IF ODD(k) THEN INC(val) END;
 			k := k DIV 2; INC(bit);
 		END;
 		j := (-i-1) MOD 256;
-		iT[j] := CHR(val);
-		T[i] := CHR(val); INC(i);
+		iT[j] := CHR(val); T[i] := CHR(val);
+		INC(i)
 	END;
 END InitTranslations;
 
 (* Converts a Windows Oberon pattern back into the Ceres pattern format *)
 PROCEDURE ConvertWinPat(pat: Display.Pattern; VAR d: ARRAY OF CHAR);
-VAR p: Win32.PatternPtr; b, dc, dc2, dmmy, wth, wdw, i, to, from, n: LONGINT; invert: BOOLEAN;
+	VAR p: Win32.PatternPtr; b, dc, dc2, wth, wdw, i, to, from, n: LONGINT; invert: BOOLEAN;
 BEGIN
 	p := S.VAL(Win32.PatternPtr, pat);
-	IF p.bitmap # 0 THEN (* has raster data *)
-		b := CreateBitmap(p.w, p.h, 1, 1, 0); ASSERT(b # NULL);
-		dc2 := Win32.CreateCompatibleDC(Win32.hdcDisp); dmmy := Win32.SelectObject(dc2, b); (* to *)
-		dc := Win32.CreateCompatibleDC(Win32.hdcDisp); dmmy := Win32.SelectObject(dc, p.bitmap); (* from *)
-		Win32.BitBlt(dc2, 0, 0, p.w, p.h, dc, p.x, p.y, SRCCOPY); (* copy bitmap part *)
-		Win32.DeleteDC(dc); invert := FALSE
-	ELSIF (pat = Win32.cc.pat) & (Win32.cc.font.hfont # 0) THEN
-		b := CreateBitmap(p.w, p.h, 1, 1, 0); ASSERT(b # NULL);
-		dc2 := Win32.CreateCompatibleDC(Win32.hdcDisp); dmmy := Win32.SelectObject(dc2, b);
-		dmmy := Win32.SelectObject(dc2, Win32.cc.font.hfont);
-		d[0] := Win32.cc.ch;
-		i := Win32.TextOut(dc2, -Win32.cc.x, 0, S.ADR(d[0]), 1);
+	IF p.bitmap # Kernel32.NULL THEN (* has raster data *)
+		b := GDI32.CreateBitmap(p.w, p.h, 1, 1, 0);
+		dc2 := GDI32.CreateCompatibleDC(Win32.hdcDisp); GDI32.SelectObject(dc2, b); (* to *)
+		dc := GDI32.CreateCompatibleDC(Win32.hdcDisp); GDI32.SelectObject(dc, p.bitmap); (* from *)
+		GDI32.BitBlt(dc2, 0, 0, p.w, p.h, dc, p.x, p.y, GDI32.SRCCOPY); (* copy bitmap part *)
+		GDI32.DeleteDC(dc); invert := FALSE
+	ELSIF (pat = Win32.cc.pat) & (Win32.cc.font.hfont # Kernel32.NULL) THEN
+		b := GDI32.CreateBitmap(p.w, p.h, 1, 1, 0);
+		dc2 := GDI32.CreateCompatibleDC(Win32.hdcDisp); GDI32.SelectObject(dc2, b);
+		GDI32.SelectObject(dc2, Win32.cc.font.hfont);
+		i := GDI32.TextOut(dc2, -Win32.cc.x, 0, S.ADR(Win32.cc.ch), 1);
 		invert := TRUE
 	ELSE
 		d[0] := 0X; d[1] := 0X; (* truetype font in invert: not supported *)
 		RETURN
 	END;
-		
-		wth := (p.w + 15) DIV 16 * 2;
-		IF wth * p.h > LEN(image) THEN
-			Win32.DeleteDC(dc2); Win32.DeleteObject(b);
-			HALT(98)
-		END; (* no space *)
-		dmmy := GetBitmapBits(b, wth * p.h, S.ADR(image[0]));
-		IF dmmy # wth * p.h THEN (* should never happen ! *)
-			Win32.DeleteDC(dc2); Win32.DeleteObject(b); 
-			HALT(97)
-		END;
-		
-		(* convert 2 byte aligned to 1 byte aligned *)
-		d[0] := CHR(p.w); d[1] := CHR(p.h);
-		
-		to := 2;
-		wdw := (p.w + 7) DIV 8; (* oberon style *)
-		
-		IF invert THEN
-			i := p.h - 1;
-			WHILE i >= 0 DO (* process line i  *)
-				from := i * wth;
-				n := 0;
-				WHILE n < wdw DO
-					d[to] := iT[ORD(image[from])];
-					INC(from); INC(to); INC(n)
-				END;
-				DEC(i)
-			END
-		ELSE
-			i := p.h - 1;
-			WHILE i >= 0 DO (* process line i  *)
-				from := i * wth;
-				n := 0;
-				WHILE n < wdw DO
-					d[to] := T[ORD(image[from])];
-					INC(from); INC(to); INC(n)
-				END;
-				DEC(i)
-			END
-		END;
-		Win32.DeleteDC(dc2); Win32.DeleteObject(b)
+	wth := (p.w + 15) DIV 16 * 2;
+	IF wth * p.h > LEN(image) THEN
+		GDI32.DeleteDC(dc2); GDI32.DeleteObject(b);
+		HALT(98)
+	END; (* no space *)
+	GDI32.GetBitmapBits(b, wth * p.h, S.ADR(image[0]));
+	(* convert 2 byte aligned to 1 byte aligned *)
+	d[0] := CHR(p.w); d[1] := CHR(p.h);
+	to := 2;
+	wdw := (p.w + 7) DIV 8; (* oberon style *)
+	IF invert THEN
+		i := p.h - 1;
+		WHILE i >= 0 DO (* process line i  *)
+			from := i * wth;
+			n := 0;
+			WHILE n < wdw DO
+				d[to] := iT[ORD(image[from])];
+				INC(from); INC(to); INC(n)
+			END;
+			DEC(i)
+		END
+	ELSE
+		i := p.h - 1;
+		WHILE i >= 0 DO (* process line i  *)
+			from := i * wth;
+			n := 0;
+			WHILE n < wdw DO
+				d[to] := T[ORD(image[from])];
+				INC(from); INC(to); INC(n)
+			END;
+			DEC(i)
+		END
+	END;
+	GDI32.DeleteDC(dc2); GDI32.DeleteObject(b)
 END ConvertWinPat;
 
-PROCEDURE InBoundaries(x, y, w, h: INTEGER): BOOLEAN;
-BEGIN
-	RETURN (x < w) & (x >=0) & (y < h) & (y >= 0)
+PROCEDURE InBoundaries(x, y, w, h: LONGINT): BOOLEAN;
+CODE {SYSTEM.i386}
+	MOV EAX, x[EBP]
+	MOV EBX, y[EBP]
+	CMP EAX, 0
+	JL false
+	CMP EBX, 0
+	JL false
+	CMP w[EBP], EAX
+	JLE false
+	CMP h[EBP], EBX
+	JLE false
+	MOV EAX, 1
+	LEAVE
+	RET 16
+false:
+	XOR EAX, EAX
+	LEAVE 
+	RET 16
 END InBoundaries;
 
-(** Get the color index of the bitmap pixel at X, Y. *)
-PROCEDURE Get*(P: Picture; X, Y: INTEGER): INTEGER;
-VAR ch: CHAR;
+(** Get the color index of the bitmap pixel at x, y. *)
+PROCEDURE Get*(P: Picture; x, y: INTEGER): INTEGER;
+	VAR ch: CHAR;
 BEGIN
-	IF InBoundaries(X, Y, P.width, P.height) THEN
-		S.GET(S.ADR(P.bits^) + Y * P.wth + X, ch);
+	IF InBoundaries(x, y, P.width, P.height) THEN
+		S.GET(S.ADR(P.bits^) + y * P.wth + x, ch);
 		RETURN Win32.RevColTrans[ORD(ch)]
 	ELSE
 		RETURN Display.BG
 	END
 END Get;
+
+(** Put a pixel of color col at x, y using mode. *)
+PROCEDURE Dot*(P: Picture; col: INTEGER; x, y, mode: INTEGER);
+	VAR a: LONGINT; ch: CHAR;
+BEGIN
+	IF InBoundaries(x, y, P.width, P.height) THEN
+		col := Win32.ColTrans[col];
+		a := P.address + y * P.wth + x;
+		IF mode = Display.invert THEN
+			S.GET(a, ch); S.PUT(a, S.VAL(CHAR, S.VAL(SET, ch) / S.VAL(SET, col)))
+		ELSE
+			S.PUT(a, CHR(col))
+		END
+	END
+END Dot;
 
 (** Starting at position x, y, determine the longest run of the same colored pixels (col) on the same scanline. Afterwards x indicates the first pixel of a different color thatn col. *)
 PROCEDURE GetRun*(P: Picture; VAR col: INTEGER; VAR x: INTEGER; y: INTEGER);
@@ -209,99 +199,47 @@ BEGIN
 	END
 END GetRun;
 
-(** Block fill area x, y, w, h in color col using mode. *)
-PROCEDURE ReplConst* (P: Picture; col, x, y, w, h, mode: INTEGER);
-VAR a, b, c: LONGINT; ch, ch0: CHAR; col4, t: SET;
-BEGIN 
-	IF InBoundaries(x, y, P.width, P.height) THEN
-		IF x + w > P.width THEN w := P.width - x END;
-		IF y + h > P.height THEN h := P.height - y END;
-		
-		col := Win32.ColTrans[col];
-		
-		col4 := S.VAL(SET, LONG(col) * 1010101H);
-		ch := CHR(col);
-		
-		a := S.ADR(P.bits^) + y * P.wth + x;
-		IF mode = Display.invert THEN
-			WHILE h > 0 DO
-				c := w; b := a;
-				WHILE c > 4 DO S.GET(b, t); S.PUT(b, col4 / t); DEC(c, 4); INC(b, 4) END;
-				WHILE c > 0 DO S.GET(b, ch0); S.PUT(b, S.VAL(CHAR, S.VAL(SET, ch) / S.VAL(SET, ch0))); DEC(c); INC(b) END;
-				DEC(h); INC(a, P.wth)
-			END
-		ELSE
-			WHILE h > 0 DO
-				c := w; b := a;
-				WHILE c > 4 DO S.PUT(b, col4); DEC(c, 4); INC(b, 4) END;
-				WHILE c > 0 DO S.PUT(b, ch); DEC(c); INC(b) END;
-				DEC(h); INC(a, P.wth)
-			END
-		END
-	END
-END ReplConst;
-
-(** Put a pixel of color col at x, y using mode. *)
-PROCEDURE Dot* (P: Picture; col: INTEGER; x, y, mode: INTEGER);
-VAR ch: CHAR; a: LONGINT;
-BEGIN
-	IF InBoundaries(x, y, P.width, P.height) THEN
-		col := Win32.ColTrans[col];
-
-		a := P.address + y * P.wth + x;
-		IF mode = Display.invert THEN
-			S.GET(a, ch); S.PUT(a, S.VAL(CHAR, S.VAL(SET, ch) / S.VAL(SET, col)))
-		ELSE
-			S.PUT(a, CHR(col))
-		END
-	END
-END Dot;
-
 (** Copy a the block sx, sy, w, h from picture sP to position dx, dy in destination picture dP. Source and destination picture may be the same. *)
-PROCEDURE CopyBlock* (sP, dP: Picture; sx, sy, w, h, dx, dy, mode: INTEGER);
-VAR a0, b0, a, b, c: LONGINT; col4, t: SET; ch, ch0: CHAR;
+PROCEDURE CopyBlock*(sP, dP: Picture; sx, sy, w, h, dx, dy, mode: INTEGER);
+	VAR a0, b0, a, b, c: LONGINT; col4, t: SET; ch, ch0: CHAR;
 BEGIN
-	IF InBoundaries(sx, sy, sP.width, sP.height) THEN
-		IF InBoundaries(dx, dy, dP.width, dP.height) THEN
-			IF sx + w > sP.width THEN w := sP.width - sx END;
-			IF dx + w > dP.width THEN w := dP.width - dx END;
-			IF sy + h > sP.height THEN h := sP.height - sy END;
-			IF dy + h > dP.height THEN h := dP.height - dy END;
-			
-			a0 := S.ADR(sP.bits^) + sy * sP.wth + sx; a := S.ADR(dP.bits^) + dy * dP.wth + dx;
-			IF (sP = dP) & ((sy < dy) OR (sy = dy) & (sx < dx)) THEN	(* eos 6.12.95 *)
-				INC(a0, h * sP.wth); INC(a, h * dP.wth);
-				IF mode = Display.invert THEN
-					INC(a0, LONG(w) - 1); INC(a, LONG(w) - 1);
-					WHILE h > 0 DO
-						DEC(h); DEC(a0, sP.wth); DEC(a, dP.wth);
-						c := w; b0 := a0; b := a;
-						WHILE c > 4 DO S.GET(b0, col4); S.GET(b, t); S.PUT(b, col4 / t); DEC(c, 4); DEC(b0, 4); DEC(b, 4) END;
-						WHILE c > 0 DO
-							S.GET(b0, ch); S.GET(b, ch0); S.PUT(b, S.VAL(CHAR, S.VAL(SET, ch) / S.VAL(SET, ch0)));
-							DEC(c); DEC(b0); DEC(b)
-						END
-					END
-				ELSE
-					WHILE h > 0 DO
-						DEC(h); DEC(a0, sP.wth); DEC(a, dP.wth);
-						S.MOVE(a0, a, w)
+	IF InBoundaries(sx, sy, sP.width, sP.height) & InBoundaries(dx, dy, dP.width, dP.height) THEN
+		IF sx + w > sP.width THEN w := sP.width - sx END;
+		IF dx + w > dP.width THEN w := dP.width - dx END;
+		IF sy + h > sP.height THEN h := sP.height - sy END;
+		IF dy + h > dP.height THEN h := dP.height - dy END;
+		a0 := S.ADR(sP.bits^) + sy * sP.wth + sx; a := S.ADR(dP.bits^) + dy * dP.wth + dx;
+		IF (sP = dP) & ((sy < dy) OR (sy = dy) & (sx < dx)) THEN	(* eos 6.12.95 *)
+			INC(a0, h * sP.wth); INC(a, h * dP.wth);
+			IF mode = Display.invert THEN
+				INC(a0, LONG(w) - 1); INC(a, LONG(w) - 1);
+				WHILE h > 0 DO
+					DEC(h); DEC(a0, sP.wth); DEC(a, dP.wth);
+					c := w; b0 := a0; b := a;
+					WHILE c > 4 DO S.GET(b0, col4); S.GET(b, t); S.PUT(b, col4 / t); DEC(c, 4); DEC(b0, 4); DEC(b, 4) END;
+					WHILE c > 0 DO
+						S.GET(b0, ch); S.GET(b, ch0); S.PUT(b, S.VAL(CHAR, S.VAL(SET, ch) / S.VAL(SET, ch0)));
+						DEC(c); DEC(b0); DEC(b)
 					END
 				END
-			
 			ELSE
-				IF mode = Display.invert THEN
-					WHILE h > 0 DO
-						c := w; b0 := a0; b := a; 
-						WHILE c > 4 DO S.GET(b0, col4); S.GET(b, t); S.PUT(b, col4 / t); DEC(c, 4); INC(b0, 4); INC(b, 4) END;
-						WHILE c > 0 DO S.GET(b0, ch); S.GET(b, ch0); S.PUT(b, S.VAL(CHAR, S.VAL(SET, ch) / S.VAL(SET, ch0))); DEC(c); INC(b0); INC(b) END;
-						DEC(h); INC(a0, sP.wth); INC(a, dP.wth)
-					END
-				ELSE
-					WHILE h > 0 DO
-						S.MOVE(a0, a, w); 
-						DEC(h); INC(a0, sP.wth); INC(a, dP.wth)
-					END
+				WHILE h > 0 DO
+					DEC(h); DEC(a0, sP.wth); DEC(a, dP.wth);
+					S.MOVE(a0, a, w)
+				END
+			END
+		ELSE
+			IF mode = Display.invert THEN
+				WHILE h > 0 DO
+					c := w; b0 := a0; b := a; 
+					WHILE c > 4 DO S.GET(b0, col4); S.GET(b, t); S.PUT(b, col4 / t); DEC(c, 4); INC(b0, 4); INC(b, 4) END;
+					WHILE c > 0 DO S.GET(b0, ch); S.GET(b, ch0); S.PUT(b, S.VAL(CHAR, S.VAL(SET, ch) / S.VAL(SET, ch0))); DEC(c); INC(b0); INC(b) END;
+					DEC(h); INC(a0, sP.wth); INC(a, dP.wth)
+				END
+			ELSE
+				WHILE h > 0 DO
+					S.MOVE(a0, a, w); 
+					DEC(h); INC(a0, sP.wth); INC(a, dP.wth)
 				END
 			END
 		END
@@ -312,20 +250,16 @@ END CopyBlock;
 sure that only completely visible patterns are drawn in the bitmap. Clipping does not work completely
 here either. No effort has been made to optimize this procedure *)
 (** Copy the pattern pat in color col to position x, y using mode. *)
-PROCEDURE CopyPattern* (P: Picture; col: INTEGER; pat: LONGINT; x, y, mode: INTEGER);
-VAR d: ARRAY 4096 OF CHAR; w, h, clipw, cliph, ch, i: INTEGER; a, a0, wth, clipwth, p, w0: LONGINT;
-	ch0: CHAR;
+PROCEDURE CopyPattern*(P: Picture; col: INTEGER; pat: LONGINT; x, y, mode: INTEGER);
+	VAR d: ARRAY 4096 OF CHAR; a, a0, wth, clipwth, p, w0, w, h, clipw, cliph, ch, i: LONGINT; ch0: CHAR;
 BEGIN
 	IF InBoundaries(x, y, P.width, P.height) THEN
 		col := Win32.ColTrans[col];
-		
 		ConvertWinPat(pat, d);
 		w := ORD(d[0]); h := ORD(d[1]);
 		IF x + w > P.width THEN clipw := P.width - x ELSE clipw := w END;
 		IF y + h > P.height THEN cliph := P.height - y ELSE cliph := h END;
-		
 		wth := (w + 7) DIV 8; clipwth := (clipw + 7) DIV 8;
-		
 		a := S.ADR(P.bits^) + y * P.wth + x;
 		IF mode = Display.invert THEN
 			p := 2;
@@ -361,21 +295,46 @@ BEGIN
 	END
 END CopyPattern;
 
+(** Block fill area x, y, w, h in color col using mode. *)
+PROCEDURE ReplConst*(P: Picture; col, x, y, w, h, mode: INTEGER);
+	VAR a, b, c: LONGINT; col4, t: SET; ch, ch0: CHAR;
+BEGIN 
+	IF InBoundaries(x, y, P.width, P.height) THEN
+		IF x + w > P.width THEN w := P.width - x END;
+		IF y + h > P.height THEN h := P.height - y END;
+		col := Win32.ColTrans[col];
+		col4 := S.VAL(SET, LONG(col) * 1010101H);
+		ch := CHR(col);
+		a := S.ADR(P.bits^) + y * P.wth + x;
+		IF mode = Display.invert THEN
+			WHILE h > 0 DO
+				c := w; b := a;
+				WHILE c > 4 DO S.GET(b, t); S.PUT(b, col4 / t); DEC(c, 4); INC(b, 4) END;
+				WHILE c > 0 DO S.GET(b, ch0); S.PUT(b, S.VAL(CHAR, S.VAL(SET, ch) / S.VAL(SET, ch0))); DEC(c); INC(b) END;
+				DEC(h); INC(a, P.wth)
+			END
+		ELSE
+			WHILE h > 0 DO
+				c := w; b := a;
+				WHILE c > 4 DO S.PUT(b, col4); DEC(c, 4); INC(b, 4) END;
+				WHILE c > 0 DO S.PUT(b, ch); DEC(c); INC(b) END;
+				DEC(h); INC(a, P.wth)
+			END
+		END
+	END
+END ReplConst;
+
 (* Very slow ! Unfortunately no pin-point is used *)
 (** Pattern fill pattern pat in the area x, y, w, h in color col using mode. *)
-PROCEDURE ReplPattern* (P: Picture; col: INTEGER; pat: LONGINT; x, y, w, h, mode: INTEGER);
-VAR a, a0: LONGINT; w0: INTEGER;
-	d: ARRAY 4096 OF CHAR; pw, ph, ch, pwth, i, p: INTEGER; ch0: CHAR;
+PROCEDURE ReplPattern*(P: Picture; col: INTEGER; pat: LONGINT; x, y, w, h, mode: INTEGER);
+	VAR d: ARRAY 4096 OF CHAR; a, a0, pw, ph, ch, pwth, i, p, w0: LONGINT; ch0: CHAR;
 BEGIN
 	IF InBoundaries(x, y, P.width, P.height) THEN
 		col := Win32.ColTrans[col];
-		
 		IF x + w > P.width THEN w := P.width - x END;
 		IF y + h > P.height THEN h := P.height - y END;
-		
 		ConvertWinPat(pat, d); pw := ORD(d[0]); ph := ORD(d[1]);
 		pwth := (pw + 7) DIV 8;
-		
 		a := S.ADR(P.bits^) + y * P.wth + x;
 		IF mode = Display.invert THEN
 			p := 2;
@@ -417,40 +376,41 @@ BEGIN
 	END
 END ReplPattern;
 
-(** Copy area SX, SY, SW, SH of source picture sP to area DX, DY, DW, DH of destination picture dP. Appropriate scaling is done. *)
-PROCEDURE Copy*(sP, dP: Picture; SX, SY, SW, SH, DX, DY, DW, DH, mode: INTEGER);
-VAR hx, hy,DW2,SW2: LONGINT; dx, dy, SXo, DXo: INTEGER;
-BEGIN  
-	IF (SW> 0) &(SH >0) &(DW >0 ) &(DH > 0) THEN
-		dy := DY + DH;  dx := DX + DW; SXo := SX; DXo := DX; DW2 := 2 * DW; SW2 := 2 * SW;   
-		hy := 2*SH - DH; 
-		WHILE DY < dy DO
-		hx := 2* SW - DW; DX := DXo; SX := SXo;
-			WHILE DX < dx DO
-				Dot(dP,Get(sP,SX,SY),DX,DY,mode);
-				WHILE hx > 0 DO INC(SX); DEC(hx,DW2) END;
-				INC(DX); INC(hx,SW2)
+(** Copy area sx, sy, sw, sh of source picture sP to area dx, dy, dw, dh of destination picture dP. Appropriate scaling is
+	done. *)
+PROCEDURE Copy*(sP, dP: Picture; sx, sy, sw, sh, dx, dy, dw, dh, mode: INTEGER);
+	VAR hx, hy, DW2, SW2, dX, dY, SXo, DXo: LONGINT;
+BEGIN
+	IF (sw > 0) & (sh > 0) & (dw > 0) & (dh > 0) THEN
+		dY := dy + dh;  dX := dx + dw; SXo := sx; DXo := dx; DW2 := 2 * dw; SW2 := 2 * sw;   
+		hy := 2*sh - dh; 
+		WHILE dy < dY DO
+			hx := 2* sw - dw; dx := SHORT(DXo); sx := SHORT(SXo);
+			WHILE dx < dX DO
+				Dot(dP, Get(sP, sx, sy), dx, dy, mode);
+				WHILE hx > 0 DO INC(sx); DEC(hx,DW2) END;
+				INC(dx); INC(hx,SW2)
 			END;
-			WHILE hy > 0 DO INC(SY); hy := hy - 2 * DH END;
-			INC(DY); hy := hy + 2* SH
+			WHILE hy > 0 DO INC(sy); hy := hy - 2 * dh END;
+			INC(dy); hy := hy + 2* sh
 		END
 	END
 END Copy;
 
 (** Define the color palette for color index col. *)
-PROCEDURE SetColor* (P: Picture; col, red, green, blue: INTEGER);
+PROCEDURE SetColor*(P: Picture; col, red, green, blue: INTEGER);
 BEGIN
-	P.bmi.color[col].red  := CHR(red); P.bmi.color[col].green := CHR(green); P.bmi.color[col].blue := CHR(blue)
+	P.bmi.color[col].red := CHR(red); P.bmi.color[col].green := CHR(green); P.bmi.color[col].blue := CHR(blue)
 END SetColor;
 
 (** Retrieve the color palette entry for color index col. *)
-PROCEDURE GetColor* (P: Picture; col: INTEGER; VAR red, green, blue: INTEGER);
+PROCEDURE GetColor*(P: Picture; col: INTEGER; VAR red, green, blue: INTEGER);
 BEGIN 
 	red := ORD(P.bmi.color[col].red); green := ORD(P.bmi.color[col].green); blue := ORD(P.bmi.color[col].blue)
 END GetColor;
 
-PROCEDURE StoreCT (VAR R: Files.Rider; P: Picture);
-VAR i, n: LONGINT;
+PROCEDURE StoreCT(VAR R: Files.Rider; P: Picture);
+	VAR i, n: LONGINT;
 BEGIN 
 	Files.WriteInt(R, P.depth); i := 0; n := ASH(1, P.depth);
 	WHILE i < n DO 
@@ -460,7 +420,7 @@ BEGIN
 END StoreCT;
 
 PROCEDURE LoadCT(VAR R: Files.Rider; P: Picture);
-VAR n, i: LONGINT;
+	VAR n, i: LONGINT;
 BEGIN
 	i := 0; n := ASH(1, P.depth);
 	WHILE i < n DO 
@@ -470,18 +430,18 @@ BEGIN
 	END
 END LoadCT;
 
-(** Indicate that a change has been made to the area X, Y, W, H of P. This results in an UpdateMsg with id = redraw to be broadcasted into the display space. *)
-PROCEDURE Update* (P : Picture; X, Y, W, H: INTEGER);
-VAR msg: UpdateMsg;
+(** Indicate that a change has been made to the area x, y, w, h of P. This results in an UpdateMsg with id = redraw to be broadcasted into the display space. *)
+PROCEDURE Update*(P : Picture; x, y, w, h: INTEGER);
+	VAR msg: UpdateMsg;
 BEGIN
-	msg.u := X; msg.v := Y; msg.w := W; msg.h := H; 
+	msg.u := x; msg.v := y; msg.w := w; msg.h := h;
 	msg.id := redraw; msg.pict := P; msg.res := -1; msg.F := NIL;
 	Display.Broadcast(msg)
 END Update;
 
 (** Copy the area x, y, w, h of picture P to position dx, dy on the display. *)
-PROCEDURE DisplayBlock* (P: Picture; x, y, w, h, dx, dy, mode: INTEGER);
-VAR r: LONGINT; L, B, R, T, cw, ch : INTEGER;
+PROCEDURE DisplayBlock*(P: Picture; x, y, w, h, dx, dy, mode: INTEGER);
+	VAR L, B, R, T, cw, ch: INTEGER;
 BEGIN
 	Display.GetClip(L,B,cw,ch); R := L + cw; T := B + ch;
 	IF dx + w < R THEN R := dx + w END; IF dy + h < T THEN T := dy + h END;
@@ -491,13 +451,13 @@ BEGIN
 		Win32.SetClippingArea(0, 0, Win32.DispW, Win32.DispH);
 		IF x + w > P.width THEN w := P.width - x END;
 		IF y + h > P.height THEN h := P.height - y END;
-		r := StretchDIBits(Win32.hdcDisp, L, Win32.DispH-(B+h), w, h, x, y, w, h, S.ADR(P.bits^), S.ADR(P.bmi), 1, SRCCOPY)
+		GDI32.StretchDIBits(Win32.hdcDisp, L, Win32.DispH-(B+h), w, h, x, y, w, h, S.ADR(P.bits^), S.ADR(P.bmi), GDI32.DIBPalColors, GDI32.SRCCOPY)
 	END
 END DisplayBlock;
 
 (** Create a picture of size width x height with depth bits per pixel. The picture palette is initialized to a default state. If not enough memory is available to allocate the bitmap data, the width, height, and depth of the picture is set to zero. *) 
-PROCEDURE Create* (P: Picture; width, height, depth: INTEGER);
-VAR size: LONGINT; i, r, g, b: INTEGER;
+PROCEDURE Create*(P: Picture; width, height, depth: INTEGER);
+	VAR size: LONGINT; i, r, g, b: INTEGER;
 BEGIN
 	depth := colorD; (* only 8 bits supported *)
 	IF ~(depth IN {1, 4, 8}) THEN HALT(100) END;
@@ -509,102 +469,52 @@ BEGIN
 	IF P.address = 0 THEN
 		P.width := 0; P.height := 0; P.depth := 0; P.wth := 0
 	ELSE
-		P.bmi.head.size := SIZE(BITMAPINFOHEADER);
+		P.bmi.head.size := SIZE(GDI32.BITMAPINFOHEADER);
 		P.bmi.head.width := width; P.bmi.head.height := height;
 		P.bmi.head.planes := 1; P.bmi.head.bits := colorD;
 		P.bmi.head.compression := 0;
 		P.bmi.head.sizeImage := 0;
 		P.bmi.head.clrUsed := 0; P.bmi.head.clrImportant := 0;
-		
 		ReplConst(P, Display.BG, 0, 0, width, height, Display.replace);	(* clear picture *)
-		
-		SetColor(P, 15, 0, 0, 0);
-		SetColor(P, 1, 255, 0, 0);
-		SetColor(P, 2, 0, 255, 0);
-		SetColor(P, 3, 0,  0, 255);
-		SetColor(P, 4, 255, 0, 255);
-		SetColor(P, 5,  255, 255,  0);
-		SetColor(P, 6, 0,  255, 255);
-		SetColor(P, 7, 170, 0, 0);
-		SetColor(P, 8, 0, 153, 0);
-		SetColor(P, 9, 0,   0, 153);
-		SetColor(P, 10, 119, 0, 204);
-		SetColor(P, 11, 187, 136, 0);
-		SetColor(P, 12, 136, 136, 136);
-		SetColor(P, 13, 170, 170, 170);
-		SetColor(P, 14, 204, 204, 204);
-		SetColor(P,0, 255, 255, 255);
-		
-		FOR i := 16 TO 255 DO
-			Display.GetColor(i, r, g, b);
-			SetColor(P, i, r, g, b)
+		FOR i := 0 TO 255 DO
+			Display.GetColor(i, r, g, b); SetColor(P, i, r, g, b)
 		END;
-
 		i := 0; WHILE i < PalSize DO P.bmi.palette[i] := i; INC(i) END
 	END
 END Create;
 
+(** Like Dot, for a line of pixels. *)
 PROCEDURE PutLine*(P: Picture; VAR data: ARRAY OF INTEGER; x, y, w: INTEGER);
-	VAR adr, rowBytes: LONGINT; fg, bg: CHAR;
+	VAR adr, rowBytes: LONGINT;
 BEGIN
-	fg := CHR(Win32.ColTrans[Display.FG]); bg := CHR(Win32.ColTrans[Display.BG]);
 	adr := S.ADR(P.bits^); rowBytes := P.wth;
-	IF P.depth = 8 THEN 
-		adr := adr + y*rowBytes + x;
-		x := 0; WHILE x < w DO S.PUT(adr, CHR(Win32.ColTrans[data[x]])); INC(adr); INC(x) END
-	ELSIF P.depth = 4 THEN 
-		adr := adr + y*rowBytes + x;
-		x := 0; WHILE x < w DO S.PUT(adr, CHR(Win32.ColTrans[data[x] MOD 16])); INC(adr); INC(x) END
-	ELSIF P.depth = 1 THEN 
-		adr := adr + y*rowBytes + x;
-		x := 0; WHILE x < w DO 
-			IF data[x] = 1 THEN S.PUT(adr, fg) ELSE S.PUT(adr, bg) END; 
-			INC(adr); INC(x) 
-		END
-	ELSE HALT(99)
-	END
+	adr := adr + y*rowBytes + x;
+	x := 0; WHILE x < w DO S.PUT(adr, CHR(Win32.ColTrans[data[x]])); INC(adr); INC(x) END
 END PutLine;
 
+(** Like Get, for a line of pixels. *)
 PROCEDURE GetLine*(P: Picture; VAR data: ARRAY OF INTEGER; x, y, w: INTEGER);
-	VAR adr, rowBytes: LONGINT; fg, bg, ch: CHAR;
+	VAR adr, rowBytes: LONGINT; ch: CHAR;
 BEGIN
-	fg := CHR(Win32.ColTrans[Display.FG]); bg := CHR(Win32.ColTrans[Display.BG]);
 	adr := S.ADR(P.bits^); rowBytes := P.wth;
-	IF P.depth = 8 THEN 
-		adr := adr + y*rowBytes + x;
-		x := 0; WHILE x < w DO S.GET(adr, ch); data[x] := Win32.RevColTrans[ORD(ch)]; INC(adr); INC(x) END
-	ELSIF P.depth = 4 THEN 
-		adr := adr + y*rowBytes + x;
-		x := 0; WHILE x < w DO S.GET(adr, ch); data[x] := Win32.RevColTrans[ORD(ch)]; INC(adr); INC(x) END
-	ELSIF P.depth = 1 THEN 
-		adr := adr + y*rowBytes + x;
-		x := 0; WHILE x < w DO 
-			S.GET(adr, ch);
-			IF ch = fg THEN data[x] := 1 ELSE data[x] := 0 END; 
-			INC(adr); INC(x) 
-		END
-	ELSE HALT(99)
-	END
+	adr := adr + y*rowBytes + x;
+	x := 0; WHILE x < w DO S.GET(adr, ch); data[x] := Win32.RevColTrans[ORD(ch)]; INC(adr); INC(x) END
 END GetLine;
 
-
 (** Stores picture run length encoded to file F (including tag). *)
-PROCEDURE Store* (P: Picture; F: Files.File; pos: LONGINT; VAR len: LONGINT);
-	VAR j: INTEGER; a, b, c, line, adr: LONGINT; h: SHORTINT; buf: ARRAY 129 OF SHORTINT; R: Files.Rider;
-		ch: CHAR;
-	
+PROCEDURE Store*(P: Picture; F: Files.File; pos: LONGINT; VAR len: LONGINT);
+	VAR buf: ARRAY 129 OF SHORTINT; R: Files.Rider; a, b, c, line, adr, j: LONGINT; h: SHORTINT; ch: CHAR;
 BEGIN
 	Files.Set(R, F, pos); 	
-	j := PictFileId; Files.WriteInt(R, j); 
+	Files.WriteInt(R, PictFileId); 
 	Files.WriteInt(R, P.width); Files.WriteInt(R, P.height); StoreCT(R, P);
-	
 	c := P.wth; (*a := P.address; c := P.address + P.wth;*)
 	c := P.width; (* store width ! *)
 	line := P.height-1;
 	WHILE line >= 0 DO
-		a :=  0; adr := S.ADR(P.bits^) + line * P.wth;
-		j := 1; buf[0] := 0; S.GET(adr, ch); buf[j] := SHORT(Win32.RevColTrans[ORD(ch)]); INC(adr);
-		b := a + 1;
+		adr := S.ADR(P.bits^) + line * P.wth;
+		buf[0] := 0; S.GET(adr, ch); buf[1] := SHORT(Win32.RevColTrans[ORD(ch)]); INC(adr);
+		a :=  0; b := 1; j := 1;
 		WHILE b < c DO
 			S.GET(adr, ch); h := SHORT(Win32.RevColTrans[ORD(ch)]); INC(adr);
 			IF ((b - a) < 127) & ((buf[0] = 0) OR ((h = buf[j]) &(j = 1)) OR ((h # buf[j]) & (j  > 1))) THEN (* same run *)
@@ -612,7 +522,7 @@ BEGIN
 			ELSE (* new run *)
 				IF (buf[j] = h) & (b - a # 127) THEN DEC(buf[0]); Files.WriteBytes(R, buf, j); buf[0] := -1
 				ELSE Files.WriteBytes(R, buf, j + 1); buf[0] := 0 END;
-				j := 1; buf[j] := h; a := b
+				j := 1; buf[1] := h; a := b
 			END; 
 			INC(b)
 		END;
@@ -623,8 +533,7 @@ BEGIN
 END Store;
 
 PROCEDURE LoadRLE(P: Picture; VAR R: Files.Rider);
-VAR ch, ch0, ch1: CHAR; k, wth: INTEGER; a, b, line, n: LONGINT; i, t: INTEGER;
-	fg, bg: CHAR;
+	VAR n, line, a, b, k, wth, i, t: LONGINT; fg, bg, ch, ch0, ch1: CHAR;
 BEGIN
 	fg := CHR(Win32.ColTrans[Display.FG]); bg := CHR(Win32.ColTrans[Display.BG]);
 	line := 0; n := P.depth; P.depth := colorD; wth := P.width; (* read width ! *)
@@ -677,8 +586,8 @@ BEGIN
 END LoadRLE;
 
 (** Load a run length encoded picture from position pos from file F. Pos should be AFTER the two byte picture identification of a picture file. *)
-PROCEDURE Load* (P: Picture; F: Files.File; pos: LONGINT; VAR len: LONGINT);
-VAR R: Files.Rider; id, i, r, g, b: INTEGER; err: ARRAY 32 OF CHAR; size: LONGINT;
+PROCEDURE Load*(P: Picture; F: Files.File; pos: LONGINT; VAR len: LONGINT);
+	VAR R: Files.Rider; err: ARRAY 32 OF CHAR; size: LONGINT; id, i, r, g, b: INTEGER;
 BEGIN
 	Files.Set(R, F, pos - 2); Files.ReadInt(R, id); 
 	IF id = PictFileId THEN
@@ -699,15 +608,13 @@ BEGIN
 		IF P.address = 0 THEN
 			P.width := 0; P.height := 0; P.depth := 0; P.wth := 0
 		ELSE
-			P.bmi.head.size := SIZE(BITMAPINFOHEADER);
+			P.bmi.head.size := SIZE(GDI32.BITMAPINFOHEADER);
 			P.bmi.head.width := P.width; P.bmi.head.height := P.height;
 			P.bmi.head.planes := 1; P.bmi.head.bits := colorD;
 			P.bmi.head.compression := 0;
 			P.bmi.head.sizeImage := 0;
 			P.bmi.head.clrUsed := 0; P.bmi.head.clrImportant := 0;
-			
 			i := 0; WHILE i < PalSize DO P.bmi.palette[i] := i; INC(i) END;
-			
 			LoadRLE(P, R)
 		END
 	ELSE err := "This is not a picture"; HALT(99)	
@@ -715,24 +622,20 @@ BEGIN
 	len := Files.Pos(R) - pos
 END Load;
 
-PROCEDURE SplitName (VAR name, MName, PName: ARRAY OF CHAR);
-	VAR i, j: INTEGER;
-BEGIN i := 0;
+PROCEDURE SplitName(VAR name, MName, PName: ARRAY OF CHAR);
+	VAR i, j: LONGINT;
+BEGIN
+	i := 0;
 	WHILE name[i] # "." DO MName[i] := name[i]; INC(i) END;
 	MName[i] := 0X; INC(i); j := 0;
 	WHILE name[i] # 0X DO PName[j] := name[i]; INC(i); INC(j) END;
 	PName[j] := 0X
 END SplitName;
 
-PROCEDURE GetExt(VAR name, ext: ARRAY OF CHAR);
-	VAR i, j: INTEGER;
-BEGIN
-	i := 0; j := 0; WHILE name[i] # 0X DO IF name[i] = "." THEN j := i+1 END; INC(i) END;
-	i := 0; WHILE name[j] # 0X DO ext[i] := name[j]; INC(i); INC(j) END; ext[i] := 0X
-END GetExt;
-
 PROCEDURE TryConverter(newproc: ARRAY OF CHAR);
-	VAR mname, pname: ARRAY 32 OF CHAR; mod: Modules.Module; cmd: Modules.Command; FM: Objects.FileMsg; F: Files.File;
+	VAR
+		mname, pname: ARRAY 32 OF CHAR; mod: Modules.Module; cmd: Modules.Command;
+		FM: Objects.FileMsg; F: Files.File;
 BEGIN
 	SplitName(newproc, mname, pname);
 	mod := Modules.ThisMod(mname);
@@ -748,33 +651,34 @@ BEGIN
 	END
 END TryConverter;
 
-PROCEDURE Enum(key, value: ARRAY OF CHAR);
+PROCEDURE *Enum(key, value: ARRAY OF CHAR);
 BEGIN
 	IF (cRes # 0) & (value # "") THEN TryConverter(value) END
 END Enum;
 
 PROCEDURE ConverterOpen;
-	VAR ext: ARRAY 32 OF CHAR; newproc: ARRAY 64 OF CHAR;
+	VAR ext: ARRAY 32 OF CHAR; path, newproc: ARRAY 64 OF CHAR;
 BEGIN
-	cRes := 0; GetExt(cName, ext);
-	Registry.Get("PictureConverters", ext, newproc);
+	cRes := 0; Strings.GetSuffix(cName, ext);
+	Registry.OberonPath("PictureConverters", path);
+	Registry.GetKeyValue(Registry.CurrentUser, path, ext, newproc);
 	IF newproc # "" THEN TryConverter(newproc) ELSE cRes := 1 END;
 	IF cRes = 0 THEN RETURN END;
-	Registry.Enumerate("PictureConverters", Enum)
+	Registry.EnumerateKeyValue(Registry.CurrentUser, path, Enum)
 END ConverterOpen;
 
-(** Open the picture file with name from disk. If name = "" then an empty picture is opened. Color is ignored. GIF87a and GIF89a pictures can be opened directly. *)
-PROCEDURE Open* (P: Picture; name: ARRAY OF CHAR; color: BOOLEAN);
-VAR F: Files.File; R: Files.Rider; dname: ARRAY 64 OF CHAR; x, d: INTEGER; len : LONGINT;
+(** Open the picture file with name from disk. Any graphic file format listed in the PictureConverters section of the Registry can be loaded (e.g. GIF, JPEG, XBM, BMP). *)
+PROCEDURE Open*(P: Picture; name: ARRAY OF CHAR; color: BOOLEAN);
+	VAR F: Files.File; R: Files.Rider; dname: ARRAY 128 OF CHAR; len : LONGINT; id: INTEGER;
 BEGIN
 	F := Files.Old(name);
-	IF F # NIL THEN			
-		Files.Set(R,F, 0); x := 0; Files.ReadInt(R, x);
-		IF x = 07F7H THEN (* << document *)
-			Files.ReadString(R, dname); Files.ReadInt(R, d); Files.ReadInt(R, d); Files.ReadInt(R, d); Files.ReadInt(R, d);
-			Files.ReadInt(R, x)
+	IF F # NIL THEN
+		Files.Set(R,F, 0); Files.ReadInt(R, id);
+		IF id = 07F7H THEN
+			Files.ReadString(R, dname); Files.ReadInt(R, id); Files.ReadInt(R, id); Files.ReadInt(R, id); Files.ReadInt(R, id);
+			Files.ReadInt(R, id)
 		END;
-		IF x = PictFileId THEN Load(P, F, Files.Pos(R), len); P.handle := handler
+		IF id = PictFileId THEN Load(P, F, Files.Pos(R), len); P.handle := handler
 		ELSE 
 			cP := P; COPY(name, cName); ConverterOpen;
 			IF cRes # 0 THEN P.width := 0; P.height := 0; P.depth := 0 END;
@@ -785,18 +689,19 @@ BEGIN
 END Open;
 
 (** Returns the address of the bitmap data of a picture. *)
-PROCEDURE Address* (P: Picture): LONGINT;
+PROCEDURE Address*(P: Picture): LONGINT;
 BEGIN RETURN S.ADR(P.bits^)
 END Address;
 
+(** Default picture object handler. *)
 PROCEDURE Handle* (obj: Objects.Object; VAR msg: Objects.ObjMsg);
-	VAR len : LONGINT; P2 : Picture; ref : INTEGER;
+	VAR len: LONGINT; P2: Picture; ref: INTEGER;
 BEGIN		
 	WITH obj: Picture DO
 		IF msg IS Objects.AttrMsg THEN
 			WITH msg: Objects.AttrMsg DO 
 				IF (msg.id = Objects.get) & (msg.name = "Gen") THEN 
-					msg.s := "Pictures.NewPicture";msg.res := 0; msg.class := Objects.String 
+					msg.class := Objects.String; msg.s := "Pictures.NewPicture"; msg.res := 0
 				END
 			END
 		ELSIF msg IS Objects.FileMsg THEN
@@ -833,30 +738,15 @@ END Handle;
 
 (** Generator for a picture object. *)
 PROCEDURE NewPicture*;
-VAR P: Picture;
+	VAR P: Picture;
 BEGIN
-	NEW(P); Create(P,5,5,1); Objects.NewObj := P
+	NEW(P); Create(P, 8, 8, colorD); Objects.NewObj := P
 END NewPicture;
 
-PROCEDURE InitAPIs;
-	VAR mod: LONGINT;
 BEGIN
-	mod := Kernel.LoadLibrary("GDI32");
-	Kernel.GetAdr(mod, "SetDIBitsToDevice", S.VAL(LONGINT, SetDIBitsToDevice));
-	Kernel.GetAdr(mod, "StretchDIBits", S.VAL(LONGINT, StretchDIBits));
-	Kernel.GetAdr(mod, "SetStretchBltMode", S.VAL(LONGINT, SetStretchBltMode));
-	Kernel.GetAdr(mod, "CreateHalftonePalette", S.VAL(LONGINT, CreateHalftonePalette));
-	
-	Kernel.GetAdr(mod, "CreateBitmap", S.VAL(LONGINT, CreateBitmap));
-	Kernel.GetAdr(mod, "GetBitmapBits", S.VAL(LONGINT, GetBitmapBits));
-END InitAPIs;
-
-BEGIN
-	InitAPIs; InitTranslations;
-	handler := Handle;
 	colorD := 8;
-	dots := Display.grey1;
-	cP := NIL
+	InitTranslations();
+	handler := Handle; cP := NIL
 END Pictures.
 
 (** Remarks
@@ -869,10 +759,10 @@ END Pictures.
 
 4. Oberon for Windows only supports bit depths of 8 bits per pixel. The general bitmap allocation scheme is as follows. Address points to the bottom most scan-line of a picture. Each scan-line is a sequence of bytes (color indexes), with each scan line padded with unused bytes to make the length a multiple of 4. Color index entries have values depending on the display card used (and is typically a different value than the color indexes used to write into a picture). Win32.ColTrans and Win32.RevColTrans contains the forward and backward mappings of Oberon color indexes and Windows color indexes. As expected, usage of this knowledge results in unportable programs.
 
-5. When opening a GIF picture with Pictures.Open, the GIF background color is burned in to color 14 (light grey).
-
-6. Implementation restrictions on Oberon for Windows
+5. Implementation restrictions on Oberon for Windows
 CopyPattern only works for Oberon fonts (no truetype fonts are supported currently).
+
+6. When opening a GIF picture with Pictures.Open, the GIF background color is burned in to color 14 (light grey).
 
 7. Implementation restriction
 Picture objects cannot be named or have attributes (see module Attributes). Picture objects only understand the messages Objects.FileMsg, Objects.CopyMsg and Objects.BindMsg.

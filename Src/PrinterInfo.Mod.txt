@@ -1,21 +1,20 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE PrinterInfo;
-	IMPORT Registry, Objects, Display, Fonts, Printer, Pictures, Strings, Texts, Oberon, Attributes, Gadgets;
+MODULE PrinterInfo; (** portable *)
+	IMPORT Objects, Display, Fonts, Printer, Pictures, Strings, Texts, Oberon, Attributes, Gadgets;
 
 	VAR
 		W: Texts.Writer;
@@ -91,7 +90,7 @@ MODULE PrinterInfo;
 		unit(cm);
 		P := Printer.current;
 		IF P # NIL THEN
-			Str("driver", P.name);
+			Str("driver", P.gen);
 			Int("res", 914400 DIV P.Unit);
 			IF cm THEN
 				Fixed("width", P.Unit*P.Width / 360000.0);
@@ -161,13 +160,15 @@ MODULE PrinterInfo;
 		Texts.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos);
 		Texts.Scan(S);
 		IF S.class IN {Texts.Name, Texts.String} THEN
-			Registry.Set("SystemInfo", "PrintJobName", "Oberon System 3 Printer Test Page");
 			COPY(S.s, str); Texts.Scan(S);
 			IF S.class IN {Texts.Name, Texts.String} THEN
-				Printer.Open(str, S.s)
+				COPY(S.s, text)
 			ELSE
-				Printer.Open(str, ""); S.s := ""
+				text := ""
 			END;
+			Strings.AppendCh(text, Oberon.OptionChar);
+			Strings.Append(text, "Oberon System 3 Printer Test Page");
+			Printer.Open(str, text);
 			IF Printer.res = 0 THEN
 				P := Printer.current; unit(cm);
 				Texts.WriteString(W, "Printing test page on "); Texts.WriteString(W, str);
@@ -175,7 +176,7 @@ MODULE PrinterInfo;
 				IF S.s # "" THEN
 					Texts.WriteString(W, ", options: "); Texts.WriteString(W, S.s)
 				END;
-				FrameTop := P.FrameY+P.FrameH;
+				FrameTop := Printer.FrameY+Printer.FrameH;
 
 				Printer.ReplConst(P.FrameX, P.FrameY, P.FrameW, 1);
 				Printer.ReplConst(P.FrameX, P.FrameY, 1, P.FrameH);
@@ -196,7 +197,7 @@ MODULE PrinterInfo;
 
 				fnt := Fonts.This("Syntax12.Scn.Fnt"); text := "Printer Driver:";
 				Printer.String(left1, y, text, fnt);
-				Printer.String(left2, y, P.name, fnt); DEC(y, dy);
+				Printer.String(left2, y, P.gen, fnt); DEC(y, dy);
 
 				text := "Resolution:";
 				Printer.String(left1, y, text, fnt);
@@ -395,5 +396,3 @@ END PrinterInfo.
 PrinterInfo.Panel
 
 System.Free PrinterInfo ~
-
-AsciiCoder.CodeFiles % PrinterInfo.Mod PrinterInfo.Panel ~

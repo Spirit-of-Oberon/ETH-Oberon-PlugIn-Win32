@@ -1,21 +1,19 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE Dates; (* PS  *)
-	IMPORT Registry;
+MODULE Dates; (** portable *)	(* PS  *)
 
 CONST
 	minute* = 60; hour* = 60*minute; day* = 24*hour; week*= 7* day;
@@ -23,9 +21,9 @@ CONST
 	firstY* = 1901;
 
 VAR
-	TimeDiff-: LONGINT; (** local difference to universal time in minutes *)
-	A : ARRAY 13 OF INTEGER;
-	T : ARRAY 365 OF SHORTINT;
+	TimeDiff*: LONGINT; (** local difference to universal time in minutes *)
+	A: ARRAY 13 OF INTEGER;
+	T: ARRAY 365 OF SHORTINT;
 
 (** Returns TRUE if year is a leap year *)
 PROCEDURE IsLeapYear* (year: INTEGER): BOOLEAN;
@@ -175,6 +173,7 @@ END AddSecond;
 PROCEDURE AddTime* (VAR time, date: LONGINT; sec: LONGINT);
 VAR h, m, s: LONGINT; ss, mm, hh: INTEGER;
 BEGIN
+	h := 0; m := 0;
 	ToHMS(time, hh, mm, ss); s := sec + ss;
 	IF (s < 0) OR (s >= 60) THEN
 		m := s DIV 60 + mm; s := s MOD 60;
@@ -189,30 +188,13 @@ BEGIN
 END AddTime;
 
 PROCEDURE Init();
-	VAR
-		diff: ARRAY 8 OF CHAR;
-		i, j: LONGINT;
+	VAR i, j: LONGINT;
 BEGIN
 	A[0] := 0; A[1] := 31; A[2] := 59; A[3] := 90; A[4] := 120; A[5] := 151; A[6] := 181;
 	A[7] := 212; A[8] := 243; A[9] :=  273; A[10] := 304; A[11] := 334; A[12] := 365;
 	i := 0; j := 0;
-	WHILE i < 12 DO WHILE j < A[i+1] DO  T[j] := SHORT(SHORT(i + 1)); INC(j) END; INC(i) END;
-	Registry.Get("System", "TimeDiff", diff);
-	TimeDiff := 0;
-	IF Registry.res = Registry.Done THEN
-		i := 0; j := 1;
-		IF diff[i] = "+" THEN
-			INC(i)
-		ELSIF diff[i] = "-" THEN
-			INC(i); j := -1
-		END;
-		WHILE (diff[i] >= "0") & (diff[i] <= "9") DO
-			TimeDiff := 10*TimeDiff+ORD(diff[i])-ORD("0");
-			INC(i)
-		END;
-		TimeDiff := (TimeDiff DIV 100)*60 + (TimeDiff MOD 100);
-		TimeDiff := j*TimeDiff
-	END
+	WHILE i < 12 DO WHILE j < A[i+1] DO T[j] := SHORT(SHORT(i + 1)); INC(j) END; INC(i) END;
+	TimeDiff := 0
 END Init;
 
 BEGIN

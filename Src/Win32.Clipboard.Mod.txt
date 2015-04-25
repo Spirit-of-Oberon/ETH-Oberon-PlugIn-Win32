@@ -1,63 +1,53 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* OBERON System 3, Release 2.3.
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+Copyright 1999 ETH Zürich Institute for Computer Systems, 
+ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+This module may be used under the conditions of the general Oberon 
+System 3 license contract.  The full text can be downloaded from
 
 	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
 
-or requested from the above mentioned address.
-
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+Under the license terms stated it is in particular (a) prohibited to modify
+the interface of this module in any way that disagrees with the style
+or content of the system and (b) requested to provide all conversions
 of the source code to another platform with the name OBERON. *)
 
-MODULE Clipboard;	(* MH 3.12.93; based on a semester project by A. Hendseth and M. Hölzel/ jm 17.1.95 *)
-	IMPORT S := SYSTEM, Kernel32, User32, Files, Win32, Strings, Display, Fonts, Texts, Viewers, Oberon;
+MODULE Clipboard; (** non-portable / source: Win32.Clipboard.Mod *)	(* ejz  *)
+	IMPORT SYSTEM, Kernel32, User32, GDI32, Win32, Files, Display, Strings, Fonts, Texts, Viewers, Oberon;
 
-(*
-	7.12.95 - fixed bug with copying objects (ps)
-	12.12.95 - added support for oberon text (ejz)
-	18.2.96 - added OberonToWin & WinToOberon conversion (ejz)
-*)
+	(** Windows Clipboard commands. *)
 
 	VAR
 		W: Texts.Writer;
 
-	PROCEDURE PutToClipboard (T: Texts.Text; beg, end: LONGINT);
+	PROCEDURE PutToClipboard*(T: Texts.Text; beg, end: LONGINT);
 		VAR
-			R: Texts.Reader;
-			ret, h, data, size, adr: LONGINT;
-			buf: Texts.Buffer; t: Texts.Text; f: Files.File; r: Files.Rider;
-			ch: CHAR;
+			R: Texts.Reader; buf: Texts.Buffer;
+			t: Texts.Text; f: Files.File; r: Files.Rider;
+			h, size, adr: LONGINT; ch: CHAR;
 	BEGIN
-		ret := User32.OpenClipboard(Win32.Display);
-		IF ret # Kernel32.False THEN
+		IF User32.OpenClipboard(Win32.Display) # Kernel32.False THEN
 			User32.EmptyClipboard();
-			IF User32.CFOberon # 0 THEN
-				NEW(buf); Texts.OpenBuf(buf);
-				Texts.Save(T, beg, end, buf);
-				NEW(t); Texts.Open(t, "");
-				Texts.Append(t, buf);
+			IF User32.CFOberon # Kernel32.NULL THEN
+				NEW(buf); Texts.OpenBuf(buf); Texts.Save(T, beg, end, buf);
+				NEW(t); Texts.Open(t, ""); Texts.Append(t, buf);
 				f := Files.New(""); Files.Set(r, f, 0); Files.WriteLInt(r, 0);
 				Texts.Store(t, f, Files.Pos(r), size);
+				Files.Set(r, f, 0); Files.WriteLInt(r, Files.Length(f)-4);
 				h := Kernel32.GlobalAlloc(Kernel32.GMemMoveable, Files.Length(f));
-				IF h # Kernel32.NULL THEN
-					Files.Set(r, f, 0); Files.WriteLInt(r, Files.Length(f)-4);
-					adr := Kernel32.GlobalLock(h);
-					Files.Set(r, f, 0); Files.Read(r, ch);
-					WHILE ~r.eof DO
-						S.PUT(adr, ch); INC(adr);
-						Files.Read(r, ch)
-					END;
-					Kernel32.GlobalUnlock(h);
-					data := User32.SetClipboardData(User32.CFOberon, h)
-				END
+				adr := Kernel32.GlobalLock(h);
+				Files.Set(r, f, 0); Files.Read(r, ch);
+				WHILE ~r.eof DO
+					SYSTEM.PUT(adr, ch); INC(adr);
+					Files.Read(r, ch)
+				END;
+				Kernel32.GlobalUnlock(h);
+				User32.SetClipboardData(User32.CFOberon, h)
 			END;
 			Texts.OpenReader(R, T, beg); size := 0;
-			WHILE Texts.Pos(R) < end DO Texts.Read(R, ch);
+			WHILE Texts.Pos(R) < end DO
+				Texts.Read(R, ch);
 				IF R.lib IS Fonts.Font THEN
 					IF ch = 0DX THEN INC(size, 2) ELSE INC(size) END
 				END
@@ -65,39 +55,38 @@ MODULE Clipboard;	(* MH 3.12.93; based on a semester project by A. Hendseth and 
 			h := Kernel32.GlobalAlloc(Kernel32.GMemMoveable, size + 1);
 			adr := Kernel32.GlobalLock(h);
 			Texts.OpenReader(R, T, beg);
-			WHILE Texts.Pos(R) < end DO Texts.Read(R, ch);
+			WHILE Texts.Pos(R) < end DO
+				Texts.Read(R, ch);
 				IF R.lib IS Fonts.Font THEN
-					S.PUT(adr, Strings.OberonToISO[ORD(ch)]); INC(adr);
-					IF ch = 0DX THEN S.PUT(adr, 0AX); INC(adr) END
+					SYSTEM.PUT(adr, Strings.OberonToISO[ORD(ch)]); INC(adr);
+					IF ch = 0DX THEN SYSTEM.PUT(adr, 0AX); INC(adr) END
 				END
 			END;
-			S.PUT(adr, 0X); Kernel32.GlobalUnlock(h);
-			data := User32.SetClipboardData(User32.CFText, h);
-			ret := User32.CloseClipboard()
+			SYSTEM.PUT(adr, 0X); Kernel32.GlobalUnlock(h);
+			User32.SetClipboardData(User32.CFText, h);
+			User32.CloseClipboard()
 		END
 	END PutToClipboard;
 
-	PROCEDURE GetFromClipboard (VAR T: Texts.Text);
+	PROCEDURE GetFromClipboard*(VAR T: Texts.Text);
 		VAR
-			ret, h, adr, i: LONGINT;
+			h, adr, i: LONGINT;
 			f: Files.File; r: Files.Rider;
 			ch: CHAR;
 	BEGIN
-		ret := User32.OpenClipboard(Win32.Display); T := NIL;
-		IF ret # Kernel32.False THEN
+		T := NIL;
+		IF User32.OpenClipboard(Win32.Display) # Kernel32.False THEN
 			h := User32.GetClipboardData(User32.CFOberon);
 			IF h # Kernel32.NULL THEN
 				adr := Kernel32.GlobalLock(h);
-				IF adr # Kernel32.NULL THEN
-					f := Files.New(""); Files.Set(r, f, 0);
-					FOR i := 0 TO 3 DO
-						S.GET(adr, ch); INC(adr); Files.Write(r, ch)
-					END;
-					Files.Set(r, f, 0); Files.ReadLInt(r, i);
-					WHILE i > 0 DO
-						S.GET(adr, ch); INC(adr); Files.Write(r, ch);
-						DEC(i)
-					END
+				f := Files.New(""); Files.Set(r, f, 0);
+				FOR i := 0 TO 3 DO
+					SYSTEM.GET(adr, ch); INC(adr); Files.Write(r, ch)
+				END;
+				Files.Set(r, f, 0); Files.ReadLInt(r, i);
+				WHILE i > 0 DO
+					SYSTEM.GET(adr, ch); INC(adr); Files.Write(r, ch);
+					DEC(i)
 				END;
 				Kernel32.GlobalUnlock(h);
 				Files.Set(r, f, 0); Files.ReadLInt(r, i); Files.Read(r, ch);
@@ -105,22 +94,23 @@ MODULE Clipboard;	(* MH 3.12.93; based on a semester project by A. Hendseth and 
 			ELSE
 				h := User32.GetClipboardData(User32.CFText);
 				IF h # Kernel32.NULL THEN
+					NEW(T); Texts.Open(T, "");
 					adr := Kernel32.GlobalLock(h);
-					IF adr # Kernel32.NULL THEN
-						NEW(T); Texts.Open(T, "");
-						S.GET(adr, ch); INC(adr);
-						WHILE ch # 0X DO Texts.Write(W, Strings.ISOToOberon[ORD(ch)]);
-							IF ch = 0DX THEN INC(adr) (* skip line feed *) END;
-							S.GET(adr, ch); INC(adr);
-						END;
-						Kernel32.GlobalUnlock(h); Texts.Append(T, W.buf);
+					SYSTEM.GET(adr, ch); INC(adr);
+					WHILE ch # 0X DO
+						Texts.Write(W, Strings.ISOToOberon[ORD(ch)]);
+						IF ch = 0DX THEN INC(adr) END;
+						SYSTEM.GET(adr, ch); INC(adr)
 					END;
+					Kernel32.GlobalUnlock(h);
+					Texts.Append(T, W.buf)
 				END
 			END;
-			ret := User32.CloseClipboard()
-		END;
+			User32.CloseClipboard()
+		END
 	END GetFromClipboard;
 
+	(** Cut text selection. *)
 	PROCEDURE Cut*;
 		VAR T: Texts.Text; beg, end, time: LONGINT;
 	BEGIN
@@ -128,6 +118,7 @@ MODULE Clipboard;	(* MH 3.12.93; based on a semester project by A. Hendseth and 
 		IF time > 0 THEN PutToClipboard(T, beg, end); Texts.Delete(T, beg, end) END
 	END Cut;
 
+	(** Copy text selection. *)
 	PROCEDURE Copy*;
 		VAR T: Texts.Text; beg, end, time: LONGINT;
 	BEGIN
@@ -135,35 +126,36 @@ MODULE Clipboard;	(* MH 3.12.93; based on a semester project by A. Hendseth and 
 		IF time > 0 THEN PutToClipboard(T, beg, end) END
 	END Copy;
 
+	(** Insert clipboard (text-) contents at caret. *)
 	PROCEDURE Paste*;
-		VAR T: Texts.Text; M: Oberon.ConsumeMsg;
+		VAR M: Oberon.ConsumeMsg;
 	BEGIN
-		GetFromClipboard(T);
-		IF T # NIL THEN
-			M.F := NIL; M.text := T; M.beg := 0; M.end := T.len;
-			Display.Broadcast(M);
+		GetFromClipboard(M.text);
+		IF M.text # NIL THEN
+			M.F := NIL; M.beg := 0; M.end := M.text.len;
+			Display.Broadcast(M)
 		END
 	END Paste;
 
-	PROCEDURE PictureThis(x, y, w, h: LONGINT);  (* w, h > 0 *)
-		CONST SRCCOPY = 0CC0020H;
-		VAR ret, bitmap, oldbitmap, hdc: LONGINT;
+	PROCEDURE PictureThis(display, hDC, x, y, w, h: LONGINT);
+		VAR bitmap, oldBitmap, hdc: LONGINT;
 	BEGIN
-		ret := User32.OpenClipboard(Win32.Display);
-		IF ret # Kernel32.False THEN
-			hdc := Win32.CreateCompatibleDC(Win32.hdcDisp);
-			bitmap := Win32.CreateCompatibleBitmap(Win32.hdcDisp, w, h);
-			oldbitmap := Win32.SelectObject(hdc, bitmap);
-			Win32.BitBlt(hdc, 0, 0, w, h, Win32.hdcDisp, x, Display.Height-(y+h), SRCCOPY);
+		IF User32.OpenClipboard(display) # Kernel32.False THEN
+			hdc := GDI32.CreateCompatibleDC(hDC);
+			bitmap := GDI32.CreateCompatibleBitmap(hDC, w, h);
+			oldBitmap := GDI32.SelectObject(hdc, bitmap);
+			GDI32.BitBlt(hdc, 0, 0, w, h, hDC, x, y, GDI32.SRCCOPY);
 			User32.EmptyClipboard();
-			ret := User32.SetClipboardData(User32.CFBitmap, bitmap);
-			ret := User32.CloseClipboard();
-			oldbitmap := Win32.SelectObject(hdc, oldbitmap); Win32.DeleteDC(hdc);
+			User32.SetClipboardData(User32.CFBitmap, bitmap);
+			User32.CloseClipboard();
+			GDI32.SelectObject(hdc, oldBitmap);
+			(*GDI32.DeleteObject(bitmap);*)
+			GDI32.DeleteDC(hdc)
 		END
 	END PictureThis;
 
+	(** Takes a snapshot of the marked viewer, or the whole display if no viewer is marked. *)
 	PROCEDURE Snapshot*;
-		(* takes a snapshot of the marked viewer, or the whole display if no viewer is marked *)
 		VAR x, y, w, h: LONGINT; V: Viewers.Viewer;
 	BEGIN
 		IF Oberon.Pointer.on THEN
@@ -179,25 +171,15 @@ MODULE Clipboard;	(* MH 3.12.93; based on a semester project by A. Hendseth and 
 				END;
 				IF (w > 0) & (h > 0) THEN
 					Oberon.RemoveMarks(SHORT(x), SHORT(y), SHORT(w), SHORT(h));
-					PictureThis(x, y, w, h)
+					y := Display.Height-(y+h);
+					PictureThis(Win32.Display, Win32.hdcDisp, x, y, w, h)
 				END
 			END
 		ELSE
 			w := Win32.DispW; h := Win32.DispH;
-			y := Display.Height - Win32.DispH;
-			PictureThis(0, y, w, h)
-		END;
+			PictureThis(Win32.Display, Win32.hdcDisp, 0, 0, w, h)
+		END
 	END Snapshot;
-
-	PROCEDURE AddAccels*;
-	BEGIN
-		Win32.AddAccel(Win32.Insert, {Win32.CTRL}, "Clipboard.Copy");
-		Win32.AddAccel("C", {Win32.CTRL}, "Clipboard.Copy");
-		Win32.AddAccel(Win32.Insert, {Win32.SHIFT}, "Clipboard.Paste");
-		Win32.AddAccel("V", {Win32.CTRL}, "Clipboard.Paste");
-		Win32.AddAccel(Win32.Delete, {Win32.SHIFT}, "Clipboard.Cut");
-		Win32.AddAccel("X", {Win32.CTRL}, "Clipboard.Cut")
-	END AddAccels;
 
 BEGIN
 	Texts.OpenWriter(W)
@@ -207,6 +189,5 @@ Clipboard.Cut
 Clipboard.Copy
 Clipboard.Paste
 Clipboard.Snapshot
-Clipboard.AddAccels
 
 System.Free Clipboard ~
