@@ -1,0 +1,105 @@
+﻿(* OBERON System 3, Release 2.2.
+
+Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
+e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon System 3 license contract.
+The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+or requested from the above mentioned address.
+
+Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
+in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE Bitmaps;
+
+(**
+Module Bitmaps provide a portable way to save and restore areas of the display.
+*)
+
+IMPORT S := SYSTEM, Kernel, Win32;
+
+CONST
+	SRCCOPY = 0CC0020H;
+
+TYPE
+	Bitmap* = POINTER TO BitmapDesc;
+	BitmapDesc* = RECORD
+		w-, h-: LONGINT;	(** Size (in screen pixels) of the bitmap. *)
+		dc: LONGINT;
+		bm: LONGINT; (*HBITMAP*)
+	END;
+
+VAR
+	Disp-: Bitmap;	(** Bitmap representing the Oberon display. *)
+	CreateCompatibleBitmap: PROCEDURE (hdc, w, h: LONGINT): LONGINT (*HBITMAP*);
+
+PROCEDURE Finalize (B: PTR);
+BEGIN
+	WITH B: Bitmap DO
+		IF B = Disp THEN RETURN END;
+		IF B.bm # 0 THEN Win32.DeleteObject(B.bm); B.bm := 0 END;
+	END
+END Finalize;
+
+(** Allocate a bitmap of width w and height h. NIL is returned when not enough memory is available. *)
+PROCEDURE New* (w, h: LONGINT): Bitmap;
+	VAR B: Bitmap;
+BEGIN
+	NEW(B); Kernel.RegisterObject(B, Finalize, TRUE);
+	B.w := w; B.h := h; B.dc := 0;
+	B.bm := CreateCompatibleBitmap(Win32.hdcDisp, w, h);
+	IF B.bm # 0 THEN RETURN B (* jm *)
+	ELSE RETURN NIL
+	END
+END New;
+
+PROCEDURE OpenDC (B: Bitmap);
+	VAR dmmy: LONGINT;
+BEGIN
+	IF B # Disp THEN
+		B.dc := Win32.CreateCompatibleDC(Win32.hdcDisp);
+		IF B.dc = 0 THEN HALT(101) END;
+		dmmy := Win32.SelectObject(B.dc, B.bm);
+	ELSE
+		Win32.SetClippingArea(0, 0, Win32.DispW, Win32.DispH);
+	END
+END OpenDC;
+
+PROCEDURE CloseDC (B: Bitmap);
+BEGIN
+	IF B # Disp THEN
+		Win32.DeleteDC(B.dc); B.dc := 0;
+	END
+END CloseDC;
+
+(** Copies a part (sx, sy, w, h) of a source bitmap (sB) to a destination bitmap (dB) at position (dx, dy, w, h). *)
+PROCEDURE CopyBlock* (sB, dB: Bitmap; sx, sy, w, h, dx, dy, mode: INTEGER);
+BEGIN
+	OpenDC(sB); OpenDC(dB);
+	IF Win32.lc.len > 0 THEN Win32.FlushCache END;
+	Win32.BitBlt(dB.dc, dx, dB.h-dy, w, -h, sB.dc, sx, sB.h-sy, SRCCOPY);
+	CloseDC(sB); CloseDC(dB);
+END CopyBlock;
+
+PROCEDURE Init;
+	VAR mod: LONGINT;
+BEGIN
+	mod := Kernel.LoadLibrary("GDI32");
+	Kernel.GetAdr(mod, "CreateCompatibleBitmap", S.VAL(LONGINT, CreateCompatibleBitmap));
+	NEW(Disp); Kernel.RegisterObject(Disp, Finalize, TRUE);
+	Disp.w := Win32.DispW; Disp.h := Win32.DispH;
+	Disp.bm := 0; Disp.dc := Win32.hdcDisp;
+END Init;
+
+BEGIN Init;
+END Bitmaps.
+
+(** Remarks:
+
+1. Coordinates are measured vertically from bottom (0) to top (bitmap height minus one), and from left (0) to right (bitmap width minus 1).
+
+*)

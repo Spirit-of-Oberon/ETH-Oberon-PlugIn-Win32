@@ -1,0 +1,218 @@
+﻿(* OBERON System 3, Release 2.2.
+
+Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
+e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon System 3 license contract.
+The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+or requested from the above mentioned address.
+
+Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
+in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE User32; (* ejz,  *)
+	IMPORT S := SYSTEM, Kernel;
+
+	CONST
+		CFText* = 1; CFBitmap* = 2;
+		WMClose* = 10H; WMQuit* = 12H; WMPaint* = 0FH; WMChar* = 102H; WMDestroy* = 2; WMActivate* = 06H;
+		WMMouseMove* = 200H; WMCreate* = 01H; WMKillFocus* = 08H; WMSetFocus* = 07H; WMQueryNewPalette* = 30FH;
+		WMGetMinMaxInfo* = 24H; WMSetCursor* = 020H; WMKeyDown* = 100H; WMKeyUp* = 101H; WMSysKeyDown* = 104H;
+		WMMouseFirst* = WMMouseMove; WMMouseLast* = 0209H; WMFontChange* = 01DH; WMDropFiles* = 0233H;
+		WMUser* = 0400H; WMTimer* = 0113H; WMSize* = 05H; WMMove* = 03H;
+		WMDDEFirst = 03E0H; WMDDEInitiate* = WMDDEFirst; WMDDETerminate* = WMDDEFirst+1; WMDDEAck* = WMDDEFirst+4;
+		MKLButton* = 01H; MKRButton* = 02H; MKMButton* = 010H;
+		PMRemove* = 1; OwnDC* = 20H; Default* = 080000000H;
+		WSVisible* = 010000000H; WSCaption* = 0C00000H; WSBorder* = 0800000H; WSSysMenu* = 080000H;
+		WSChild* = 040000000H; WSThickFrame* = 040000H; WSMaximize* = 01000000H; WSMaximizeBox* = 010000H;
+		WSMinimize* = 020000000H; WSMinimizeBox* = 020000H; WSHScroll* = 0100000H; WSVScroll* = 0200000H;
+		SMCXScreen* = 0; SMCYScreen* = 1; SMCYCaption* = 4; SMCXFrame* = 32; SMCYFrame* = 33; SMCXBoder* = 5; SMCYBorder* = 6;
+		VKShift* = 010H; VKCtrl* =  011H; VKAlt* = 012H; VKPause* = 013H; 
+		VKPageUp* = 021H; VKPageDown* = 022H; VKEnd* = 023H; VKHome* = 024H;
+		VKLeft* = 025H; VKUp* = 026H; VKRight* = 027H; VKDown* = 028H; 
+		VKInsert* = 02DH; VKDelete* = 02EH; 
+		VKF1* = 070H; VKF2* = 071H; VKF3* = 072H; VKF4* = 073H; VKF5* = 074H; VKF6* = 075H;
+		VKF7* = 076H; VKF8* = 077H; VKF9* = 078H; VKF10* = 079H; VKF11* = 07AH; VKF12* = 07BH;
+		HWNDDesktop* = 0; HWNDBroadcast* = 0FFFFH;
+		HWNDTop* = 0; HWNDBottom* = 1; HWNDTopMost* = -1; HWNDNoTopMost* = -2;
+		SWPNoSize* = 1; SWPNoMove* = 2;
+		SWMinimize* = 6; SWNormal* = 1; SWMaximize* = 3;
+		IDCArrow* = 32512; IDCWait* = 32514;
+		WAInactive* = 0; WAActive* = 1; WAClickActive* = 2;
+		SIZERestored* = 0; SIZEMinimized* = 1;
+
+	TYPE
+		Point* = RECORD
+			x*, y*: LONGINT
+		END;
+		Rect* = RECORD
+			left*, top*, right*, bottom*: LONGINT
+		END;
+		Size* = RECORD
+			w*, h*: LONGINT
+		END;
+		Msg* = RECORD
+			hwnd*, msg*: LONGINT;
+			wParam*, lParam*: LONGINT;
+			time*: LONGINT;
+			point*: Point
+		END;
+		WindowProc* = PROCEDURE (hwnd, msg, wParam, lParam: LONGINT): LONGINT;
+		WindowClass* = RECORD
+			style*: LONGINT;
+			wndProc*: WindowProc;
+			clsExtra*, wndExtra*: LONGINT;
+			instance*: LONGINT;
+			icon*, cursor*: LONGINT;
+			bgnd*: LONGINT;
+			menuName*, className*: LONGINT
+		END;
+		MinMaxInfo* = RECORD
+			res*, maxSize*, maxPos*, minTrack*, maxTrack*: Point
+		END;
+		EnumWindowsProc* = PROCEDURE (hwnd, data: LONGINT): LONGINT;
+		WindowPlacement* = RECORD
+			len*, flags, showCmd*: LONGINT;
+			min*, max*: Point;
+			normal*: Rect
+		END;
+
+	VAR
+		ClipCursor-: PROCEDURE (clip: LONGINT): LONGINT;
+		CloseClipboard-: PROCEDURE(): LONGINT;
+		CloseWindow-: PROCEDURE (hwnd: LONGINT): LONGINT;
+		CreateWindowEx-: PROCEDURE (exStyle, className, winName, style, x, y, w, h, parent, menu, inst, param: LONGINT): LONGINT;
+		DefWindowProc-: WindowProc;
+		DestroyWindow-: PROCEDURE (hwnd: LONGINT): LONGINT;
+		DispatchMessage-: PROCEDURE (msg: LONGINT): LONGINT;
+		EmptyClipboard-: PROCEDURE();
+		EnumWindows-: PROCEDURE (enum: EnumWindowsProc; data: LONGINT): LONGINT;
+		GetActiveWindow-: PROCEDURE (): LONGINT;
+		GetAsyncKeyState-: PROCEDURE (virtKey: LONGINT): LONGINT;
+		GetClientRect-: PROCEDURE (hwnd, rect: LONGINT): LONGINT;
+		GetClipboardData-: PROCEDURE (uFormat: LONGINT): LONGINT;
+		GetCursorPos-: PROCEDURE (point: LONGINT): LONGINT;
+		GetDC-: PROCEDURE (hwnd: LONGINT): LONGINT;
+		GetInputState-: PROCEDURE(): LONGINT;
+		GetKeyState-: PROCEDURE (virtKey: LONGINT): LONGINT;
+		GetMessage-: PROCEDURE (msg, hwnd, min, max: LONGINT): LONGINT;
+		GetSystemMetrics-: PROCEDURE (index: LONGINT): LONGINT;
+		GetUpdateRect-: PROCEDURE (hwnd, lpRect, bErase: LONGINT): LONGINT;
+		GetWindowLong-: PROCEDURE (hwnd, index: LONGINT): LONGINT;
+		GetWindowPlacement-: PROCEDURE (hwnd, lpWndPl: LONGINT): LONGINT;
+		GetWindowRect-: PROCEDURE (hwnd, rect: LONGINT): LONGINT;
+		GetWindowText-: PROCEDURE (hwnd, lpsz, len: LONGINT): LONGINT;
+		IntersectRect-: PROCEDURE (dest, src1, src2: LONGINT): LONGINT;
+		InvalidateRect-: PROCEDURE (hwnd, lpRect, bErase: LONGINT): LONGINT;
+		KillTimer-: PROCEDURE (hwnd, id: LONGINT): LONGINT;
+		LoadCursor-: PROCEDURE (appInst, curRes: LONGINT): LONGINT;
+		LoadIcon-: PROCEDURE (appInst, iconRes: LONGINT): LONGINT;
+		MessageBeep-: PROCEDURE (type: LONGINT);
+		MoveWindow-: PROCEDURE (hwnd, x, y, w, h, repaint: LONGINT): LONGINT;
+		OpenClipboard-: PROCEDURE (hwnd: LONGINT): LONGINT;
+		PeekMessage-: PROCEDURE (msg, hwnd, min, max, flag: LONGINT): LONGINT;
+		PostMessage-: PROCEDURE (hwnd, msg, wParam, lParam: LONGINT): LONGINT;
+		PostQuitMessage-: PROCEDURE (exitCode: LONGINT);
+		RegisterClass-: PROCEDURE (winClass: LONGINT): LONGINT;
+		RegisterClipboardFormat-: PROCEDURE (format: LONGINT): LONGINT;
+		ReleaseCapture-: PROCEDURE(): LONGINT;
+		ReleaseDC-: PROCEDURE (hwnd, hdc: LONGINT): LONGINT;
+		ScreenToClient-: PROCEDURE (hwnd, point: LONGINT): LONGINT;
+		ScrollDC-: PROCEDURE (hdc, dx, dy, recScroll, recClip, hrgnUpdate, recUpdate: LONGINT): LONGINT;
+		SendMessage-: PROCEDURE (hwnd, msg, wParam, lParam: LONGINT): LONGINT;
+		SetCapture-: PROCEDURE (hwnd: LONGINT): LONGINT;
+		SetClipboardData-: PROCEDURE (uFormat, hData: LONGINT): LONGINT;
+		SetCursor-: PROCEDURE (cur: LONGINT): LONGINT;
+		SetCursorPos-: PROCEDURE (x, y: LONGINT): LONGINT;
+		SetFocus-: PROCEDURE (hwnd: LONGINT): LONGINT;
+		SetForegroundWindow-: PROCEDURE (hwnd: LONGINT): LONGINT;
+		SetTimer-: PROCEDURE (hwnd, id, timeout, timeproc: LONGINT): LONGINT;
+		SetWindowLong-: PROCEDURE (hwnd, index, word: LONGINT): LONGINT;
+		SetWindowPos-: PROCEDURE (hwnd, hwndAfter, x, y, w, h, flags: LONGINT): LONGINT;
+		SetWindowText-: PROCEDURE (hwnd, lpsz: LONGINT): LONGINT;
+		ShowCursor-: PROCEDURE (bShow: LONGINT): LONGINT;
+		ShowWindow-: PROCEDURE (hwnd, cmdShow: LONGINT): LONGINT;
+		TranslateMessage-: PROCEDURE (msg: LONGINT): LONGINT;
+		UnregisterClass-: PROCEDURE (class, hInst: LONGINT): LONGINT;
+		UpdateWindow-: PROCEDURE (hwnd: LONGINT): LONGINT;
+		ValidateRect-: PROCEDURE (hwnd, rect: LONGINT): LONGINT;
+		WaitMessage-: PROCEDURE();
+		CFOberon-: LONGINT;
+
+	PROCEDURE InitAPI();
+		VAR
+			mod: LONGINT;
+			mycf: ARRAY 32 OF CHAR;
+	BEGIN
+		mod := Kernel.LoadLibrary("User32");
+		Kernel.GetAdr(mod, "ClipCursor", S.VAL(LONGINT, ClipCursor));
+		Kernel.GetAdr(mod, "CloseClipboard", S.VAL(LONGINT, CloseClipboard));
+		Kernel.GetAdr(mod, "CloseWindow", S.VAL(LONGINT, CloseWindow));
+		Kernel.GetAdr(mod, "CreateWindowExA", S.VAL(LONGINT, CreateWindowEx));
+		Kernel.GetAdr(mod, "DefWindowProcA", S.VAL(LONGINT, DefWindowProc));
+		Kernel.GetAdr(mod, "DestroyWindow", S.VAL(LONGINT, DestroyWindow));
+		Kernel.GetAdr(mod, "DispatchMessageA", S.VAL(LONGINT, DispatchMessage));
+		Kernel.GetAdr(mod, "EmptyClipboard", S.VAL(LONGINT, EmptyClipboard));
+		Kernel.GetAdr(mod, "EnumWindows", S.VAL(LONGINT, EnumWindows));
+		Kernel.GetAdr(mod, "GetActiveWindow", S.VAL(LONGINT, GetActiveWindow));
+		Kernel.GetAdr(mod, "GetAsyncKeyState", S.VAL(LONGINT, GetAsyncKeyState));
+		Kernel.GetAdr(mod, "GetClientRect", S.VAL(LONGINT, GetClientRect));
+		Kernel.GetAdr(mod, "GetClipboardData", S.VAL(LONGINT, GetClipboardData));
+		Kernel.GetAdr(mod, "GetCursorPos", S.VAL(LONGINT, GetCursorPos));
+		Kernel.GetAdr(mod, "GetDC", S.VAL(LONGINT, GetDC));
+		Kernel.GetAdr(mod, "GetInputState", S.VAL(LONGINT, GetInputState));
+		Kernel.GetAdr(mod, "GetKeyState", S.VAL(LONGINT, GetKeyState));
+		Kernel.GetAdr(mod, "GetMessageA", S.VAL(LONGINT, GetMessage));
+		Kernel.GetAdr(mod, "GetSystemMetrics", S.VAL(LONGINT, GetSystemMetrics));
+		Kernel.GetAdr(mod, "GetUpdateRect", S.VAL(LONGINT, GetUpdateRect));
+		Kernel.GetAdr(mod, "GetWindowLongA", S.VAL(LONGINT, GetWindowLong));
+		Kernel.GetAdr(mod, "GetWindowPlacement", S.VAL(LONGINT, GetWindowPlacement));
+		Kernel.GetAdr(mod, "GetWindowRect", S.VAL(LONGINT, GetWindowRect));
+		Kernel.GetAdr(mod, "GetWindowTextA", S.VAL(LONGINT, GetWindowText));
+		Kernel.GetAdr(mod, "IntersectRect", S.VAL(LONGINT, IntersectRect));
+		Kernel.GetAdr(mod, "InvalidateRect", S.VAL(LONGINT, InvalidateRect));
+		Kernel.GetAdr(mod, "KillTimer", S.VAL(LONGINT, KillTimer));
+		Kernel.GetAdr(mod, "LoadCursorA", S.VAL(LONGINT, LoadCursor));
+		Kernel.GetAdr(mod, "LoadIconA", S.VAL(LONGINT, LoadIcon));
+		Kernel.GetAdr(mod, "MessageBeep", S.VAL(LONGINT, MessageBeep));
+		Kernel.GetAdr(mod, "MoveWindow", S.VAL(LONGINT, MoveWindow));
+		Kernel.GetAdr(mod, "OpenClipboard", S.VAL(LONGINT, OpenClipboard));
+		Kernel.GetAdr(mod, "PeekMessageA", S.VAL(LONGINT, PeekMessage));
+		Kernel.GetAdr(mod, "PostMessageA", S.VAL(LONGINT, PostMessage));
+		Kernel.GetAdr(mod, "PostQuitMessage", S.VAL(LONGINT, PostQuitMessage));
+		Kernel.GetAdr(mod, "RegisterClassA", S.VAL(LONGINT, RegisterClass));
+		Kernel.GetAdr(mod, "RegisterClipboardFormatA", S.VAL(LONGINT, RegisterClipboardFormat));
+		Kernel.GetAdr(mod, "ReleaseCapture", S.VAL(LONGINT, ReleaseCapture));
+		Kernel.GetAdr(mod, "ReleaseDC", S.VAL(LONGINT, ReleaseDC));
+		Kernel.GetAdr(mod, "ScreenToClient", S.VAL(LONGINT, ScreenToClient));
+		Kernel.GetAdr(mod, "ScrollDC", S.VAL(LONGINT, ScrollDC));
+		Kernel.GetAdr(mod, "SendMessageA", S.VAL(LONGINT, SendMessage));
+		Kernel.GetAdr(mod, "SetCapture", S.VAL(LONGINT, SetCapture));
+		Kernel.GetAdr(mod, "SetClipboardData", S.VAL(LONGINT, SetClipboardData));
+		Kernel.GetAdr(mod, "SetCursor", S.VAL(LONGINT, SetCursor));
+		Kernel.GetAdr(mod, "SetCursorPos", S.VAL(LONGINT, SetCursorPos));
+		Kernel.GetAdr(mod, "SetFocus", S.VAL(LONGINT, SetFocus));
+		Kernel.GetAdr(mod, "SetForegroundWindow", S.VAL(LONGINT, SetForegroundWindow));
+		Kernel.GetAdr(mod, "SetTimer", S.VAL(LONGINT, SetTimer));
+		Kernel.GetAdr(mod, "SetWindowLongA", S.VAL(LONGINT, SetWindowLong));
+		Kernel.GetAdr(mod, "SetWindowPos", S.VAL(LONGINT, SetWindowPos));
+		Kernel.GetAdr(mod, "SetWindowTextA", S.VAL(LONGINT, SetWindowText));
+		Kernel.GetAdr(mod, "ShowCursor", S.VAL(LONGINT, ShowCursor));
+		Kernel.GetAdr(mod, "ShowWindow", S.VAL(LONGINT, ShowWindow));
+		Kernel.GetAdr(mod, "TranslateMessage", S.VAL(LONGINT, TranslateMessage));
+		Kernel.GetAdr(mod, "UnregisterClassA", S.VAL(LONGINT, UnregisterClass));
+		Kernel.GetAdr(mod, "UpdateWindow", S.VAL(LONGINT, UpdateWindow));
+		Kernel.GetAdr(mod, "ValidateRect", S.VAL(LONGINT, ValidateRect));
+		Kernel.GetAdr(mod, "WaitMessage", S.VAL(LONGINT, WaitMessage));
+
+		mycf := "Oberon System 3";
+		CFOberon := RegisterClipboardFormat(S.ADR(mycf))
+	END InitAPI;
+
+BEGIN
+	InitAPI()
+END User32.

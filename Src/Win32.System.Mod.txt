@@ -1,0 +1,925 @@
+﻿(* OBERON System 3, Release 2.2.
+
+Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
+e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon System 3 license contract.
+The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+or requested from the above mentioned address.
+
+Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
+in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE System; (*JG/NW; MH 13.9.93*)
+
+IMPORT S := SYSTEM, Console, Win32, Kernel, Registry, Objects, Modules, FileDir, Files, Input, Display, Viewers,
+	Oberon, Fonts, Texts, User32, Traps, Printer;
+
+VAR
+	T: Texts.Text; Sx: Texts.Scanner; W: Texts.Writer;
+	pattern: ARRAY 32 OF CHAR;	(* for Directory command *)
+	curpath: ARRAY 128 OF CHAR;  (* for Directory command *)
+	detail, textDocs: BOOLEAN;
+	noFiles, noDirs: LONGINT;
+
+	(* --- jm --- *)
+
+	PROCEDURE NewText(name: ARRAY OF CHAR): Texts.Text;
+	VAR T: Texts.Text;
+	BEGIN NEW(T); Texts.Open(T, name); RETURN T
+	END NewText;
+	
+	PROCEDURE OpenText(title: ARRAY OF CHAR; T: Texts.Text; system: BOOLEAN);
+		VAR W: INTEGER;
+	BEGIN
+		IF system THEN W := Display.Width DIV 8*3 (* -20 *) ELSE W := Display.Width DIV 8*5 (* *3+20 *) END;
+		Oberon.OpenText(title, T, W, 200)
+	END OpenText;
+
+	(* ------------- Toolbox for system control ---------------*)
+
+	PROCEDURE SetFont*;
+		VAR beg, end, time: LONGINT;
+			T: Texts.Text; S: Texts.Scanner;
+	BEGIN Texts.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos); Texts.Scan(S);
+		IF (S.class = Texts.Char) & (S.c = "^") THEN
+			Oberon.GetSelection(T, beg, end, time);
+			IF time >= 0 THEN
+				Texts.OpenScanner(S, T, beg); Texts.Scan(S);
+				IF S.class = Texts.Name THEN Oberon.SetFont(Fonts.This(S.s)) END
+			END
+		ELSIF S.class = Texts.Name THEN Oberon.SetFont(Fonts.This(S.s))
+		END
+	END SetFont;
+
+	PROCEDURE SetColor*;
+		VAR beg, end, time: LONGINT;
+			T: Texts.Text; S: Texts.Scanner; ch: CHAR;
+	BEGIN Texts.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos); Texts.Scan(S);
+		IF (S.class = Texts.Char) & (S.c = "^") THEN
+			Oberon.GetSelection(T, beg, end, time);
+			IF time >= 0 THEN
+				Texts.OpenReader(S, T, beg); Texts.Read(S, ch); Oberon.SetColor(S.col)
+			END
+		ELSIF S.class = Texts.Int THEN Oberon.SetColor(SHORT(SHORT(S.i)))
+		END
+	END SetColor;
+
+	PROCEDURE SetOffset*;
+		VAR beg, end, time: LONGINT;
+			T: Texts.Text;S: Texts.Scanner; ch: CHAR;
+	BEGIN Texts.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos); Texts.Scan(S);
+		IF (S.class = Texts.Char) & (S.c = "^") THEN
+			Oberon.GetSelection(T, beg, end, time);
+			IF time >= 0 THEN
+				Texts.OpenReader(S, T, beg); Texts.Read(S, ch); Oberon.SetColor(S.voff)
+			END
+		ELSIF S.class = Texts.Int THEN Oberon.SetOffset(SHORT(SHORT(S.i)))
+		END
+	END SetOffset;
+	
+	PROCEDURE Time*;
+		VAR par: Oberon.ParList;
+			S: Texts.Scanner;
+			t, d, hr, min, sec, yr, mo, day: LONGINT;
+	BEGIN par := Oberon.Par;
+		Texts.OpenScanner(S, par.text, par.pos); Texts.Scan(S);
+		IF S.class = Texts.Int THEN (*set date*)
+			day := S.i; Texts.Scan(S); mo := S.i; Texts.Scan(S); yr := S.i; Texts.Scan(S);
+			hr := S.i; Texts.Scan(S); min := S.i; Texts.Scan(S); sec := S.i;
+			t := (hr*64 + min)*64 + sec; d := (yr*16 + mo)*32 + day;
+			Oberon.SetClock(t, d)
+		ELSE (*read date*)
+			Texts.WriteString(W, "System.Time");
+			Oberon.GetClock(t, d); Texts.WriteDate(W, t, d); Texts.WriteLn(W);
+			Texts.Append(Oberon.Log, W.buf)
+		END
+	END Time;
+
+	PROCEDURE Collect*;
+	BEGIN Oberon.Collect
+	END Collect;
+
+
+
+	(* ------------- Toolbox for standard display ---------------*)
+
+	PROCEDURE Open*;
+		VAR par: Oberon.ParList;
+			T: Texts.Text;
+			S: Texts.Scanner;
+			beg, end, time: LONGINT;
+	BEGIN
+		par := Oberon.Par;
+		Texts.OpenScanner(S, par.text, par.pos); Texts.Scan(S);
+		IF (S.class = Texts.Char) & (S.c = "^") OR (S.line # 0) THEN
+			Oberon.GetSelection(T, beg, end, time);
+			IF time >= 0 THEN Texts.OpenScanner(S, T, beg); Texts.Scan(S) END
+		END;
+		IF S.class = Texts.Name THEN
+			OpenText(S.s, NewText(S.s), TRUE)
+		END
+	END Open;
+
+	PROCEDURE OpenLog*;
+	BEGIN	OpenText("System.Log", Oberon.Log, TRUE)
+	END OpenLog;
+
+	PROCEDURE Close*;
+		VAR  par: Oberon.ParList; V: Viewers.Viewer;
+	BEGIN par := Oberon.Par;
+		IF par.frame = par.vwr.dsc THEN V := par.vwr
+		ELSE V := Oberon.MarkedViewer()
+		END;
+		Viewers.Close(V)
+	END Close;
+
+	PROCEDURE CloseTrack*;
+		VAR V: Viewers.Viewer;
+	BEGIN V := Oberon.MarkedViewer(); Viewers.CloseTrack(V.X)
+	END CloseTrack;
+
+	PROCEDURE Recall*;
+		VAR V: Viewers.Viewer; M: Display.ControlMsg;
+	BEGIN
+		Viewers.Recall(V);
+		IF (V # NIL) & (V.state = 0) THEN 
+			Viewers.Open(V, V.X, V.Y + V.H); M.F := NIL; M.id := Display.restore; V.handle(V, M)
+		END
+	END Recall;
+
+	PROCEDURE Copy*;
+		VAR V, V1: Viewers.Viewer; M: Objects.CopyMsg; N: Display.ControlMsg;
+	BEGIN
+        M.id := Objects.shallow;
+		V := Oberon.Par.vwr; V.handle(V, M); V1 := M.obj(Viewers.Viewer);
+		Viewers.Open(V1, V.X, V.Y + V.H DIV 2);
+		N.F := NIL; N.id := Display.restore; V1.handle(V1, N)
+	END Copy;
+
+	PROCEDURE Grow*;
+		VAR par: Oberon.ParList; V, V1: Viewers.Viewer;
+            M: Objects.CopyMsg; N: Display.ControlMsg;
+			DW, DH: INTEGER;
+	BEGIN par := Oberon.Par;
+		IF par.frame = par.vwr.dsc THEN V := par.vwr
+		ELSE V := Oberon.MarkedViewer()
+		END;
+		DW := Oberon.DisplayWidth(V.X); DH := Oberon.DisplayHeight(V.X);
+		IF V.H < DH - Viewers.minH THEN Oberon.OpenTrack(V.X, V.W)
+		ELSIF V.W < DW THEN Oberon.OpenTrack(Oberon.UserTrack(V.X), DW)
+		END;
+		IF (V.H < DH - Viewers.minH) OR (V.W < DW) THEN
+			M.id := Objects.shallow;
+            V.handle(V, M); V1 := M.obj(Viewers.Viewer);
+			Viewers.Open(V1, V.X, DH);
+			N.F := NIL; N.id := Display.restore; V1.handle(V1, N)
+		END
+	END Grow;
+
+PROCEDURE Watch*;
+	VAR avail: LONGINT;
+BEGIN
+	Texts.WriteString(W, "System.Watch"); Texts.WriteLn(W);
+	avail := Kernel.Available();
+	Texts.WriteString(W, "   Heap size: "); Texts.WriteInt(W, Kernel.HeapSize(), 0); Texts.WriteLn(W);
+	Texts.WriteString(W, "   Bytes allocated: "); Texts.WriteInt(W, Kernel.HeapSize() - avail, 0); Texts.WriteLn(W);
+	Texts.WriteString(W, "   Available: "); Texts.WriteInt(W, avail, 0); Texts.WriteLn(W);
+	Texts.Append(Oberon.Log, W.buf)
+END Watch;
+
+PROCEDURE ShowMods (VAR W: Texts.Writer);
+	VAR m: Modules.Module;
+BEGIN
+	m := Modules.modList;
+	WHILE m # NIL DO
+		Texts.WriteString(W, m.name);
+		Texts.WriteString(W, "    codesize = "); Texts.WriteInt(W, LEN(m.code^), 0);
+		Texts.WriteString(W, "    refcnt = "); Texts.WriteInt(W, m.refcnt, 0);
+		Texts.WriteLn(W);
+		m := m.link;
+	END;
+END ShowMods;
+
+PROCEDURE FreeMod (VAR S: Texts.Scanner);
+BEGIN
+	Texts.WriteString(W, S.s); Texts.WriteString(W, " unloading");
+	Texts.Append(Oberon.Log, W.buf);
+	IF S.nextCh # "*" THEN Modules.Free(S.s, FALSE)
+	ELSE Modules.Free(S.s, TRUE); Texts.Scan(S); Texts.WriteString(W, " all")
+	END;
+	IF Modules.res # 0 THEN Texts.WriteString(W, " failed"); Modules.res := 0 END;
+	Texts.WriteLn(W);
+	Texts.Append(Oberon.Log, W.buf)
+END FreeMod;
+
+PROCEDURE Free*;
+	VAR par: Oberon.ParList;
+	T: Texts.Text; S: Texts.Scanner;
+	beg, end, time: LONGINT;
+BEGIN
+	Texts.WriteString(W, "System.Free"); Texts.WriteLn(W);
+	Texts.Append(Oberon.Log, W.buf);
+	par := Oberon.Par;
+	Texts.OpenScanner(S, par.text, par.pos); Texts.Scan(S);
+	WHILE S.class = Texts.Name DO FreeMod(S); Texts.Scan(S) END;
+	IF (S.class = Texts.Char) & (S.c = "^") THEN Oberon.GetSelection(T, beg, end, time);
+		IF time >= 0 THEN Texts.OpenScanner(S, T, beg); Texts.Scan(S);
+			IF S.class = Texts.Name THEN FreeMod(S) END
+		END
+	END
+END Free;
+
+PROCEDURE ShowModules*;
+VAR T: Texts.Text;
+BEGIN
+	T := NewText("");
+	ShowMods(W);
+	Texts.Append(T, W.buf);
+	OpenText("System.ShowModules", T, TRUE);
+END ShowModules;
+
+PROCEDURE OpenArgs (VAR S: Texts.Scanner);
+	VAR beg, end, time: LONGINT; T: Texts.Text;
+BEGIN
+	Texts.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos);  Texts.Scan(S);
+	IF (S.class = Texts.Char) & (S.c = "^") THEN
+		Oberon.GetSelection(T, beg, end, time);
+		IF time >= 0 THEN Texts.OpenScanner(S, T, beg); Texts.Scan(S)
+		ELSE S.class := Texts.Inval;
+		END
+	END
+END OpenArgs;
+
+PROCEDURE ShowCommands*;
+	VAR M: Modules.Module; i: LONGINT;
+		T: Texts.Text;
+BEGIN
+	OpenArgs(Sx);
+	IF Sx.class = Texts.Name THEN i := 0;
+		WHILE Sx.s[i] >= "0" DO INC(i) END;
+		Sx.s[i] := 0X;
+		M := Modules.ThisMod(Sx.s);
+		IF M # NIL THEN
+			T := NewText("");
+			i := 0;
+			WHILE (M.cmds # NIL) & (i < LEN(M.cmds^)) DO
+				Texts.WriteString(W, M.name); Texts.Write(W, "."); Texts.WriteString(W, M.cmds[i].name); Texts.WriteLn(W);
+				INC(i)
+			END ;
+			Texts.Append(T, W.buf);
+			
+			OpenText("System.Commands", T, TRUE);
+		END
+	END
+END ShowCommands;
+
+PROCEDURE ChangeDirectory*;
+	VAR
+		dir: ARRAY 261 OF CHAR;
+		done: BOOLEAN;
+BEGIN
+	OpenArgs(Sx);
+	Texts.WriteString(W, "System.ChangeDirectory");
+	IF Sx.class IN {Texts.Name, Texts.String} THEN
+		FileDir.ChangeDirectory(Sx.s, done);
+		IF done THEN
+			FileDir.GetWorkingDirectory(dir);
+			Texts.WriteString(W, " " ); Texts.WriteString(W, dir);
+		ELSE
+			Texts.WriteString(W, ": "); Texts.WriteString(W, Sx.s); Texts.WriteString(W, " not found")
+		END
+	ELSE Texts.WriteString(W, " failed");
+	END;
+	Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
+END ChangeDirectory;
+
+PROCEDURE CurrentDirectory*;
+	VAR dir: ARRAY 261 OF CHAR;
+BEGIN
+	FileDir.GetWorkingDirectory(dir);
+	Texts.WriteString(W, "System.CurrentDirectory: "); Texts.WriteString(W, dir);
+	Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
+END CurrentDirectory;
+
+PROCEDURE CreateDirectory*;
+	VAR done: BOOLEAN;
+BEGIN
+	OpenArgs(Sx);
+	IF Sx.class IN {Texts.Name, Texts.String} THEN
+		Texts.WriteString(W, "System.CreateDirectory "); Texts.WriteString(W, Sx.s);
+		FileDir.CreateDirectory(Sx.s, done);
+		IF ~done THEN Texts.WriteString(W, " failed") END;
+		Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf);
+	END
+END CreateDirectory;
+
+PROCEDURE DeleteDirectory*;
+	VAR done: BOOLEAN;
+BEGIN
+	OpenArgs(Sx);
+	IF Sx.class IN {Texts.Name, Texts.String} THEN
+		Texts.WriteString(W, "System.DeleteDirectory "); Texts.WriteString(W, Sx.s);
+		FileDir.DeleteDirectory(Sx.s, done);
+		IF ~done THEN Texts.WriteString(W, " failed") END;
+		Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf);
+	END
+END DeleteDirectory;
+
+PROCEDURE CopyFile (name: ARRAY OF CHAR; VAR S: Texts.Scanner);
+	VAR f, g: Files.File; Rf, Rg: Files.Rider; buf: ARRAY 1024 OF CHAR;
+BEGIN Texts.Scan(S);
+	IF (S.class = Texts.Char) & (S.c = "=") THEN Texts.Scan(S);
+		IF (S.class = Texts.Char) & (S.c = ">") THEN Texts.Scan(S);
+			IF S.class IN {Texts.Name, Texts.String} THEN
+				Texts.WriteString(W, name); Texts.WriteString(W, " => "); Texts.WriteString(W, S.s);
+				Texts.WriteString(W, " copying");
+				Texts.Append(Oberon.Log, W.buf);
+				f := Files.Old(name);
+				IF f # NIL THEN
+					g := Files.New(S.s);
+					IF g # NIL THEN
+						Files.Set(Rf, f, 0); Files.Set(Rg, g, 0);
+						Files.ReadBytes(Rf, buf, 1024);
+						WHILE ~Rf.eof DO
+							Files.WriteBytes(Rg, buf, 1024); Files.ReadBytes(Rf, buf, 1024)
+						END;
+						Files.WriteBytes(Rg, buf, 1024-Rf.res);
+						Files.Register(g)
+					ELSE Texts.WriteString(W, " failed")
+					END
+				ELSE Texts.WriteString(W, " failed")
+				END;
+				Texts.WriteLn(W);
+				Texts.Append(Oberon.Log, W.buf)
+			END
+		END
+	END
+END CopyFile;
+
+PROCEDURE CopyFiles*;
+BEGIN
+	OpenArgs(Sx);
+	Texts.WriteString(W, "System.CopyFiles"); Texts.WriteLn(W);
+	Texts.Append(Oberon.Log, W.buf);
+	WHILE Sx.class IN {Texts.Name, Texts.String} DO CopyFile(Sx.s, Sx); Texts.Scan(Sx) END;
+END CopyFiles;
+
+PROCEDURE RenameFile (name: ARRAY OF CHAR; VAR S: Texts.Scanner);
+	VAR res: INTEGER;
+BEGIN Texts.Scan(S);
+	IF (S.class = Texts.Char) & (S.c = "=") THEN Texts.Scan(S);
+		IF (S.class = Texts.Char) & (S.c = ">") THEN Texts.Scan(S);
+			IF S.class IN {Texts.Name, Texts.String} THEN
+				Texts.WriteString(W, name); Texts.WriteString(W, " => "); Texts.WriteString(W, S.s);
+				Texts.WriteString(W, " renaming");
+				Texts.Append(Oberon.Log, W.buf);
+				Files.Rename(name, S.s, res);
+				IF res # 0 THEN Texts.WriteString(W, " failed") END;
+				Texts.WriteLn(W);
+				Texts.Append(Oberon.Log, W.buf)
+			END
+		END
+	END
+END RenameFile;
+
+PROCEDURE RenameFiles*;
+BEGIN
+	OpenArgs(Sx);
+	Texts.WriteString(W, "System.RenameFiles"); Texts.WriteLn(W);
+	Texts.Append(Oberon.Log, W.buf);
+	WHILE Sx.class IN {Texts.Name, Texts.String} DO RenameFile(Sx.s, Sx); Texts.Scan(Sx) END;
+END RenameFiles;
+
+PROCEDURE DeleteFile (VAR name: ARRAY OF CHAR);
+	VAR res: INTEGER;
+BEGIN
+	Texts.WriteString(W, name); Texts.WriteString(W, " deleting");
+	Texts.Append(Oberon.Log, W.buf);
+	Files.Delete(name, res);
+	IF res # 0 THEN Texts.WriteString(W, " failed") END;
+	Texts.WriteLn(W);
+	Texts.Append(Oberon.Log, W.buf)
+END DeleteFile;
+
+PROCEDURE DeleteFiles*;
+VAR S: Texts.Scanner; beg, end, time: LONGINT; T: Texts.Text;
+BEGIN 
+	Texts.WriteString(W, "System.DeleteFiles"); Texts.WriteLn(W);
+	Texts.Append(Oberon.Log, W.buf);
+	Texts.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos);  Texts.Scan(S);
+	IF (S.class = Texts.Char) & (S.c = "^") THEN
+		Oberon.GetSelection(T, beg, end, time);
+		IF time >= 0 THEN Texts.OpenScanner(S, T, beg); Texts.Scan(S)
+		ELSE S.class := Texts.Inval
+		END;
+		WHILE (S.class IN {Texts.Name, Texts.String}) DO DeleteFile(S.s);
+			IF Texts.Pos(S) < end THEN Texts.Scan(S)
+			ELSE S.class := Texts.Inval
+			END
+		END
+	ELSE
+		WHILE S.class IN {Texts.Name, Texts.String} DO DeleteFile(S.s); Texts.Scan(S) END
+	END
+END DeleteFiles;
+
+PROCEDURE  *Enumerator(path, name: ARRAY OF CHAR; time, date, size: LONGINT; isdir: BOOLEAN);
+VAR t, d: LONGINT; A: Objects.AttrMsg; res: INTEGER;
+BEGIN
+	IF isdir & textDocs THEN
+		Texts.SetColor(W, (*Display3.blue*)3)
+	END;
+	IF path # curpath THEN
+		Texts.WriteString(W, path);
+		Texts.Write(W, FileDir.PathChar)
+	END;
+	Texts.WriteString(W, name); 
+	IF detail THEN
+		Texts.WriteDate(W, time, date);
+		IF ~isdir THEN Texts.WriteString(W, "   "); Texts.WriteInt(W, size, 0) END
+	END;
+	IF isdir THEN
+		INC(noDirs);
+		IF textDocs THEN
+			Oberon.Call("TextGadgets.NewControl", Oberon.Par, FALSE, res);
+			IF res = 0 THEN
+				A.name := "Cmd"; A.class := Objects.String; A.id := Objects.set; A.s := "System.Directory ";
+				t := 0; WHILE A.s[t] # 0X DO INC(t) END;
+				A.s[t] := 022X; INC(t);
+				d := 0;
+				WHILE (path[d] # 0X) & (t < 62) DO
+					A.s[t] := path[d]; INC(t); INC(d)
+				END;
+				IF (A.s[t-1] # FileDir.PathChar) & (t < 62) THEN
+					A.s[t] := FileDir.PathChar; INC(t)
+				END;
+				d := 0;
+				WHILE (name[d] # 0X) & (t < 62) DO
+					A.s[t] := name[d]; INC(t); INC(d)
+				END;
+				d := 0;
+				A.s[t] := FileDir.PathChar; INC(t);
+				WHILE (pattern[d] # 0X) & (t < 62) DO
+					A.s[t] := pattern[d]; INC(t); INC(d)
+				END;
+				A.s[t] := 022X; INC(t); A.s[t] := 0X;
+				Objects.NewObj.handle(Objects.NewObj, A);
+				Texts.WriteObj(W, Objects.NewObj)
+			END;
+			Texts.SetColor(W, (*Display3.textC*)Display.FG)
+		ELSE
+			Texts.WriteString(W, "   <DIR>")
+		END
+	ELSE
+		INC(noFiles)
+	END;
+	Texts.WriteLn(W)
+END Enumerator;
+
+PROCEDURE Directory*;
+	VAR pos, i, j: INTEGER;
+		T: Texts.Text; beg, end, time: LONGINT; ch: CHAR; path, dirpath: ARRAY 261 OF CHAR;
+		Title: ARRAY 64 OF CHAR; R: Texts.Reader;
+		quoted: BOOLEAN;
+BEGIN
+	Texts.OpenReader(R, Oberon.Par.text, Oberon.Par.pos);
+	Texts.Read(R, ch);
+	WHILE ~R.eot & (ch <= " ") & (ch # 0DX) DO Texts.Read(R, ch) END;
+	IF (ch = "^") OR (ch = 0DX) THEN Oberon.GetSelection(T, beg, end, time);
+		IF time > 0 THEN Texts.OpenReader(R, T, beg); Texts.Read(R, ch);
+			WHILE ~R.eot & (ch <= " ") DO Texts.Read(R, ch) END;
+		END;
+	END;
+	i := 0; j := 0; pos := 0;
+	IF ch = 022X THEN Texts.Read(R, ch); quoted := TRUE ELSE quoted := FALSE END;
+	WHILE ~R.eot & ((~quoted & (ch > " ")) OR (quoted & (ch # 022X))) & (ch # Oberon.OptionChar) DO
+		path[i] := ch; pattern[j] := ch; INC(j);
+		IF ch = FileDir.PathChar THEN pos := i; j := 0 END;
+		INC(i); Texts.Read(R, ch);
+	END;
+	pattern[j] := 0X;
+	IF pattern = "" THEN pattern := "*" END;
+	IF pos = 0 THEN (* no path *) path[0] := 0X;
+	ELSIF (pos = 0) OR (pos = 2) & (path[1] = ":") THEN (* keep trailing \ *) path[pos+1] := 0X
+	ELSE (* cut last \ *) path[pos] := 0X;
+	END;
+	IF ch = Oberon.OptionChar THEN
+		Texts.Read(R, ch); detail := CAP(ch) = "D"
+	ELSE
+		detail := FALSE
+	END;
+	T := NewText("");
+	i := 0;
+	Title := "System.Directory "; (* 17 chars *)
+	WHILE pattern[i] # 0X DO Title[i+17] := pattern[i]; INC(i) END;
+	Title[i+17] := 0X;
+	FileDir.GetWorkingDirectory(curpath);
+	COPY(path, dirpath);
+	Texts.WriteString(W, "Directory of "); Texts.WriteString(W, path);
+	Texts.WriteLn(W); Texts.WriteLn(W); Texts.Append(T, W.buf);
+	noFiles := 0; noDirs := 0;
+	FileDir.EnumerateFiles(dirpath, pattern, detail, Enumerator);
+	Texts.WriteLn(W); Texts.WriteInt(W, noFiles, 0); Texts.WriteString(W, " Files");
+	Texts.Write(W, 09X); Texts.WriteInt(W, noDirs, 0); Texts.WriteString(W, " Directories");
+	Texts.WriteLn(W); Texts.Append(T, W.buf);
+	OpenText(Title, T, TRUE)
+END Directory;
+
+(** Clear the text of the current document *)
+PROCEDURE Clear*;
+	VAR
+		S: Texts.Scanner;
+		par: Oberon.ParList;
+		F: Display.Frame;
+		L: Objects.LinkMsg;
+		A: Objects.AttrMsg;
+BEGIN
+	par := Oberon.Par; F := NIL;
+	L.id := Objects.get; L.name := "Model"; L.obj := NIL;
+	Texts.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos); Texts.Scan(S);
+	IF (S.class = Texts.Char) & (S.c = "*") THEN
+		F := Oberon.MarkedFrame()
+	ELSIF (par.vwr # NIL) & (par.vwr.dsc # NIL) THEN
+		F := par.vwr.dsc.next;
+		F.handle(F, L);
+		IF (L.obj # NIL) & (L.obj IS Display.Frame) THEN
+			A.id := Objects.get; A.name := "Gen"; L.obj.handle(L.obj, A);
+			IF A.s = "PanelDocs.NewDoc" THEN (* Desktop *)
+				F := Oberon.Par.obj(Display.Frame);
+				F := F.dlink(Display.Frame);
+				F := F.next.dsc
+			ELSE
+				F := L.obj(Display.Frame)
+			END
+		END
+	END;
+	IF F # NIL THEN
+		F.handle(F, L);
+		IF (L.obj # NIL) & (L.obj IS Texts.Text) THEN
+			Texts.Delete(L.obj(Texts.Text), 0, L.obj(Texts.Text).len)
+		END
+	END
+END Clear;
+
+PROCEDURE Quit*;
+BEGIN Win32.Exit(0)
+END Quit;
+
+PROCEDURE WriteRegistryError (VAR W: Texts.Writer);
+BEGIN
+	IF Registry.res = Registry.RegistryNotFound THEN Texts.WriteString(W, "(no .ini file specified)");
+	ELSIF Registry.res = Registry.NotFound THEN Texts.WriteString(W, "(undefined section or key)")
+	END;
+END WriteRegistryError;
+
+PROCEDURE WriteTriple (VAR W: Texts.Writer; section, key, value: ARRAY OF CHAR);
+BEGIN
+	Texts.WriteString(W, section); Texts.Write(W, " ");
+	Texts.WriteString(W, key);
+	Texts.WriteString(W, " := ");
+	Texts.WriteString(W, value);
+END WriteTriple;
+
+PROCEDURE Set*;	(* ^ | section key ":=" value *)	(* put a value into the registry *)
+	VAR section, key, value: ARRAY 64 OF CHAR; done: BOOLEAN; line: INTEGER;
+
+	PROCEDURE ReadAssign(VAR done: BOOLEAN; colon: BOOLEAN);
+	BEGIN
+		done := FALSE; Texts.Scan(Sx);
+		IF colon THEN
+			IF (Sx.class = Texts.Char) & (Sx.c = ":") THEN
+				Texts.Scan(Sx)
+			ELSE
+				RETURN
+			END
+		END;
+		done := (Sx.class = Texts.Char) & (Sx.c = "=")
+	END ReadAssign;
+
+BEGIN
+	OpenArgs(Sx);
+	IF Sx.class IN {Texts.Name, Texts.String} THEN COPY(Sx.s, section);
+		Texts.Scan(Sx);
+		IF Sx.class IN {Texts.Name, Texts.String} THEN COPY(Sx.s, key);
+			IF key[Sx.len-1] = ":" THEN
+				key[Sx.len-1] := 0X; ReadAssign(done, FALSE)
+			ELSE
+				ReadAssign(done, TRUE)
+			END;
+			IF done THEN
+				line := Sx.line; Texts.Scan(Sx);
+				IF (Sx.class IN {Texts.Name, Texts.String}) & (line = Sx.line) THEN COPY(Sx.s, value)
+				ELSE value := ""
+				END;
+				Texts.WriteString(W, "   ");
+				Registry.Set(section, key, value);
+				IF Registry.res = Registry.Done THEN WriteTriple(W, section, key, value)
+				ELSE Texts.WriteString(W, "System.Set failed "); WriteRegistryError(W)
+				END;
+				Texts.WriteLn(W);
+				Texts.Append(Oberon.Log, W.buf)
+			END
+		END
+	END
+END Set;
+
+PROCEDURE KeyHandler (key, value: ARRAY OF CHAR);
+BEGIN Texts.WriteString(W, "   "); WriteTriple(W, "", key, value); Texts.WriteLn(W);
+END KeyHandler;
+
+PROCEDURE Get*;	(* ^ | section key *) (* get a value from the registry *)
+	VAR section, value: ARRAY 64 OF CHAR;
+BEGIN
+	OpenArgs(Sx);
+	IF Sx.class IN {Texts.Name, Texts.String} THEN COPY(Sx.s, section);
+		Texts.Scan(Sx);
+		IF (Sx.class IN {Texts.Name, Texts.String}) & (Sx.line = 0) THEN
+			Registry.Get(section, Sx.s, value);
+			Texts.WriteString(W, "   ");
+			IF Registry.res = Registry.Done THEN
+				WriteTriple(W, section, Sx.s, value)
+			ELSE
+				Texts.WriteString(W, "System.Get failed ");
+				WriteRegistryError(W);
+			END;
+			Texts.WriteLn(W);
+		ELSE
+			Texts.Write(W, "["); Texts.WriteString(W, section); Texts.Write(W, "]"); Texts.WriteLn(W);
+			Registry.Enumerate(section, KeyHandler);
+		END;
+		Texts.Append(Oberon.Log, W.buf);
+	END
+END Get;
+
+	(* ------------------------ trap handling and memory dump -------------------------------- *)
+
+PROCEDURE DumpVars (VAR W: Texts.Writer; VAR pos: LONGINT; base: LONGINT);
+	CONST VarTag = 1X; VarParTag = 3X;
+	VAR ch, form: CHAR;
+		sintval: SHORTINT; intval: INTEGER; lintval: LONGINT; realval: REAL; lrealval: LONGREAL; setval: SET;
+		adr, offs: LONGINT;
+		name: ARRAY 32 OF CHAR;
+BEGIN
+	(*S.GET(pos, ch);*) Traps.ReadBytes(pos, ch, 1); INC(pos);
+	WHILE (ch = VarTag) OR (ch = VarParTag) DO
+		(*S.GET(pos, form);*) Traps.ReadBytes(pos, form, 1); INC(pos);
+		Traps.ReadNum(pos, offs); Traps.ReadString(pos, name);
+		adr := base + offs;
+		IF ch = VarParTag THEN (*S.GET(adr, adr)*) Traps.ReadBytes(adr, adr, 4) END;
+		Texts.WriteString(W, "   "); Texts.WriteString(W, name); Texts.WriteString(W, " = ");
+		IF ~Traps.eob THEN
+			CASE ORD(form) OF
+				| 1H: (* Byte *)
+					(*S.GET(adr, ch);*) Traps.ReadBytes(adr, ch, 1); Texts.WriteInt(W, ORD(ch), 0);
+				| 2H: (* Boolean *)
+					(*S.GET(adr, ch);*) Traps.ReadBytes(adr, ch, 1);
+					IF ORD(ch) = 0 THEN Texts.WriteString(W, "FALSE") ELSE Texts.WriteString(W, "TRUE") END;
+				| 3H: (* Char *)
+					(*S.GET(adr, ch);*) Traps.ReadBytes(adr, ch, 1);
+					IF (" " <= ch) & (ch <= "~") THEN Texts.Write(W, 22X); Texts.Write(W, ch); Texts.Write(W, 22X);
+					ELSE Texts.WriteString(W, "CHR("); Texts.WriteInt(W, ORD(ch), 0); Texts.Write(W, ")");
+					END;
+				| 4H: (* Shortint *)
+					(*S.GET(adr, sintval);*) Traps.ReadBytes(adr, sintval, 1); Texts.WriteInt(W, sintval, 0);
+				| 5H: (* Integer *)
+					(*S.GET(adr, intval);*) Traps.ReadBytes(adr, intval, 2); Texts.WriteInt(W, intval, 0);
+				| 6H: (* Longint *)
+					(*S.GET(adr, lintval);*) Traps.ReadBytes(adr, lintval, 4); Texts.WriteInt(W, lintval, 0);
+				| 7H: (* Real *)
+					(*S.GET(adr, realval);*) Traps.ReadBytes(adr, realval, 4); Texts.WriteReal(W, realval, 0);
+				| 8H: (* Longreal *)
+					(*S.GET(adr, lrealval);*) Traps.ReadBytes(adr, lrealval, 8); Texts.WriteLongReal(W, lrealval, 0);
+				| 9H: (* Set *)
+					(*S.GET(adr, setval);*) Traps.ReadBytes(adr, setval, 4); Texts.WriteSet(W, setval)
+				| 0DH: (* Pointer *)
+					(*S.GET(adr, lintval);*) Traps.ReadBytes(adr, lintval, 4); Texts.WriteHex(W, lintval); Texts.Write(W, "H")
+				| 0FH: (* Array of char *)
+					Texts.Write(W, 22X);
+					(*S.GET(adr, ch);*) Traps.ReadBytes(adr, ch, 1); INC(adr);
+					WHILE (" " <= ch) & (ch <= "~") DO
+						Texts.Write(W, ch); (*S.GET(adr, ch);*) Traps.ReadBytes(adr, ch, 1); INC(adr)
+					END;
+					Texts.Write(W, 22X);
+			ELSE Texts.WriteString(W, "(unknown type)")
+			END
+		ELSE
+			Texts.WriteString(W, "(invalid address)")
+		END;
+		Texts.WriteLn(W);
+		(*S.GET(pos, ch);*) Traps.ReadBytes(pos, ch, 1); INC(pos)
+	END
+END DumpVars;
+
+PROCEDURE State*;
+	VAR T: Texts.Text;
+		mod: Modules.Module;
+		 i: INTEGER;
+		refs, offs: LONGINT;  ch: CHAR;
+BEGIN
+	OpenArgs(Sx);
+	T := NewText("");
+	IF Sx.class = Texts.Name THEN i := 0;
+		WHILE Sx.s[i] > "." DO INC(i) END;
+		Sx.s[i] := 0X; 
+		Texts.WriteString(W, Sx.s);
+		mod := Modules.modList;
+		WHILE (mod # NIL) & (mod.name # Sx.s) DO mod := mod.link END ;
+		IF mod # NIL THEN Texts.WriteLn(W);
+			refs := S.ADR(mod.refs[0]);
+			LOOP
+				(*S.GET(refs, ch);*) Traps.ReadBytes(refs, ch, 1); INC(refs);
+				IF ch = 0F8X THEN
+					Traps.ReadNum(refs, offs);
+					(*S.GET(refs, ch);*) Traps.ReadBytes(refs, ch, 1);
+					(*S.GET(refs, ch);*) Traps.ReadBytes(refs, ch, 1);
+					INC(refs, 2);
+					IF ch = "$" THEN INC(refs, 1); EXIT END;
+				END
+			END;
+			DumpVars(W, refs, mod.sb);
+		ELSE Texts.WriteString(W, " not loaded")
+		END;
+		Texts.WriteLn(W); Texts.Append(T, W.buf);
+	END;
+	OpenText("System.state", T, TRUE);
+END State;
+
+  (* ------------- Toolbox for library management ---------------*)
+		
+  PROCEDURE ListLibrary (L: Objects.Library);
+  BEGIN Texts.WriteString(W, L.name); Texts.WriteLn(W)
+  END ListLibrary;
+
+  PROCEDURE ShowLibraries*;
+    VAR T: Texts.Text;
+  BEGIN
+    Objects.Enumerate(ListLibrary);
+    NEW(T); Texts.Open(T, "");
+    Texts.Append(T, W.buf);
+    OpenText("System.ShowLibraries", T, TRUE);
+  END ShowLibraries;
+
+  PROCEDURE FreeLibraries*;
+    VAR par: Oberon.ParList;
+      T: Texts.Text; S: Texts.Scanner;
+      beg, end, time: LONGINT;
+  BEGIN		
+    par := Oberon.Par;
+    Texts.OpenScanner(S, par.text, par.pos); Texts.Scan(S);
+    IF (S.class = Texts.Char) & (S.c = "^") THEN
+      Oberon.GetSelection(T, beg, end, time);
+      IF time >= 0 THEN Texts.OpenScanner(S, T, beg); Texts.Scan(S);
+        Objects.FreeLibrary(S.s); Texts.WriteString(W,S.s); Texts.WriteString(W, " freed"); Texts.WriteLn(W)
+      END
+    ELSE
+      WHILE S.class = Texts.Name DO
+        Objects.FreeLibrary(S.s); Texts.WriteString(W,S.s); Texts.WriteString(W, " freed"); Texts.WriteLn(W);
+        Texts.Scan(S)
+      END
+    END;
+    Texts.Append(Oberon.Log, W.buf)
+  END FreeLibraries;
+
+PROCEDURE TrapText(VAR p: Traps.TrapInfo);
+	VAR
+		pc, bp, sp, ref, refend, n, offs: LONGINT;
+		msg: ARRAY 64 OF CHAR;
+		name: ARRAY 32 OF CHAR;
+		mod: Modules.Module;
+	PROCEDURE Str(str: ARRAY OF CHAR);
+	BEGIN Texts.WriteString(W, str)
+	END Str;
+	PROCEDURE Hex(i: LONGINT);
+	BEGIN Texts.WriteHex(W, i); Texts.Write(W, "H")
+	END Hex;
+	PROCEDURE Ln();
+	BEGIN Texts.WriteLn(W)
+	END Ln;
+BEGIN
+	IF Kernel.TrapHandlingLevel < 2 THEN
+		Traps.eob := FALSE; INC(Kernel.TrapHandlingLevel);
+		IF T # NIL THEN Texts.Append(T, W.buf); T := NIL END;
+		IF Kernel.TrapHandlingLevel > 1 THEN
+			Win32.SyncDisplay;
+			Str("*** RECURSIVE TRAP: "); Ln;
+		END;
+		pc := p.exc.addr; bp := p.cont.Ebp; sp := p.cont.Esp;
+		IF pc = 0 THEN (* assume call of procedure variable with value NIL *)
+			Traps.ReadBytes(sp, pc, 4) (* get return address on top of stack *)
+		END;
+		(* Viewers.Close(NIL); (* close offending viewer, if any *) *)
+		Str("Trap ");
+		Traps.TrapMsg(p.exc.code, p.cont.Eax, msg); Str(msg); Ln();
+		Str("    PC = "); Hex(pc);
+		Traps.FindProc(pc, mod, ref, refend);
+		IF mod # NIL THEN Str(" ("); Hex(pc - S.ADR(mod.code[0])); Str(") ") END;
+		Ln(); Ln(); T := NewText("");
+		(* stack dump *)
+		n := 0;
+		WHILE (bp < Kernel.stackBottom) & (n < 64) DO
+			IF mod # NIL THEN
+				Str(mod.name); Str(".");
+				Traps.ReadNum(ref, offs); Traps.ReadString(ref, name);
+				Str(name); 
+				Str("+"); Hex(pc - S.ADR(mod.code[0])); Ln();
+				IF name = "$$" THEN DumpVars(W, ref, mod.sb) ELSE DumpVars(W, ref, bp) END
+			ELSE
+				Str("mod not found "); Ln()
+			END;
+			Traps.ReadBytes(bp+4, pc, 4); (* pc of caller *)
+			Traps.ReadBytes(bp, bp, 4); (* bp of caller *)
+			INC(n);
+			Traps.FindProc(pc, mod, ref, refend)
+		END;
+		Texts.Append(T, W.buf);
+		OpenText("System.Trap", T, TRUE)
+	ELSE
+		INC(Kernel.TrapHandlingLevel);
+		IF Kernel.TrapHandlingLevel < 3 THEN
+			IF T # NIL THEN Texts.Append(T, W.buf); T := NIL END
+		ELSIF Kernel.TrapHandlingLevel > 5 THEN
+			DEC(Kernel.GCenabled); Kernel.Exit(1)
+		END;
+		User32.MessageBeep(-1);
+	END;
+	Kernel.TrapHandlingLevel := 0;
+END TrapText;
+
+PROCEDURE Init;
+	VAR
+		mod: Modules.Module;
+		res: ARRAY 8 OF CHAR;
+BEGIN
+	Traps.trapHandler := TrapText;
+	Registry.Get("System", "InstallGadgets", res);
+	IF (Registry.res=Registry.Done) & (res[0]="Y") THEN textDocs := TRUE; mod:=Modules.ThisMod("TextDocs")	
+	ELSE textDocs := FALSE; mod:=Modules.ThisMod("TextFrames") END
+END Init;
+
+	PROCEDURE ShowTasks*;
+		VAR
+			T: Texts.Text;
+			tsk: Oberon.Task;
+			m: Modules.Module;
+			name: ARRAY 32 OF CHAR;
+			pc, codebase, pos, end, offs, t: LONGINT;
+	BEGIN
+		T := NewText(""); t := Input.Time();
+		tsk := Oberon.CurTask;
+		REPEAT
+			pc := S.VAL(LONGINT, tsk.handle)+16;
+			m := Modules.modList; codebase := S.ADR(m.code[0]);
+			WHILE (m # NIL) & ((pc < codebase) OR ((codebase + LEN(m.code^)) < pc)) DO
+				m := m.link;
+				IF m # NIL THEN codebase := S.ADR(m.code[0]) END;
+			END;
+			IF m # NIL THEN
+				Texts.WriteString(W, m.name); Texts.Write(W, ".");
+				Traps.FindProc(pc, m, pos, end);
+				Traps.ReadNum(pos, offs); Traps.ReadString(pos, name);
+				Texts.WriteString(W, name)
+			ELSE
+				Texts.WriteString(W, "Module not loaded!!!")
+			END;
+			Texts.Write(W, 09X); Texts.WriteInt(W, tsk.time-t, 0); Texts.WriteString(W, " ms");
+			IF tsk.safe THEN
+				Texts.Write(W, 09X); Texts.WriteString(W, "safe")
+			END;
+			Texts.WriteLn(W);
+			tsk := tsk.next
+		UNTIL tsk = Oberon.CurTask;
+		Texts.Append(T, W.buf);
+		OpenText("System.ShowTasks", T, TRUE)
+	END ShowTasks;
+
+PROCEDURE OpenViewers;
+	VAR mod: Modules.Module;
+BEGIN
+	Texts.WriteString(W, "Oberon System 3 for Windows");
+	Texts.SetFont(W, Fonts.This("Syntax8.Scn.Fnt")); Texts.SetOffset(W, 6);
+	Texts.WriteString(W, "TM");
+	Texts.SetFont(W, Fonts.Default); Texts.SetOffset(W, 0); Texts.WriteLn(W);
+	Texts.Write(W, 09X); Texts.WriteString(W, "Release 2.2 (Win32s/7.11.97/CD) ");
+	Console.Str("Release 2.2 (Win32s/7.11.97/CD)"); Console.Ln();
+	Texts.WriteString(W, "on Windows ");
+	IF Win32.OS.platform = 0 THEN
+		Texts.WriteString(W, "NT")
+	ELSIF (Win32.OS.platform = 1) & (Win32.OS.major >= 4) THEN
+		Texts.WriteString(W, "95")
+	END;
+	Texts.Write(W, " "); Texts.WriteInt(W, Win32.OS.major, 0); Texts.Write(W, "."); Texts.WriteInt(W, Win32.OS.minor, 0);
+	Texts.WriteLn(W); Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf);
+	mod := Modules.ThisMod("OMI");
+	mod := Modules.ThisMod("Configuration");
+	IF mod = NIL THEN
+		OpenLog;
+		OpenText("System.Tool", NewText("System.Tool"), TRUE);
+	END
+END OpenViewers;
+
+BEGIN Init(); Texts.OpenWriter(W); OpenViewers()
+END System.

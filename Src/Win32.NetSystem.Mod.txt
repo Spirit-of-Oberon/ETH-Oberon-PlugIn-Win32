@@ -1,0 +1,814 @@
+﻿(* OBERON System 3, Release 2.2.
+
+Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
+e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon System 3 license contract.
+The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+or requested from the above mentioned address.
+
+Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
+in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE NetSystem;	(** mg 3.4.94, jm 3.4.95 adjusted for Windows 3.1/NT/tk 23.5.95/jm 21.6.95 *)
+
+(*
+To be done:
+	- Find out for what the gateway is used?
+	
+	jm 30.5.95 - Changed SetUser
+	jm 21.6.95 - Fixed ConvertIpAdr
+*)
+
+IMPORT SYSTEM, Registry, Win32, Modules, Oberon, Display, Display3, Bitmaps, Effects, Input, Fonts, Texts, UDP, TCP, Strings;
+
+CONST
+(** res values *)
+	done* = 0; (** everything went ok *)
+	error* = 1; (** failure occured *)
+	timeout* = 2; (** opening a connection is timed out *)
+	CR = 0DX; LF = 0AX; ESC = 1BX;
+
+(** return values of procedure State *)
+	closed* = 0; (** connection is closed (neither sending nor receiving) *)
+	listening* = 1; (** passive connection is listening for a request *)
+	in* = 2; (** receiving only *)
+	out* = 3; (** sending only *)
+	inout* = 4; (** sending and receiving is possible *)
+	waitCon* = 5; (** still waiting for beeing connected *)
+	errorCon* = 6; (** connecting failed *)
+
+(** any port value *)
+	anyport* = 0;
+	
+CONST
+	bufsize = 4096;
+	IPAdrLen = 4;
+
+TYPE
+	Connection* = POINTER TO ConnectionDesc; (** handle for TCP connections *)
+	ConnectionDesc* = RECORD
+		res*: INTEGER; (** result of LRU operation on a connection (error indication) *)
+		port: TCP.Connection;
+		listC: TCP.Listener;
+		
+		(* receive buffer *)
+		rcvebuf: ARRAY bufsize OF SYSTEM.BYTE;
+		rcvecount, rcvebeg, rcveend: LONGINT;
+		
+		(* send buffer *)
+		sendbuf: ARRAY bufsize OF SYSTEM.BYTE;
+		sendcount: LONGINT;
+	END;
+
+	Socket* = POINTER TO SocketDesc; (** handle for UDP "connections" *)
+	SocketDesc* = RECORD
+		res*: INTEGER; (* result of LRU operation on a connection (error indication) *)
+		sock: UDP.Socket;
+	END;
+
+	IPAdr* = LONGINT; (** ip-number, where ip[0] contains the most significant byte *)
+	
+	Array2 = ARRAY 2 OF CHAR;
+	Array4 = ARRAY 4 OF CHAR;
+	Array8 = ARRAY 8 OF CHAR;
+
+	Password = POINTER TO PasswordDesc;
+	PasswordDesc = RECORD
+		service, user, host, passwd: ARRAY 64 OF CHAR;
+		next: Password
+	END;
+
+VAR
+	hostName*: ARRAY 65 OF CHAR; (** own machine name *)
+	hostIP*: IPAdr; (** ip-number of own machine *)
+	anyIP*: IPAdr; (** any ip-number *)
+	allIP*: IPAdr;
+	asyncEnable, UpdateDisplay: BOOLEAN;
+	W: Texts.Writer;
+	passwords: Password;
+
+PROCEDURE Code(VAR s: ARRAY OF CHAR): LONGINT;
+VAR i: INTEGER; a, b, c: LONGINT;
+BEGIN
+	a := 0; b := 0; i := 0;
+	WHILE s[i] # 0X DO
+		c := b; b := a; a := (c MOD 509 + 1) * 127 + ORD(s[i]);
+		INC(i)
+	END;
+	IF b >= 32768 THEN b := b - 65536 END;
+	RETURN b * 65536 + a
+END Code;
+
+PROCEDURE Start*;
+END Start;
+
+PROCEDURE Stop*;
+END Stop;
+
+	PROCEDURE ToHost*(num: ARRAY OF CHAR; VAR adr: IPAdr; VAR done: BOOLEAN);
+		VAR i, j, n: LONGINT;
+	BEGIN
+		done := TRUE; i := 0; j := 0; adr := 0;
+		WHILE done & (j < 4) & (num[i] # 0X) DO
+			n := 0;
+			WHILE (num[i] >= "0") & (num[i] <= "9") & (n < 256) DO
+				n := n * 10 + ORD(num[i]) - ORD("0"); INC(i)
+			END;
+			IF num[i] = "." THEN
+				INC(i)
+			END;
+			adr := adr*256+n;
+			done := done & (n <= 256); INC(j)
+		END;
+		adr := TCP.htonl(adr);
+		done := done & (j = 4) & (num[i] = 0X)
+	END ToHost;
+
+	PROCEDURE ToNum*(adr: IPAdr; VAR num: ARRAY OF CHAR);
+		VAR i, j, n: LONGINT;
+		PROCEDURE Digit(d: LONGINT);
+		BEGIN
+			num[j] := CHR(ORD("0")+d); INC(j)
+		END Digit;
+	BEGIN
+		j := 0;
+		FOR i := 0 TO 3 DO
+			n := adr MOD 256; adr := adr DIV 256;
+			IF n >= 100 THEN
+				Digit(n DIV 100); Digit((n DIV 10) MOD 10)
+			ELSIF n >= 10 THEN
+				Digit(n DIV 10)
+			END;
+			Digit(n MOD 10);
+			num[j] := "."; INC(j)
+		END;
+		num[j-1] := 0X
+	END ToNum;
+
+(** Procedure delivers the ip-number of a named host. If a symbolic name is given, it will be resolved by use of domain name
+	servers. *)
+PROCEDURE GetIP*(name: ARRAY OF CHAR; VAR IP: IPAdr);
+VAR res: INTEGER; adr: LONGINT;
+BEGIN
+	TCP.HostByName(name, adr, res);
+	IF res = 0 THEN
+		SYSTEM.MOVE(SYSTEM.ADR(adr), SYSTEM.ADR(IP), IPAdrLen)
+	ELSE
+		IP := anyIP
+	END
+END GetIP;
+
+(** GetName is the reverse operation to GetIP. Given an ip-number, it delivers the name of a host. *)
+PROCEDURE GetName*(IP: IPAdr; VAR name: ARRAY OF CHAR);
+VAR adr: TCP.IpAdr; res: INTEGER;
+BEGIN
+	SYSTEM.MOVE(SYSTEM.ADR(IP), SYSTEM.ADR(adr), 4);
+	TCP.HostByAddr(adr, name, res);
+	IF res # TCP.Done THEN name[0] := 0X END
+END GetName;
+
+PROCEDURE FlushSendBuffer(C: Connection);
+VAR len: LONGINT;
+BEGIN
+	IF C.sendcount > 0 THEN
+		len := C.sendcount;
+		TCP.WriteBytes(C.port, C.sendbuf, 0, len);
+		IF TCP.res # TCP.Done THEN C.res := error ELSE C.res := done END;
+		C.sendcount := 0;
+	END;
+END FlushSendBuffer;
+
+PROCEDURE TCPAvailable (C: Connection; VAR res: INTEGER): LONGINT;
+VAR len, i: LONGINT;
+BEGIN
+	FlushSendBuffer(C);
+	
+	IF C.rcvecount = bufsize THEN res := done; len := 0 (* lots of data available *)
+	ELSE
+		len := TCP.Available(C.port);
+		IF len < 0 THEN len := 0; res := error
+		ELSE
+			IF (len > 0) & (C.rcvecount < bufsize) THEN (* read into buffer, only till end*)
+				i := bufsize - C.rcveend;	(* space left in buffer *)
+				IF i > bufsize - C.rcvecount THEN i := bufsize - C.rcvecount END;	(* tk <=== do write only till C.rcvebeg *)
+				IF i > len THEN i := len END;
+				TCP.ReadBytes(C.port, C.rcvebuf, C.rcveend, i);	(* should not fail ! *)
+				INC(C.rcvecount, i); C.rcveend := (C.rcveend + i) MOD bufsize;
+				DEC(len, i); (* already read i *)
+			END;
+			res := done
+		END
+	END;
+	RETURN len + C.rcvecount
+END TCPAvailable;
+
+PROCEDURE TCPReceive (C: Connection; VAR buf: ARRAY OF SYSTEM.BYTE; beg, len: LONGINT; VAR res: INTEGER);
+VAR l: LONGINT; r: INTEGER;
+BEGIN
+	FlushSendBuffer(C);
+	(* read what we have so far *)
+	WHILE (C.rcvecount > 0) & (len > 0) DO
+		buf[beg] := C.rcvebuf[C.rcvebeg];
+		INC(beg); C.rcvebeg := (C.rcvebeg + 1) MOD bufsize;
+		DEC(len); DEC(C.rcvecount);
+	END;
+	IF len > 0 THEN (* not enough, must continue reading *)
+		REPEAT
+			l := TCP.Available(C.port);
+			IF l > 0 THEN
+				IF l > len THEN l := len END;
+				TCP.ReadBytes(C.port, buf, beg, l);
+				beg := beg + l; len := len - l
+			ELSIF C.port.state IN {1, 3} THEN
+				res := error; RETURN
+			END
+		UNTIL (len = 0) OR (TCP.res # TCP.Done);
+		IF TCP.res # TCP.Done THEN res := error ELSE res := done END
+	END;
+END TCPReceive;
+
+PROCEDURE TCPSend (C: Connection; VAR buf: ARRAY OF SYSTEM.BYTE; beg, len: LONGINT; VAR res: INTEGER);
+BEGIN
+	C.res := done;
+	WHILE (len > 0) & (C.res = done) DO
+		IF C.sendcount = bufsize THEN FlushSendBuffer(C) END;
+		C.sendbuf[C.sendcount] := buf[beg]; INC(C.sendcount); INC(beg); DEC(len)
+	END;
+	res := C.res
+END TCPSend;
+
+PROCEDURE OpenConn(VAR C: Connection; locPort: INTEGER; remIP: IPAdr; remPort: INTEGER; async: BOOLEAN; VAR res: INTEGER);
+VAR
+	conC: TCP.Connection;
+	listC: TCP.Listener;
+	remadr: TCP.IpAdr;
+	done: BOOLEAN;
+BEGIN
+	C := NIL;
+	IF remIP = anyIP THEN remadr := TCP.AnyAdr; done := TRUE
+	ELSE SYSTEM.MOVE(SYSTEM.ADR(remIP), SYSTEM.ADR(remadr), 4)
+	END;
+	IF remPort = TCP.AnyPort THEN
+		NEW(listC); TCP.Listen(listC, locPort, remadr, remPort, res);
+		IF res = TCP.Done THEN NEW(C); C.listC := listC
+		ELSE res := error
+		END
+	ELSE
+		NEW(conC); TCP.Connect(conC, locPort, remadr, ABS(remPort), Input.TimeUnit * 3, async & asyncEnable, res);
+		IF res = TCP.Done THEN
+			NEW(C);
+			C.port := conC;
+			C.rcvecount := 0; C.rcvebeg := 0; C.rcveend := 0;
+		ELSIF res # TCP.Timeout THEN res := error
+		END
+	END
+END OpenConn;
+
+(** Procedure opens a connection. locPort, remPort, remIP are contained in the quadrupel <locIP, remIP, locPort, remPort>
+	which determines a connection uniquely. As locIP is always the current machine, it is ommitted. If remPort is equal to
+	anyport or remIP is equal to anyIP, a passive connection will be opened. After execution, C is a brand new connection.
+	res indicates any error. *)
+PROCEDURE OpenConnection*(VAR C: Connection; locPort: INTEGER; remIP: IPAdr; remPort: INTEGER; VAR res: INTEGER);
+BEGIN
+	OpenConn(C, locPort, remIP, remPort, FALSE, res)
+END OpenConnection;
+
+(** Procedure opens a connection. locPort, remPort, remIP are contained in the quadrupel <locIP, remIP, locPort, remPort>
+	which determines a connection uniquely. As locIP is always the current machine, it is ommitted. If remPort is equal to
+	anyport or remIP is equal to anyIP, a passive connection will be opened. After execution, C is a brand new connection.
+	res indicates any error. *)
+PROCEDURE AsyncOpenConnection*(VAR C: Connection; locPort: INTEGER; remIP: IPAdr; remPort: INTEGER; VAR res: INTEGER);
+BEGIN
+	OpenConn(C, locPort, remIP, remPort, TRUE, res)
+END AsyncOpenConnection;
+
+(** Procedure closes the connection. You can't use it for send operations any more afterwards. *)
+PROCEDURE CloseConnection* (C: Connection);
+BEGIN
+	IF C # NIL THEN
+		IF C.listC # NIL THEN TCP.Close(C.listC)
+		ELSIF C.port # NIL THEN
+			FlushSendBuffer(C);
+			TCP.Disconnect(C.port)
+		ELSE HALT(99)
+		END
+	END
+END CloseConnection;
+
+(** Indicates whether there exists a remote machine which wants to connect to the local one. This Procedure is only usefully
+	defined on passive connections. For active connections (State(C) # listen), it always delivers FALSE. *)
+PROCEDURE Requested* (C: Connection): BOOLEAN;
+BEGIN RETURN (C.listC # NIL) & TCP.Requested(C.listC)
+END Requested;
+
+(** Procedure accepts a new waiting, active connection (newC) on a passive one (State(C) = listen). If no connection is 
+	waiting, accept blocks until there is one or an error occurs. If C isn't a passive connection, Accept performs like identidity
+	but res is set to Done. *)
+PROCEDURE Accept* (C: Connection; VAR newC: Connection; VAR res: INTEGER);
+VAR conC: TCP.Connection;
+BEGIN res := TCP.NotDone;
+	IF C.listC # NIL THEN
+		NEW(conC); TCP.Accept(C.listC, conC, res);
+		IF res = TCP.Done THEN NEW(newC);
+			newC.port := conC;
+		END
+	ELSE res := error
+	END
+END Accept;
+
+(** Procedure returns the state of a connection (see constant section). *)
+PROCEDURE State*(C: Connection): INTEGER;
+BEGIN
+	IF C.listC # NIL THEN RETURN listening
+	ELSIF C.port # NIL THEN
+		IF C.port.async THEN
+			IF C.port.state = 0 THEN
+				RETURN inout
+			ELSIF C.port.state = 1 THEN
+				RETURN closed
+			ELSIF C.port.state = 2 THEN
+				RETURN waitCon
+			ELSE
+				RETURN errorCon
+			END
+		ELSE
+			IF TCP.Connected(C.port) THEN
+				RETURN inout
+			ELSE
+				RETURN closed
+			END
+		END
+	ELSE RETURN closed
+	END
+END State;
+
+PROCEDURE AvailToSend* (C: Connection): BOOLEAN;
+BEGIN
+	RETURN TCP.AvailToSend(C.port) > 0
+END AvailToSend;
+
+(** Returns the number of bytes which may read without blocking. *)
+PROCEDURE Available* (C: Connection): LONGINT;
+BEGIN RETURN TCPAvailable(C, C.res)
+END Available;
+
+(** Blocking read a single byte. *)
+PROCEDURE Read* (C: Connection; VAR ch: CHAR);
+BEGIN TCPReceive(C, ch, 0, 1, C.res)
+END Read;
+
+(** Blocking read len bytes of data (beginning at pos in buf) to buf. *)
+PROCEDURE ReadBytes* (C: Connection; pos, len: LONGINT; VAR buf: ARRAY OF SYSTEM.BYTE);
+BEGIN TCPReceive(C, buf, pos, len, C.res);
+END ReadBytes;
+
+(** Blocking read two bytes in network byte ordering. *)
+PROCEDURE ReadInt* (C: Connection; VAR x: INTEGER);
+BEGIN TCPReceive(C, x, 0, 2, C.res); x := TCP.ntohs(x);
+END ReadInt;
+
+(** Blocking read four bytes in network byte ordering. *)
+PROCEDURE ReadLInt* (C: Connection; VAR x: LONGINT);
+BEGIN TCPReceive(C, x, 0, 4, C.res); x := TCP.ntohl(x);
+END ReadLInt;
+
+(** Blocking read a string terminated by ( [CR]LF | 0X ). *)
+PROCEDURE ReadString* (C: Connection; VAR s: ARRAY OF CHAR);
+VAR
+	ch, ch0: CHAR;
+	i: INTEGER;
+BEGIN i := -1; ch := 0X;
+	REPEAT INC(i);
+		ch0 := ch; TCPReceive(C, ch, 0, 1, C.res); s[i] := ch;
+	UNTIL (C.res = error) OR (ch = 0X) OR (ch = 0AX);
+	IF ch0 = 0DX THEN s[i-1] := 0X
+	ELSE s[i] := 0X
+	END
+END ReadString;
+
+(** Blocking write a single byte to C. *)
+PROCEDURE Write* (C: Connection; ch: CHAR);
+BEGIN TCPSend(C, ch, 0, 1, C.res)
+END Write;
+
+(** Blocking write len bytes of data (beginning at pos in buf) to C. *)
+PROCEDURE WriteBytes* (C: Connection; pos, len: LONGINT; VAR buf: ARRAY OF SYSTEM.BYTE);
+BEGIN TCPSend(C, buf, pos, len, C.res)
+END WriteBytes;
+
+(** Blocking write two bytes in network byte ordering to C. *)
+PROCEDURE WriteInt* (C: Connection; x: INTEGER);
+BEGIN x := TCP.htons(x); TCPSend(C, x, 0, 2, C.res)
+END WriteInt;
+
+(** Blocking write four bytes in network byte ordering to C. *)
+PROCEDURE WriteLInt* (C: Connection; x: LONGINT);
+BEGIN x := TCP.htonl(x); TCPSend(C, x, 0, 4, C.res)
+END WriteLInt;
+
+(** Blocking write a string without "0X" and terminated by "CRLF" to C. *)
+PROCEDURE WriteString* (C: Connection; s: ARRAY OF CHAR);
+VAR
+	cs: ARRAY 2 OF CHAR;
+	i: INTEGER;
+BEGIN  i := 0;
+	WHILE s[i] # 0X DO INC(i) END;
+	TCPSend(C, s, 0, i, C.res);
+	cs[0] := 0DX; cs[1] := 0AX;
+	TCPSend(C, cs, 0, 2, C.res)
+END WriteString;
+
+(** Procedure delivers the ip-number and port number of a connection's remote partner. *)
+PROCEDURE GetPartner* (C: Connection; VAR remIP: IPAdr; VAR remPort: INTEGER);
+VAR adr: LONGINT; res: INTEGER;
+BEGIN
+	ASSERT(C.port # NIL);
+	TCP.GetPeerName(C.port, adr, remPort, res);
+	SYSTEM.MOVE(SYSTEM.ADR(adr), SYSTEM.ADR(remIP), 4)
+END GetPartner;
+
+(* ---------------- *)
+
+(** Opens a socket which is dedicated to datagram services. locPort is registered to receive datagrams
+	from any port and any host. *)
+PROCEDURE OpenSocket*(VAR S: Socket; locPort: INTEGER; VAR res: INTEGER);
+BEGIN
+	NEW(S); S.sock := UDP.NewSocket(locPort, res);
+	IF res # UDP.Done THEN S.sock := NIL END
+END OpenSocket;
+
+(** Closes the socket. You can't receive datagrams anymore. *)
+PROCEDURE CloseSocket*(S: Socket);
+BEGIN
+	IF S # NIL THEN UDP.Close(S.sock) END
+END CloseSocket;
+
+(** Sends len bytes of data (beginning at pos in buf) to the host which is specified by remIP and remPort. *)
+PROCEDURE SendDG*(S: Socket; remIP: IPAdr; remPort: INTEGER; pos, len: LONGINT; VAR buf: ARRAY OF SYSTEM.BYTE);
+VAR adr, res: LONGINT;
+BEGIN
+	SYSTEM.MOVE(SYSTEM.ADR(remIP), SYSTEM.ADR(adr), 4);
+	UDP.SendTo(S.sock, buf, pos, len, remPort, adr, res);
+	S.res := SHORT(res)
+END SendDG;
+
+(** Stores an entire datagram in buf beginning at pos. On success (S.res = done), remIP and remPort indicate the sender,
+	len indicate the length of valid data. *)
+PROCEDURE ReceiveDG*(S: Socket; VAR remIP: IPAdr; VAR remPort: INTEGER; pos: LONGINT;
+	VAR len: LONGINT; VAR buf: ARRAY OF SYSTEM.BYTE);
+	VAR adr, rem: LONGINT;
+BEGIN
+	UDP.ReceiveFrom(S.sock, buf, rem, adr, pos, len);
+	SYSTEM.MOVE(SYSTEM.ADR(adr), SYSTEM.ADR(remIP), 4);
+	remPort := SHORT(rem)
+END ReceiveDG;
+
+(** Returns the number of available datagrams, which are received an the socket. *)
+PROCEDURE AvailableDG*(S: Socket): LONGINT;
+BEGIN RETURN UDP.Available(S.sock)
+END AvailableDG;
+
+(** Write 2 bytes in network byte ordering to buf[pos]. *)
+PROCEDURE PutInt*(VAR buf: ARRAY OF SYSTEM.BYTE; pos: INTEGER; i: INTEGER);
+VAR x: INTEGER;
+BEGIN
+	ASSERT(pos <= LEN(buf) - 2);
+	x := TCP.htons(i);
+	SYSTEM.MOVE(SYSTEM.ADR(x), SYSTEM.ADR(buf[pos]), 2);
+	INC(pos, 2);
+END PutInt;
+
+(** Read 2 bytes in network byte ordering from buf[pos]. *)
+PROCEDURE GetInt*(VAR buf: ARRAY OF SYSTEM.BYTE; pos: INTEGER; VAR i: INTEGER);
+VAR x: INTEGER;
+BEGIN
+	ASSERT(pos <= LEN(buf) - 2);
+	SYSTEM.MOVE(SYSTEM.ADR(buf[pos]), SYSTEM.ADR(x), 2);
+	i := TCP.ntohs(x);
+	INC(pos, 2);
+END GetInt;
+
+(** Write 4 bytes in network byte ordering to buf[pos]. *)
+PROCEDURE PutLInt*(VAR buf: ARRAY OF SYSTEM.BYTE; pos: INTEGER; i: LONGINT);
+VAR x: LONGINT;
+BEGIN
+	ASSERT(pos <= LEN(buf) - 4);
+	x := TCP.htonl(i);
+	SYSTEM.MOVE(SYSTEM.ADR(x), SYSTEM.ADR(buf[pos]), 4);
+	INC(pos, 4);
+END PutLInt;
+
+(** Read 4 bytes in network byte ordering from buf[pos]. *)
+PROCEDURE GetLInt*(VAR buf: ARRAY OF SYSTEM.BYTE; pos: INTEGER; VAR i: LONGINT);
+VAR x: LONGINT;
+BEGIN
+	ASSERT(pos <= LEN(buf) - 4);
+	SYSTEM.MOVE(SYSTEM.ADR(buf[pos]), SYSTEM.ADR(x), 4);
+	i := TCP.ntohl(x);
+	INC(pos, 4);
+END GetLInt;
+
+PROCEDURE *UpdateDisp();
+BEGIN
+	UpdateDisplay := TRUE
+END UpdateDisp;
+
+PROCEDURE getPassword(msg, msg1: ARRAY OF CHAR; fnt: Fonts.Font; VAR pw: ARRAY OF CHAR; readable: BOOLEAN);
+	CONST TickSize = 6; TickSpace = 4;
+	VAR X, Y, x, y, T, pos, tmp, BoxW, BoxH, w1, w2, w3, h: INTEGER; keys: SET; oldUpdateDisplay: Modules.Command;
+	fin, updateDisplay: BOOLEAN; ch: CHAR; M: Display3.Mask; bitmap: Bitmaps.Bitmap;
+	PROCEDURE Feedback(count: INTEGER);
+		VAR len, x: INTEGER;
+	BEGIN
+		IF readable THEN
+			pw[pos] := 0X;
+			Display3.ReplConst(M, Display3.groupC, X+1, (Y + BoxH DIV 4)-2*TickSize, BoxW-2, 4*TickSize, Display.replace);
+			Display3.CenterString(M, Display3.textC, X, (Y + BoxH DIV 4)-2*TickSize, BoxW, 4*TickSize, fnt, pw, Display.paint)
+		ELSE
+			Display3.ReplConst(M, Display3.groupC, X + 2, Y + BoxH DIV 4, BoxW - 4, TickSize, Display.replace);
+			len := count * (TickSize + TickSpace); x := X + BoxW DIV 2 - len DIV 2; y := Y + BoxH DIV 4;
+			WHILE count > 0 DO
+				Display3.ReplConst(M, Display3.textC, x, y, TickSize, TickSize, Display.paint);
+				DEC(count); INC(x, TickSize + TickSpace)
+			END
+		END
+	END Feedback;
+	PROCEDURE Box();
+	BEGIN
+		Display3.StringSize(msg, fnt, w1, h, tmp); BoxW := w1;
+		Display3.StringSize(msg1, fnt, w2, h, tmp); IF w2 > BoxW THEN BoxW := w2 END;
+		IF w3 > BoxW THEN BoxW := w3 END;
+		BoxW := BoxW * 15 DIV 10; BoxH := h * 4 * 15 DIV 10;
+		X := Display.Width DIV 2 - BoxW DIV 2; Y := Display.Height DIV 2 - BoxH DIV 2;
+		NEW(M); Display3.Open(M); Display3.Add(M, X+2, Y+2, BoxW-4, BoxH-4);
+		bitmap := Bitmaps.New(BoxW, BoxH);
+		Bitmaps.CopyBlock(Bitmaps.Disp, bitmap, X, Y, BoxW, BoxH, 0, 0, Display.replace);
+		Display3.FilledRect3D(NIL, Display3.topC, Display3.bottomC, Display3.groupC, X, Y, BoxW, BoxH, 1, Display.replace);
+		T := Y + BoxH * 3 DIV 4;
+		Display3.String(M, Display3.textC, X + BoxW DIV 2 - w1 DIV 2, T, fnt, msg, Display.paint); DEC(T, h);
+		Display3.String(M, Display3.textC, X + BoxW DIV 2 - w2 DIV 2, T, fnt, msg1, Display.paint); DEC(T, h)
+	END Box;
+BEGIN
+	Oberon.Defocus(); Box();
+	oldUpdateDisplay := Win32.UpdateDisplay;
+	Win32.UpdateDisplay := UpdateDisp;
+	updateDisplay := FALSE; UpdateDisplay := FALSE;
+	fin := FALSE; pos := 0;
+	REPEAT
+		Input.Mouse(keys, x, y); 
+		IF Input.Available() > 0 THEN
+			Input.Read(ch);
+			CASE ch OF
+				ESC: fin := TRUE; pos := 0;
+				| 0DX: fin := TRUE;
+				| 7FX:
+					IF pos > 0 THEN DEC(pos); Feedback(pos) END
+			ELSE
+				IF pos < LEN(pw) - 1 THEN pw[pos] := ch; INC(pos); Feedback(pos) END
+			END
+		END;
+		IF UpdateDisplay THEN
+			updateDisplay := TRUE; UpdateDisplay := FALSE;
+			Box(); Feedback(pos)
+		END
+	UNTIL fin;
+	pw[pos] := 0X;
+	Bitmaps.CopyBlock(bitmap, Bitmaps.Disp, 0, 0, BoxW, BoxH, X, Y, Display.replace);
+	Win32.UpdateDisplay := oldUpdateDisplay;
+	IF updateDisplay THEN
+		Win32.UpdateDisplay()
+	END
+END getPassword;
+
+(** Retrieve the password for user using service on host.  Parameters service, host and user must be specified. 
+Parameter user is in/out.  If empty, it returns the first (user, password) pair found, otherwise it returns the
+specified user's password. *)
+	PROCEDURE GetPassword*(service, host: ARRAY OF CHAR; VAR user, password: ARRAY OF CHAR);
+		VAR
+			pass: Password;
+			msg, temp: ARRAY 64 OF CHAR;
+	BEGIN
+		Strings.Lower(service, service); Strings.Lower(host, host);
+		pass := passwords;
+		WHILE (pass # NIL) & ~((pass.service = service) & (pass.host = host) & ((user = "") OR (pass.user = user))) DO
+			pass := pass.next
+		END;
+		IF pass # NIL THEN
+			COPY(pass.user, user); COPY(pass.passwd, password); RETURN
+		ELSIF (service # "") & (host # "") THEN
+			IF user = "" THEN
+				COPY(service, msg); Strings.Append(msg, " to "); Strings.Append(msg, host);
+				getPassword("Please enter your username for", msg, Fonts.This("Syntax12.Scn.Fnt"), temp, TRUE);
+				COPY(temp, user)
+			ELSE
+				COPY(user, temp)
+			END;
+			IF temp # "" THEN
+				COPY(service, msg); Strings.Append(msg, " to "); Strings.Append(msg, temp); Strings.AppendCh(msg, "@"); Strings.Append(msg, host);
+				getPassword("Please enter your password for", msg, Fonts.This("Syntax12.Scn.Fnt"), password, FALSE);
+				IF password # "" THEN
+					NEW(pass); pass.next := passwords; passwords := pass;
+					COPY(service, pass.service); COPY(host, pass.host); COPY(temp, pass.user); COPY(password, pass.passwd);
+					RETURN
+				END
+			END
+		END;
+		COPY("", user); COPY("", password)
+	END GetPassword;
+	
+	(** Remove password for user using service on host. *)
+	PROCEDURE DelPassword*(service, user, host: ARRAY OF CHAR);
+		VAR ppass, pass: Password;
+	BEGIN
+		Strings.Lower(service, service);  Strings.Lower(host, host);
+		ppass := NIL; pass := passwords;
+		WHILE (pass # NIL) & ((pass.service # service) & (pass.host # host) & (pass.user # user)) DO
+			ppass := pass; pass := pass.next
+		END;
+		IF pass # NIL THEN
+			IF ppass # NIL THEN
+				ppass.next := pass.next
+			ELSE
+				passwords := pass.next
+			END
+		END
+	END DelPassword;
+
+(** NetSystem.SetUser { service ":" ["//"] user [ ":" password ] "@" host [ "/" ] } "~" password
+		If not specified in-line, enter the password for the (service, host, user) triple. 
+		The (service, host, user, password) 4-tuple is stored in memory for retrieval with GetPassword. *)
+	PROCEDURE SetUser*;
+		VAR
+			R: Texts.Reader;
+			service, usr, host, pwd: ARRAY 64 OF CHAR;
+			pass, list: Password;
+			ok, verbose: BOOLEAN;
+			ch: CHAR;
+	
+		PROCEDURE Next(VAR str: ARRAY OF CHAR);
+			VAR i: LONGINT;
+		BEGIN
+			Texts.Read(R, ch);
+			WHILE ~R.eot & ((ch <= " ") OR (ch = ":") OR (ch = "@") OR (ch = "/") OR ~(R.lib IS Fonts.Font)) DO
+				Texts.Read(R, ch)
+			END;
+			i := 0;
+			WHILE ~R.eot & (ch > " ") & (ch # ":") & (ch # "@") & (ch # "/") & (ch # "~") & (R.lib IS Fonts.Font) DO
+				str[i] := ch; INC(i); Texts.Read(R, ch)
+			END;
+			str[i] := 0X
+		END Next;
+		
+		PROCEDURE ReadPwd;
+			VAR i: LONGINT;
+		BEGIN
+			Texts.WriteString(W, "Password: "); Texts.Append(Oberon.Log, W.buf);
+			Input.Read(ch); i := 0;
+			WHILE ch > " " DO
+				IF ch = 7FX THEN
+					IF i > 0 THEN
+						Texts.Delete(Oberon.Log, Oberon.Log.len-1, Oberon.Log.len);
+						DEC(i)
+					END
+				ELSE
+					Texts.Write(W, "*"); Texts.Append(Oberon.Log, W.buf);
+					pwd[i] := ch;  INC(i)
+				END;
+				Input.Read(ch)
+			END;
+			pwd[i] := 0X;
+			Texts.WriteLn(W);  Texts.Append(Oberon.Log, W.buf)
+		END ReadPwd;
+			
+		PROCEDURE Replace(p: Password);
+		VAR q: Password;
+		BEGIN
+			q := passwords;
+			WHILE (q # NIL) & ~((q.service = p.service) & (q.host = p.host) & (q.user = p.user)) DO
+				q := q.next
+			END;
+			IF verbose THEN
+				Texts.WriteString(W, p.service); Texts.Write(W, ":");
+				Texts.WriteString(W, p.user); Texts.Write(W, "@"); Texts.WriteString(W, p.host)
+			END;
+			IF q = NIL THEN
+				p.next := passwords;  passwords := p;
+				IF verbose THEN Texts.WriteString(W, " password set") END
+			ELSE
+				COPY(p.passwd, q.passwd);
+				IF verbose THEN Texts.WriteString(W, " password replaced") END
+			END;
+			IF verbose THEN Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf) END
+		END Replace;
+		
+	BEGIN
+		Texts.OpenReader(R, Oberon.Par.text, Oberon.Par.pos);
+		ok := TRUE; verbose := FALSE; list := NIL;
+		WHILE ~R.eot & ok DO
+			ok := FALSE; Next(service);
+			IF service = "\v" THEN verbose := TRUE; Next(service) END;
+			Strings.Lower(service, service);
+			IF ch = ":" THEN
+				Next(usr);
+				IF ch = "@" THEN	(* no password specified, prompt for password later *)
+					Next(host);  Strings.Lower(host, host);
+					IF host # "" THEN
+						NEW(pass);  pass.next := list; list := pass;	(* add to temp list *)
+						COPY(service, pass.service); COPY(host, pass.host); COPY(usr, pass.user);
+						ok := TRUE
+					END
+				ELSIF ch = ":" THEN	(* password specified in-line *)
+					Next(pwd);
+					IF ch = "@" THEN
+						Next(host);
+						IF host # "" THEN
+							NEW(pass); COPY(service, pass.service); COPY(host, pass.host); 
+							COPY(usr, pass.user); COPY(pwd, pass.passwd);
+							Replace(pass); ok := TRUE
+						END
+					END
+				END
+			END
+		END;
+		IF list # NIL THEN
+			ReadPwd;
+			IF ch = 0DX THEN	(* password entered *)
+				WHILE list # NIL DO
+					pass := list; list := list.next; COPY(pwd, pass.passwd); Replace(pass)
+				END
+			END
+		END
+	END SetUser;
+
+	(** clears all passwords from memory *)
+	PROCEDURE ClearUser*;
+	BEGIN
+		passwords := NIL
+	END ClearUser;
+
+PROCEDURE Init;
+VAR adr: LONGINT; s: ARRAY 64 OF CHAR; res: INTEGER;
+(*
+	PROCEDURE ConvertIpAdr(adr: TCP.IpAdr; VAR ip: ARRAY OF CHAR);
+	VAR k: INTEGER;
+	
+		PROCEDURE Write(i: LONGINT);
+		VAR p, n: LONGINT;
+		BEGIN
+			p := 100;
+			WHILE (i DIV p = 0) & (p > 1) DO p := p DIV 10 END; (* ignore leading zero's *)
+			WHILE p > 0 DO
+				n := i DIV p; i := i MOD p;
+				ip[k] := CHR(n + ORD("0")); 
+				INC(k);
+				p := p DIV 10
+			END
+		END Write;
+	
+	BEGIN
+		k := 0;
+		Write(adr MOD 256); adr := adr DIV 256; ip[k] := "."; INC(k);
+		Write(adr MOD 256); adr := adr DIV 256; ip[k] := "."; INC(k);
+		Write(adr MOD 256); adr := adr DIV 256; ip[k] := "."; INC(k);
+		Write(adr MOD 256);  ip[k] := 0X;
+	END ConvertIpAdr;
+*)
+BEGIN
+	Registry.Get("NetSystem", "HostName", s);
+	IF Registry.res = Registry.Done THEN COPY(s, hostName)
+	ELSE
+		TCP.GetHostName(hostName, res);
+		IF res # TCP.Done THEN hostName := "" END
+	END;
+	
+	Registry.Get("NetSystem", "HostIP", s);
+	IF Registry.res = Registry.Done THEN TCP.HostByNumber(s, adr, res);
+		IF res = TCP.Done THEN SYSTEM.MOVE(SYSTEM.ADR(adr), SYSTEM.ADR(hostIP), IPAdrLen)
+		ELSE hostIP := anyIP
+		END
+	ELSIF hostName # "" THEN
+		TCP.HostByName(hostName, adr, res);
+		IF res = TCP.Done THEN SYSTEM.MOVE(SYSTEM.ADR(adr), SYSTEM.ADR(hostIP), IPAdrLen)
+		ELSE hostIP := anyIP
+		END
+	ELSE hostIP := anyIP
+	END;
+	Registry.Get("NetSystem", "Async", s);
+	asyncEnable := FALSE; passwords := NIL;
+	IF (Registry.res = Registry.Done) & ((CAP(s[0]) = "Y") OR ((CAP(s[0]) = "O") & (CAP(s[1]) = "N"))) THEN asyncEnable := TRUE END; (* jm *)
+END Init;
+
+BEGIN Init;
+	anyIP := 0; allIP := -1;
+	Texts.OpenWriter(W)
+END NetSystem.
+
+System.Free Mail NetSystem ~
+NetSystem.SetUser marais/
+
+Compiler.Compile ejz.Mail.Mod NetTools.Mod/s HTTPDocs.Mod/s HTMLDocs.Mod/s~

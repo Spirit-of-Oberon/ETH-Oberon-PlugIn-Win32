@@ -1,0 +1,1118 @@
+﻿(* OBERON System 3, Release 2.2.
+
+Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
+e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon System 3 license contract.
+The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+or requested from the above mentioned address.
+
+Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
+in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE WinPrinter;
+
+(**Installable printer for Windows GDI printing.
+*)
+
+IMPORT S := SYSTEM, Objects, Registry, Kernel, Win32, Files, Display, Fonts, Oberon, Console, Printer, Pictures,
+	C := Console;
+
+(*
+	6.5.95 - fix Unit problem on 600 dpi printers
+	21.6.95 - changed NewPage
+*)
+
+CONST
+	Unit300 = 3048; (* 300 dpi resolution *)
+	noerr = 0; noconnection = 1; (* Printer.res *)
+	NULL = 0;
+	TrueType = 2;
+	bold = Win32.Bold; italics = Win32.Italics; medium = Win32.Medium;
+	SRCCOPY = 0CC0020H;
+	HORZRES = 8; VERTRES = 10; LOGPIXELSX = 88; (* device capabilities *)
+	N = 20; (*Splines*)
+	
+	MapSize = 10;
+
+TYPE
+	WinPrinter* = POINTER TO WinPrinterDesc;
+	WinPrinterDesc* = RECORD (Printer.PrinterDesc)
+		PageH*, PageW*: LONGINT; (** in printer pixels *)
+		newPage*: BOOLEAN;
+		textX*, textY*: LONGINT; (** Text position. *)
+		hdc*: LONGINT;	(* Drawing context. *)
+		Color*: LONGINT; (** RGB*)
+	END;
+	
+	DocInfo = RECORD
+		size: LONGINT;
+		docName: LONGINT;
+		outputName: LONGINT;
+	END;
+
+	(*Splines*)
+	RealVector = ARRAY N OF REAL;
+	Poly = RECORD a, b, c, d, t: REAL END;
+	PolyVector = ARRAY N OF Poly;
+	
+	LPLOGFONT = POINTER TO LOGFONT;
+	LOGFONT = RECORD
+		height, width, escapement, orientation, weight: LONGINT;
+		italic, underline, strikeout: SHORTINT;
+		charset: SHORTINT;
+		outprec, clipprec: SHORTINT;
+		quality: SHORTINT;
+		pitchAndFamily: SHORTINT;
+		facename: ARRAY 32 OF CHAR;
+	END;
+
+	LPTEXTMETRIC =  POINTER TO TEXTMETRIC;
+	TEXTMETRIC = RECORD
+		height, ascent, descent: LONGINT;
+		intLead, extLead: LONGINT;
+		avgCharWidth, maxCharWidth: LONGINT;
+		weight, overhang: LONGINT;
+		aspectX, aspectY: LONGINT;
+		firstCh, lastCh, defaultCh, breakCh: CHAR;
+		italic, underlined, struckout: SHORTINT;
+		pitchAndFamily, charset: SHORTINT;
+	END;
+
+	EnumFontsProc = PROCEDURE (f: LPLOGFONT; tm: LPTEXTMETRIC; type: SET; F: Fonts.Font): LONGINT;
+
+
+VAR
+	SetMapMode: PROCEDURE (hdc, mode: LONGINT);
+	MoveToEx: PROCEDURE (hdc: LONGINT; x, y: LONGINT; prev: LONGINT);
+	LineTo: PROCEDURE (hdc, x, y: LONGINT);
+	Ellipse0: PROCEDURE (hdc, left, top, right, bot: LONGINT);
+	CreateHatchBrush: PROCEDURE (style: LONGINT; col: LONGINT (*COLORREF*)): LONGINT;
+	CreatePen: PROCEDURE (style, width: LONGINT; color: LONGINT (*COLORREF*)): LONGINT;
+	StartDoc: PROCEDURE (hdc: LONGINT; docInfo: LONGINT);
+	EndDoc: PROCEDURE (hdc: LONGINT);
+	StartPage: PROCEDURE (hdc: LONGINT);
+	EndPage: PROCEDURE (hdc: LONGINT);
+	GetTextExtentPoint: PROCEDURE (hdc: LONGINT; str: LONGINT; nofchar: LONGINT; lpSize: LONGINT);
+	GetCharABCWidths: PROCEDURE (hdc, firstCh, lastCh, lpABC: LONGINT);
+	GetTextMetrics: PROCEDURE (hdc: LONGINT; lptm: LONGINT);
+	StretchDIBits: PROCEDURE (hdc, dx, dy, dw, dh, sx, sy, sw, sh, bits, bmi, use, rop: LONGINT): LONGINT;
+	EnumFontFamilies: PROCEDURE (hdc: LONGINT; familiy: LONGINT; callback: EnumFontsProc; F: Fonts.Font);
+	CreateFontIndirect: PROCEDURE (logfont: LPLOGFONT): LONGINT;
+			
+	(* ComDlg32 *)
+	CommDlgExtendedError: PROCEDURE (): LONGINT;
+
+    T: ARRAY 256 OF CHAR; (* translation table *)
+	
+	PrinterUnit, PrinterDPI, PrinterHDC: LONGINT;
+	PrinterX, PrinterY: INTEGER;
+	Map: ARRAY MapSize OF RECORD family, subst: ARRAY 32 OF CHAR END; (* font substitution *)
+	verbose: BOOLEAN;
+
+PROCEDURE GetUnits (hdc: LONGINT; VAR PageW, PageH, Unit: LONGINT);
+BEGIN
+	PageW := Win32.GetDeviceCaps(hdc, HORZRES); PageH := Win32.GetDeviceCaps(hdc, VERTRES);
+	PrinterDPI := Win32.GetDeviceCaps(hdc, LOGPIXELSX);
+	Unit := 914400 DIV PrinterDPI; PrinterUnit := Unit;
+	PrinterX := SHORT(180000 DIV PrinterUnit); PrinterY := SHORT(180000 DIV PrinterUnit);
+	PageW := PageW+2*PrinterX; PageH := PageH+2*PrinterY
+END GetUnits;
+
+PROCEDURE SetupFrame(P: Printer.Printer);
+BEGIN
+	(*  left, right: 2cm / top, bottom: 1.5cm *)
+	P.FrameX := SHORT(720000 DIV P.Unit); P.FrameY := SHORT(540000 DIV P.Unit);
+	P.FrameW := P.Width - 2*P.FrameX; P.FrameH := P.Height - 2*P.FrameY
+END SetupFrame;
+
+PROCEDURE GetPrinterDC (P: Printer.Printer; VAR hdc: LONGINT);
+	CONST PdReturnDefault = 10; PdReturnDC = 8;
+	VAR done: BOOLEAN;
+BEGIN
+	WITH P: WinPrinter DO
+		P.res := noconnection; hdc := NULL;
+		Win32.PD.hDevMode := NULL; Win32.PD.hDevNames := NULL;
+		Win32.PD.hdc := NULL;
+		Win32.PD.flags := {PdReturnDefault, PdReturnDC};
+		done := Win32.PrintDlg(S.ADR(Win32.PD));
+		hdc := Win32.PD.hdc;
+		IF hdc # NULL THEN
+			P.res := noerr; GetUnits(hdc, P.PageW, P.PageH, P.Unit);
+			P.Width := SHORT(P.PageW); P.Height := SHORT(P.PageH);
+			Console.Str("Opening Printer"); Console.Ln;
+			Console.Str("   TrueUnit: "); Console.Int(P.Unit); Console.Ln
+		ELSE
+			P.Width := 0; P.Height := 0; (* << jm *)
+			Console.Str("cannot open printer"); Console.Ln
+		END;
+		P.Depth := 24; SetupFrame(P);
+		Console.Str("   Width: "); Console.Int(P.Width); Console.Ln;
+		Console.Str("   Height: "); Console.Int(P.Height); Console.Ln
+	END
+END GetPrinterDC;
+
+(* ------------------- Printer Font Stuff -------------------- *)
+
+(* take a font name apart *)
+PROCEDURE ParseName (VAR name, family: ARRAY OF CHAR; VAR size: LONGINT; VAR style: SET; VAR class: ARRAY OF CHAR);
+VAR i, j: INTEGER;
+BEGIN
+	size := 0; style := {}; i := 0;
+	WHILE (name[i] > "9") OR (name[i] = " ") DO family[i] := name[i]; INC(i) END;
+	family[i] := 0X;
+	WHILE ("0" <= name[i]) & (name[i] <= "9") DO size := 10*size + (ORD(name[i]) - ORD("0")); INC(i) END;
+	WHILE (name[i] # 0X) & (name[i] # ".") DO
+		CASE CAP(name[i]) OF
+			| "I": INCL(style, italics);
+			| "B": INCL(style, bold);
+			| "M": INCL(style, medium);
+		ELSE
+		END;
+		INC(i)
+	END;
+	j := 0;
+	INC(i); WHILE (name[i] # 0X) & (name[i] # ".") DO class[j] := name[i]; INC(i); INC(j) END;
+	class[j] := 0X
+END ParseName;
+
+(* reconstruct a font name *)
+PROCEDURE BuildName (family: ARRAY OF CHAR; size: LONGINT; style: SET; class: ARRAY OF CHAR; VAR name: ARRAY OF CHAR);
+VAR i, j: INTEGER;
+
+	(* Convert an integer into a string *)
+	PROCEDURE IntToStr(i: LONGINT; VAR j: INTEGER; VAR s: ARRAY OF CHAR);
+	VAR k: INTEGER; x0: LONGINT; a: ARRAY 10 OF CHAR;
+	BEGIN
+		IF i > 0 THEN
+			k := 0; x0 := i;
+			REPEAT
+				a[k] := CHR(x0 MOD 10 + 30H); x0 := x0 DIV 10; INC(k)
+			UNTIL x0 = 0;
+			REPEAT DEC(k); s[j] := a[k]; INC(j) UNTIL k = 0
+		END
+	END IntToStr;
+
+BEGIN
+	i := 0;
+	j := 0; WHILE family[j] # 0X DO name[i] := family[j]; INC(i); INC(j) END;
+	IntToStr(size, i, name);
+	IF italics IN style THEN name[i] := "i"; INC(i)
+	ELSIF medium IN style THEN name[i] := "m"; INC(i)
+	ELSIF bold IN style THEN name[i] := "b"; INC(i)
+	END;
+	name[i] := "."; INC(i);
+	j := 0; WHILE class[j] # 0X DO name[i] := class[j]; INC(i); INC(j) END;
+	name[i] := "."; INC(i);
+	name[i] := "F"; INC(i);
+	name[i] := "n"; INC(i);
+	name[i] := "t"; INC(i);
+	name[i] := 0X
+END BuildName;
+
+PROCEDURE GetPrinterDC0 (VAR hdc: LONGINT; VAR PrinterUnit: LONGINT): BOOLEAN;
+CONST PdReturnDefault = 10; PdReturnDC = 8;
+VAR done: BOOLEAN; PageW, PageH: LONGINT; (* in printer pixels *)
+BEGIN
+	hdc := NULL;
+	Win32.PD.hDevMode := NULL; Win32.PD.hDevNames := NULL;
+	Win32.PD.hdc := NULL;
+	Win32.PD.flags := {PdReturnDefault, PdReturnDC};
+	done := Win32.PrintDlg(S.ADR(Win32.PD));
+	hdc := Win32.PD.hdc;
+	IF hdc # NULL THEN GetUnits(hdc, PageW, PageH, PrinterUnit); RETURN TRUE
+	ELSE PrinterUnit := Unit300; RETURN FALSE (* << jm *)
+	END;
+END GetPrinterDC0;
+
+PROCEDURE matches (s1, s2: ARRAY OF CHAR): BOOLEAN;  (* s2 is windows name *)
+	VAR i, j: INTEGER;
+BEGIN i := 0; j := 0;
+	WHILE s1[i] # 0X DO
+		IF (s2[j] = " ") & (s1[i] # 0X) THEN INC(j) END;
+		IF CAP(s1[i]) # CAP(s2[j]) THEN RETURN FALSE END;
+		INC(i); INC(j)
+	END;
+	RETURN (s2[j] = 0X) OR (s2[j] = " ");
+END matches;
+
+PROCEDURE TTFontFamiliyHandler (f: LPLOGFONT; tm: LPTEXTMETRIC; type: SET; F: Fonts.Font): LONGINT;
+	VAR EBX, ESI, EDI, res: LONGINT; font: Win32.Font;
+BEGIN
+	S.GETREG(3, EBX); S.GETREG(6, ESI); S.GETREG(7, EDI); res := 1;
+	IF TrueType IN type THEN
+		font := S.VAL(Win32.Font, F.ind);
+		IF matches(font.family, f.facename) THEN COPY(f.facename, font.family); res := 0 END;
+	END;
+	S.PUTREG(3, EBX); S.PUTREG(6, ESI); S.PUTREG(7, EDI);
+	RETURN res;
+END TTFontFamiliyHandler;
+
+PROCEDURE TTPrintFontInstaller (f: LPLOGFONT; tm: LPTEXTMETRIC; type: SET; F: Fonts.Font): LONGINT;
+	VAR EBX, ESI, EDI, res: LONGINT; font: Win32.Font;
+BEGIN
+	S.GETREG(3, EBX); S.GETREG(6, ESI); S.GETREG(7, EDI); res := 1;
+	IF TrueType IN type THEN
+		font := S.VAL(Win32.Font, F.ind);
+		IF (font.family = f.facename) & ((italics IN font.style) = (f.italic # 0)) &
+				(((medium IN font.style) OR (bold IN font.style)) = (f.weight > 400)) THEN
+			f.height := -(font.size * 10000 * 100 DIV PrinterUnit DIV 94);
+			IF font.size <= 10 THEN DEC(f.height) END;
+			f.width := 0; res := 0;
+			font.hfont := CreateFontIndirect(f);
+		END;
+	END;
+	S.PUTREG(3, EBX); S.PUTREG(6, ESI); S.PUTREG(7, EDI);
+	RETURN res;
+END TTPrintFontInstaller;
+
+PROCEDURE LoadTTFont (F: Fonts.Font; family: ARRAY OF CHAR; size: LONGINT; style: SET; class: ARRAY OF CHAR);
+VAR raster: Win32.Font; tm: TEXTMETRIC; abc: RECORD a, b, c: LONGINT END;
+	oldfont, i: LONGINT; done: BOOLEAN; theContext: LONGINT;
+BEGIN
+	NEW(raster); F.ind := S.VAL(Objects.Index, raster);
+	raster.oberon := FALSE;
+	COPY(family, raster.family); raster.size := size; raster.style := style;
+	
+	IF PrinterHDC = NULL THEN
+		done := GetPrinterDC0(PrinterHDC, PrinterUnit);
+	END;
+	IF PrinterHDC # NULL THEN
+		EnumFontFamilies(PrinterHDC, 0, TTFontFamiliyHandler, F);
+		EnumFontFamilies(PrinterHDC, S.ADR(raster.family), TTPrintFontInstaller, F);
+		theContext := PrinterHDC;
+	ELSE	(* make in display hdc / does this make sense ? *)
+		IF verbose THEN C.Str(" [Fonts: cannot get printer hdc] ") END;
+		EnumFontFamilies(Win32.hdcDisp, 0, TTFontFamiliyHandler, F);
+		EnumFontFamilies(Win32.hdcDisp, S.ADR(raster.family), TTPrintFontInstaller, F);
+		theContext := Win32.hdcDisp;
+	END;
+	IF (class[0] = "M") & (class[1] = "d") THEN F.type := Fonts.metric ELSE F.type := Fonts.font END;
+
+	IF raster.hfont # 0 THEN (* TTFontInstaller was successfull *)
+		IF verbose THEN C.Str("  TT ") END;
+		oldfont := Win32.SelectObject(theContext, raster.hfont);
+		GetTextMetrics(theContext, S.ADR(tm));
+		F.height := SHORT(tm.height); F.minX := 0; F.maxX := F.minX + SHORT(tm.maxCharWidth);
+		F.minY := -SHORT(tm.descent); F.maxY := SHORT(tm.ascent);
+		i := 0;
+		WHILE i < 256 DO
+			IF (ORD(tm.firstCh) <= i) & (i <= ORD(tm.lastCh)) THEN
+				GetCharABCWidths(theContext, i, i, S.ADR(abc))
+			ELSE abc.a := 0; abc.b := 0; abc.c := 0;
+			END;
+			raster.metrics[i].dx := SHORT(abc.a + abc.b + abc.c);
+			raster.metrics[i].x := SHORT(abc.a);
+			raster.metrics[i].y := -SHORT(tm.descent);
+			raster.metrics[i].p.w := SHORT(abc.b);
+			raster.metrics[i].p.h := SHORT(tm.height);
+			raster.metrics[i].p.bitmap := 0;
+			INC(i);
+		END;
+		(* Special handling of TAB's *)
+		i := 9; abc.a := 0; abc.b := 0; abc.c := raster.metrics[32].dx * 4; (* TAB is equal to four spaces *)
+		raster.metrics[i].dx := SHORT(abc.a + abc.b + abc.c);
+		raster.metrics[i].x := SHORT(abc.a);
+		raster.metrics[i].y := -SHORT(tm.descent);
+		raster.metrics[i].p.w := SHORT(abc.b);
+		raster.metrics[i].p.h := SHORT(tm.height);
+		
+		oldfont := Win32.SelectObject(theContext, oldfont);
+	ELSE
+		IF verbose THEN C.Str("  no such TT font: "); C.Str(raster.family) END;
+		F.type := -2 (* << not succesful *)
+	END;
+END LoadTTFont;
+
+PROCEDURE InitWindowsFont (F: Fonts.Font; name: ARRAY OF CHAR);
+VAR raster: Win32.Font;
+BEGIN
+	raster := S.VAL(Win32.Font, F.ind);
+	raster.hfont := 0; raster.oberon := TRUE;
+END InitWindowsFont;
+
+PROCEDURE Load(F: Fonts.Font; VAR R: Files.Rider; subst: ARRAY OF CHAR; type: SHORTINT);
+	TYPE
+		RunRec = RECORD beg, end: INTEGER END;
+		BoxRec = RECORD dx, x, y, w, h: INTEGER END;
+	VAR
+		raster: Win32.Font;
+		bitmap, bitmapX, bitmapDX, bitmapW, bitmapH, RasterBase, b, n, a: LONGINT;
+		nofRuns, nofBoxes: INTEGER;
+		k, l, m, w, h: INTEGER;
+		ch: CHAR;
+		run: ARRAY 16 OF RunRec;
+		box: ARRAY 256 OF BoxRec;
+
+	PROCEDURE DummyCh (m: INTEGER);
+		VAR raster: Win32.Font;
+	BEGIN
+		raster := S.VAL(Win32.Font, F.ind);
+		raster.metrics[m].dx := 0;
+		raster.metrics[m].x := 0; raster.metrics[m].y := 0;
+		raster.metrics[m].p.x := 0; raster.metrics[m].p.y := 0;
+		raster.metrics[m].p.w := 0; raster.metrics[m].p.h := 0
+	END DummyCh;
+
+  BEGIN
+	F.type := type;
+    Files.Read(R, ch); (*family*)
+    Files.Read(R, ch); (*variant*)
+
+	NEW(raster); F.ind := S.VAL(Objects.Index, raster);
+	InitWindowsFont(F, subst);
+	Files.ReadInt(R, F.height);
+	Files.ReadInt(R, F.minX); Files.ReadInt(R, F.maxX);
+	Files.ReadInt(R, F.minY); Files.ReadInt(R, F.maxY);
+	Files.ReadInt(R, nofRuns);
+	nofBoxes := 0; k := 0;
+	WHILE k # nofRuns DO
+		Files.ReadInt(R, run[k].beg); Files.ReadInt(R, run[k].end);
+		nofBoxes := nofBoxes + run[k].end - run[k].beg;
+		INC(k);
+	END;
+	IF F.type # Fonts.metric THEN
+		IF verbose THEN C.Str("  Oberon raster") END;
+		bitmapW := 0; l := 0;
+		WHILE l # nofBoxes DO
+			Files.ReadInt(R, box[l].dx);
+			Files.ReadInt(R, box[l].x); Files.ReadInt(R, box[l].y);
+			Files.ReadInt(R, box[l].w); Files.ReadInt(R, box[l].h);
+			bitmapW := bitmapW + (box[l].w + 7) DIV 8;
+			INC(l);
+		END;
+		bitmapW := bitmapW + (-bitmapW) MOD 4;
+		bitmapH := F.maxY - F.minY;
+		S.NEW(S.VAL(Fonts.Font, RasterBase), bitmapW * bitmapH); (* temporary *)
+		bitmapX := 0;
+		k := 0; l := 0; m := 0;
+		WHILE k < nofRuns DO
+			WHILE m < run[k].beg DO DummyCh(m); INC(m) END;
+			WHILE m < run[k].end DO
+				raster.metrics[m].dx := box[l].dx;
+				raster.metrics[m].x := box[l].x;
+				raster.metrics[m].y := box[l].y;
+				raster.metrics[m].p.x := bitmapX;
+				raster.metrics[m].p.y := 0;
+				w := box[l].w;
+				raster.metrics[m].p.w := w;
+				h := box[l].h; raster.metrics[m].p.h := h;
+				bitmapDX := (w + 7) DIV 8;
+				n := bitmapDX * h;
+				a := RasterBase + bitmapX DIV 8;
+				b := 0;
+				WHILE b < n DO
+					Files.Read(R, ch);
+					S.PUT(a + (LONG(h) - 1 - (b DIV bitmapDX)) * bitmapW + (b MOD bitmapDX), T[ORD(ch)]);
+					INC(b);
+				END;
+				INC(l); INC(m);
+				INC(bitmapX, 8*bitmapDX)
+			END;
+			INC(k);
+		END;
+		WHILE m < 256 DO DummyCh(m); INC(m) END;
+		
+		bitmap := Win32.CreateBitmap(8*bitmapW, bitmapH, 1, 1, RasterBase);
+		IF bitmap = 0 THEN
+			IF verbose THEN C.Str(" WARNING: cannot allocate bitmap for font ");
+				C.Int(bitmapW * bitmapH); C.Str(" bytes needed ")
+			END
+		END;
+		m := 0;
+		WHILE m < 256 DO raster.metrics[m].p.bitmap := bitmap; INC(m) END;
+	ELSE (* metric *)
+		IF verbose THEN C.Str("  Oberon metric") END;
+		l := 0;
+		WHILE l # nofBoxes DO
+			Files.ReadInt(R, box[l].dx);
+			Files.ReadInt(R, box[l].x); Files.ReadInt(R, box[l].y);
+			Files.ReadInt(R, box[l].w); Files.ReadInt(R, box[l].h);
+			INC(l);
+		END;
+		k := 0; l := 0; m := 0;
+		WHILE k < nofRuns DO
+			WHILE m < run[k].beg DO DummyCh(m); INC(m) END;
+			WHILE m < run[k].end DO
+				raster.metrics[m].dx := box[l].dx;
+				raster.metrics[m].x := box[l].x;
+				raster.metrics[m].y := box[l].y;
+				raster.metrics[m].p.x := 0; raster.metrics[m].p.y := 0;
+				INC(l); INC(m);
+			END;
+			INC(k);
+		END;
+		WHILE m < 256 DO DummyCh(m); INC(m) END;
+		m := 0;
+		WHILE m < 256 DO raster.metrics[m].p.bitmap := 0; INC(m) END;
+	END
+END Load;
+
+PROCEDURE Finalize (f: PTR);
+	VAR f0: Win32.Font; bitmap: LONGINT;
+BEGIN
+	WITH f: Fonts.Font DO
+		IF f.type # Fonts.substitute THEN
+			IF verbose THEN C.Str("WinPrinter.Finalize "); C.Str(f.name); C.Ln() END;
+			f0 := S.VAL(Win32.Font, f.ind);
+			bitmap := f0.metrics[65].p.bitmap;
+			IF bitmap # 0 THEN Win32.DeleteObject(bitmap) END;
+			IF f0.hfont # 0 THEN
+				Win32.DeleteObject(f0.hfont);
+				f0.hfont := 0;
+			END
+		END
+	END
+END Finalize;
+
+PROCEDURE MapPrinterFont (family: ARRAY OF CHAR; VAR replacement: ARRAY OF CHAR);
+	VAR i: INTEGER;
+BEGIN
+	i := 0;
+	WHILE (Map[i].family # "") & (i < MapSize) DO
+		IF family = Map[i].family THEN COPY(Map[i].subst, replacement); RETURN END;
+		INC(i);
+	END;
+	COPY(family, replacement)
+END MapPrinterFont;
+
+PROCEDURE Substitute(L: Fonts.Font);
+BEGIN
+	L.type := Fonts.substitute;
+	L.height := Fonts.Default.height;
+	L.minX := Fonts.Default.minX; L.maxX := Fonts.Default.maxX;
+	L.minY := Fonts.Default.minY; L.maxY := Fonts.Default.maxY;
+	L.ind := Fonts.Default.ind;
+END Substitute;
+
+PROCEDURE Open (L: Objects.Library);
+VAR f: Files.File; R: Files.Rider; id: CHAR;
+	family, class, tmp, subst: ARRAY 64 OF CHAR; size: LONGINT; style: SET;
+BEGIN
+	WITH L: Fonts.Font DO
+		IF verbose THEN C.Str("WinPrinter.Open "); C.Str(L.name) END;
+		Kernel.RegisterObject(L, Finalize, FALSE);
+		
+		ParseName(L.name, family, size, style, class);	(* take name apart *)
+		IF ~((class[0] = "M") & (class[1] = "d")) & ~((class[0] = "P") & (class[1] = "r")) THEN
+			IF verbose THEN C.Str("  cannot load with this WinPrinter module."); C.Ln() END;
+			RETURN
+		END;
+		
+		MapPrinterFont(family, family);
+		BuildName(family, size, style, class, subst);	(* rebuild name *)
+		
+		IF (subst # L.name) & verbose THEN C.Str(" => "); C.Str(subst) END;
+
+	(* Code to use Prx fonts instead of Mdx when available *)
+		IF (class[0] = "M") & (class[1] = "d") THEN (* check if Prx font is available *)
+			class[0] := "P"; class[1] := "r";
+			BuildName(family, size, style, class, tmp);
+			class[0] := "M"; class[1] := "d";
+			f := Files.Old(tmp);
+			IF f # NIL THEN
+				Files.Set(R, f, 0); Files.Read(R, id);
+				IF id = Fonts.FontId THEN Files.Read(R, L.type);
+					IF L.type = Fonts.font THEN
+						Load(L, R, subst, Fonts.metric);	(* only read the metrics *)
+						IF verbose THEN C.Str(" << "); C.Str(tmp); C.Ln() END;
+						RETURN
+					END
+				END
+			END
+		END;
+		
+		f := Files.Old(subst);
+		IF f # NIL THEN
+			Files.Set(R, f, 0); Files.Read(R, id);
+			IF id =Fonts. FontId THEN Files.Read(R, L.type);
+				IF L.type = Fonts.metric THEN Load(L, R, subst, L.type)
+				ELSIF L.type = Fonts.font THEN Load(L, R, subst, L.type)
+				ELSE Substitute(L)
+				END
+			ELSE Substitute(L)
+			END
+		ELSE
+			LoadTTFont(L, family, size, style, class);
+			IF L.type = -2 THEN
+				LoadTTFont(L, "Arial", size, style, class);
+				IF L.type = -2 THEN Substitute(L) END
+			END
+		END;
+		IF verbose THEN C.Ln() END
+	END
+END Open;
+
+PROCEDURE New (): Objects.Library;
+VAR F: Fonts.Font;
+BEGIN NEW(F);
+	F.Load := Open; F.GetObj := Fonts.GetCharObj; RETURN F
+END New;
+
+(* ------------------- End Printer Font Stuff -------------------- *)
+
+PROCEDURE OpenM* (P: Printer.Printer; printer, options: ARRAY OF CHAR);
+	CONST TABaseline = 24; TALeft = 0; transparent = 1;
+	VAR docname: ARRAY 128 OF CHAR; doc: DocInfo;
+BEGIN
+	WITH P: WinPrinter DO
+		GetPrinterDC(P, P.hdc);
+		IF P.hdc # NULL THEN
+			(*cachedFont := NIL; MFont := NIL; *) P.newPage := TRUE; P.Color := 0 (*black*);
+			SetMapMode(P.hdc, 1); (* Text mapping mode *)
+			Win32.SetTextAlign(P.hdc, TABaseline + TALeft);
+			Win32.SetBkMode(P.hdc, transparent);
+			Registry.Get("SystemInfo", "PrintJobName", docname);
+			IF Registry.res # Registry.Done THEN
+				docname := "Oberon Document"
+			END;
+			doc.size := SIZE(DocInfo); doc.docName := S.ADR(docname); doc.outputName := NULL;
+			StartDoc(P.hdc, S.ADR(doc));
+			Registry.Set("SystemInfo", "PrintJobName", "")
+		END
+	END
+END OpenM;
+
+PROCEDURE CloseM*(P: Printer.Printer);
+BEGIN
+	WITH P: WinPrinter DO
+		EndDoc(P.hdc);
+		Win32.DeleteDC(P.hdc); P.hdc := NULL; (*cachedFont := NIL; MFont := NIL; hfont := 0; *) P.Color := 0 (*black*);
+	END
+END CloseM;
+
+PROCEDURE PageM* (P: Printer.Printer; nofcopies: INTEGER);
+BEGIN
+	WITH P: WinPrinter DO
+		EndPage(P.hdc); P.newPage := TRUE
+	END
+END PageM;
+
+PROCEDURE NewPage*(P: Printer.Printer);
+CONST TABaseline = 24; TALeft = 0; transparent = 1;
+BEGIN
+	WITH P: WinPrinter DO
+		StartPage(P.hdc); P.newPage := FALSE;
+	(* ??
+		IF cachedFont # NIL THEN
+			InstallFont(cachedFont.name); (* because some printers seem to loose font information on new pages *)
+		END;
+	*)
+		(* 17.6.95: re-initialize also other non-default settings of hdc *)
+		SetMapMode(P.hdc, 1); (* Text mapping mode *)
+		Win32.SetTextAlign(P.hdc, TABaseline + TALeft);
+		Win32.SetBkMode(P.hdc, transparent);
+		(* end modifications 17.6.95 *)
+	END
+END NewPage;
+
+PROCEDURE ReplConstM* (P: Printer.Printer; x, y, w, h: INTEGER);
+	VAR obj: LONGINT; X, Y, W, H: LONGINT;
+BEGIN
+	WITH P: WinPrinter DO
+		DEC(x, PrinterX); INC(y, PrinterY);
+		IF P.newPage THEN NewPage(P) END;
+		X := x; Y := y; W := w; H := h;
+		obj := Win32.CreateSolidBrush(P.Color); obj := Win32.SelectObject(P.hdc, obj); Win32.DeleteObject(obj);
+		obj := Win32.PatBlt(P.hdc, X, P.PageH-Y-H, W, H, 0F00021H (*PATCOPY*));
+	END
+END ReplConstM;
+
+PROCEDURE ReplPatternM* (P: Printer.Printer; x, y, w, h: INTEGER; patno: INTEGER);
+	VAR obj: LONGINT; X, Y, W, H: LONGINT;
+BEGIN
+	WITH P: WinPrinter DO
+		DEC(x, PrinterX); INC(y, PrinterY);
+		IF P.newPage THEN NewPage(P) END;
+		X := x; Y := y; W := w; H := h;
+		Win32.SetTextColor(P.hdc, P.Color);
+		CASE patno OF
+			| 2: obj := Win32.GetStockObject(1);
+			| 3: obj := Win32.GetStockObject(2);
+			| 4: obj := Win32.GetStockObject(3);
+			| 5: obj := Win32.GetStockObject(4);
+			| 6: obj := CreateHatchBrush(3, 0);
+			| 7: obj := CreateHatchBrush(2, 0);
+			| 8: obj := CreateHatchBrush(1, 0);
+			| 9: obj := CreateHatchBrush(0, 0);
+		ELSE obj := Win32.GetStockObject(0);
+		END;
+		obj := Win32.SelectObject(P.hdc, obj); Win32.DeleteObject(obj);
+		obj := Win32.PatBlt(P.hdc, X, P.PageH-Y-H, W, H, 0F00021H (*PATCOPY*));
+	END
+END ReplPatternM;
+
+PROCEDURE LineM* (P: Printer.Printer; x0, y0, x1, y1: INTEGER);
+	VAR obj: LONGINT; X0, Y0, X1, Y1: LONGINT;
+BEGIN
+	WITH P: WinPrinter DO
+		DEC(x0, PrinterX); INC(y0, PrinterY);
+		DEC(x1, PrinterX); INC(y1, PrinterY);
+		IF P.newPage THEN NewPage(P) END;
+		X0 := x0; Y0 := y0; X1 := x1; Y1 := y1;
+		obj := CreatePen(0 (*solid pen*), 0 (*width 1 pixel*), P.Color);
+		obj := Win32.SelectObject(P.hdc, obj); Win32.DeleteObject(obj);
+		MoveToEx(P.hdc, X0, P.PageH-Y0, NULL);
+		LineTo(P.hdc, X1, P.PageH-Y1)
+	END
+END LineM;
+
+PROCEDURE CircleM* (P: Printer.Printer; x0, y0, r: INTEGER);
+	VAR obj: LONGINT; X0, Y0, R: LONGINT;
+BEGIN
+	WITH P: WinPrinter DO
+		DEC(x0, PrinterX); INC(y0, PrinterY);
+		IF P.newPage THEN NewPage(P) END;
+		X0 := x0; Y0 := y0; R := r;
+		obj := Win32.GetStockObject(5); (*NULL_BRUSH*)
+		obj := Win32.SelectObject(P.hdc, obj); Win32.DeleteObject(obj);
+		obj := CreatePen(0 (*solid pen*), 0 (*width 1 pixel*), P.Color);
+		obj := Win32.SelectObject(P.hdc, obj); Win32.DeleteObject(obj);
+		Ellipse0(P.hdc, X0-R, P.PageH-(Y0+R), X0+R, P.PageH-(Y0-R));
+	END
+END CircleM;
+
+PROCEDURE EllipseM* (P: Printer.Printer; x0, y0, a, b: INTEGER);
+	VAR obj: LONGINT; X0, Y0, A, B: LONGINT;
+BEGIN
+	WITH P: WinPrinter DO
+		DEC(x0, PrinterX); INC(y0, PrinterY);
+		IF P.newPage THEN NewPage(P) END;
+		X0 := x0; Y0 := y0; A := a; B := b;
+		obj := Win32.GetStockObject(5); (*NULL_BRUSH*)
+		obj := Win32.SelectObject(P.hdc, obj); Win32.DeleteObject(obj);
+		obj := CreatePen(0 (*solid pen*), 0 (*width 1 pixel*), P.Color);
+		obj := Win32.SelectObject(P.hdc, obj); Win32.DeleteObject(obj);
+		Ellipse0(P.hdc, X0-A, P.PageH-(Y0+B), X0+A, P.PageH-(Y0-B));
+	END
+END EllipseM;
+
+PROCEDURE ShowPoly (P: Printer.Printer; VAR p, q: Poly; lim: REAL; first: BOOLEAN);
+	VAR t: REAL; x, y, x1, y1: LONGINT;
+BEGIN
+	WITH P: WinPrinter DO
+		t := 0;
+		x1 := ENTIER(p.d); y1 := ENTIER(q.d);
+		IF first THEN MoveToEx(P.hdc, x1, P.PageH-y1, NULL) END;
+		REPEAT
+			x := ENTIER(((p.a * t + p.b) * t + p.c) * t + p.d);
+			y := ENTIER(((q.a * t + q.b) * t + q.c) * t + q.d);
+			IF (x1-x)*(x1-x)+(y1-y)*(y1-y) > 200 THEN
+				LineTo(P.hdc, x, P.PageH-y); x1 := x; y1 := y;
+			END;
+			t := t + 1.0
+		UNTIL t >= lim;
+		IF (x#x1) OR (y#y1) THEN LineTo(P.hdc, x, P.PageH-y) END
+	END
+END ShowPoly;
+
+PROCEDURE SolveTriDiag(VAR a, b, c, y: RealVector; n: INTEGER);
+	VAR i: INTEGER; r: REAL;	(* simplified expressions for iOP2 *)
+BEGIN (*a, b, c of tri-diag matrix T; solve Ty' = y for y', assign y' to y*) 
+	i := 1;
+	WHILE i < n DO r := y[i] - c[i-1]*y[i-1]; y[i] := r; (*y[i] := y[i] - c[i-1]*y[i-1];*) INC(i) END ;
+	i := n-1; y[i] := y[i]/a[i]; 
+	WHILE i > 0 DO DEC(i); r := (y[i] - b[i]*y[i+1]); y[i] := r/a[i]; (*y[i] := (y[i] - b[i]*y[i+1])/a[i]*) END 
+END SolveTriDiag;	
+
+PROCEDURE OpenSpline(VAR x, y, d: RealVector; n: INTEGER);
+	VAR i: INTEGER; d1, d2: REAL;
+		a, b, c: RealVector;
+BEGIN (*from x, y compute d = y'*) 
+	b[0] := 1.0/(x[1] - x[0]); a[0] := 2.0*b[0]; c[0] := b[0];
+	d1 := (y[1] - y[0])*3.0*b[0]*b[0]; d[0] := d1; i := 1;
+	WHILE i < n-1 DO
+		b[i] := 1.0/(x[i+1] - x[i]);
+		a[i] := 2.0*(c[i-1] + b[i]);
+		c[i] := b[i];
+		d2 := (y[i+1] - y[i])*3.0*b[i]*b[i];
+		d[i] := d1 + d2; d1 := d2; INC(i)
+	END ;
+	a[i] := 2.0*b[i-1]; d[i] := d1; i := 0;
+	WHILE i < n-1 DO c[i] := c[i]/a[i]; a[i+1] := a[i+1] - c[i]*b[i]; INC(i) END ;
+	SolveTriDiag(a, b, c, d, n)
+END OpenSpline;
+
+PROCEDURE ClosedSpline(VAR x, y, d: RealVector; n: INTEGER);
+	VAR i: INTEGER; d1, d2, hn, dn: REAL;
+		a, b, c, w: RealVector;
+BEGIN (*from x, y compute d = y'*)
+	hn := 1.0/(x[n-1] - x[n-2]);
+	dn := (y[n-1] - y[n-2])*3.0*hn*hn;
+	b[0] := 1.0/(x[1] - x[0]);
+	a[0] := 2.0*b[0] + hn;
+	c[0] := b[0];
+	d1 := (y[1] - y[0])*3.0*b[0]*b[0]; d[0] := dn + d1;
+	w[0] := 1.0; i := 1;
+	WHILE i < n-2 DO
+		b[i] := 1.0/(x[i+1] - x[i]);
+		a[i] := 2.0*(c[i-1] + b[i]);
+		c[i] := b[i];
+		d2 := (y[i+1] - y[i])*3.0*b[i]*b[i]; d[i] := d1 + d2; d1 := d2;
+		w[i] := 0; INC(i)
+	END ;
+	a[i] := 2.0*b[i-1] + hn; d[i] := d1 + dn;
+	w[i] := 1.0; i := 0;
+	WHILE i < n-2 DO c[i] := c[i]/a[i]; a[i+1] := a[i+1] - c[i]*b[i]; INC(i) END ;
+	SolveTriDiag(a, b, c, d, n-1); SolveTriDiag(a, b, c, w, n-1); 
+	d1 := (d[0] + d[i])/(w[0] + w[i] + x[i+1] - x[i]); i := 0;
+	WHILE i < n-1 DO d[i] := d[i] - d1*w[i]; INC(i) END ;
+	d[i] := d[0]
+END ClosedSpline;
+
+PROCEDURE SplineM* (P: Printer.Printer; x0, y0, n, open: INTEGER; VAR X, Y: ARRAY OF INTEGER);
+	VAR i: INTEGER; dx, dy, ds: REAL;
+		x, xd, y, yd, s: RealVector;
+		p, q: PolyVector;
+		obj: LONGINT; first: BOOLEAN;
+BEGIN
+	WITH P: WinPrinter DO
+		DEC(x0, PrinterX); INC(y0, PrinterY);
+		IF P.newPage THEN NewPage(P) END;
+		obj := CreatePen(0 (*solid pen*), 0 (*width 1 pixel*), P.Color);
+		obj := Win32.SelectObject(P.hdc, obj); Win32.DeleteObject(obj);
+		x[0] := X[0] + x0; y[0] := Y[0] + y0; s[0] := 0; i := 1;
+		WHILE i < n DO
+			x[i] := X[i] + x0; dx := x[i] - x[i-1];
+			y[i] := Y[i] + y0; dy := y[i] - y[i-1];
+			s[i] := ABS(dx) + ABS(dy) + s[i-1]; INC(i)
+		END;
+		IF open = 1 THEN OpenSpline(s, x, xd, n); OpenSpline(s, y, yd, n)
+		ELSE ClosedSpline(s, x, xd, n); ClosedSpline(s, y, yd, n)
+		END;
+		(*compute coefficients from x, y, xd, yd, s*)
+		i := 0;
+		WHILE i < n-1 DO
+			ds := 1.0/(s[i+1] - s[i]);
+			dx := (x[i+1] - x[i])*ds;
+			p[i].a := ds*ds*(xd[i] + xd[i+1] - 2.0*dx);
+			p[i].b := ds*(3.0*dx - 2.0*xd[i] -xd[i+1]);
+			p[i].c := xd[i];
+			p[i].d := x[i];
+			p[i].t := s[i];
+			dy := ds*(y[i+1] - y[i]);
+			q[i].a := ds*ds*(yd[i] + yd[i+1] - 2.0*dy);
+			q[i].b := ds*(3.0*dy - 2.0*yd[i] - yd[i+1]);
+			q[i].c := yd[i];
+			q[i].d := y[i];
+			q[i].t := s[i]; INC(i)
+		END ;
+		p[i].t := s[i]; q[i].t := s[i];
+		(*display polynomials*)
+		i := 0; first := TRUE;
+		WHILE i < n-1 DO ShowPoly(P, p[i], q[i], p[i+1].t - p[i].t, first); INC(i); first := FALSE END
+	END
+END SplineM;
+
+PROCEDURE PictureM* (P: Printer.Printer; pict: Pictures.Picture; sx, sy, sw, sh, dx, dy, dw, dh, mode: INTEGER);
+CONST
+	PalSize = 256;
+TYPE
+	ColorTable = ARRAY PalSize OF RECORD blue, green, red, flag: CHAR END;
+	BITMAPINFOHEADER = RECORD
+		size, width, height: LONGINT;
+		planes, bits: INTEGER;
+		compression, sizeImage,xPelsPerMeter, yPelsPerMeter, clrUsed, clrImportant: LONGINT;
+	END;
+	BITMAPINFO = RECORD
+		head: BITMAPINFOHEADER;
+		color: ColorTable;
+	END;
+VAR p: BITMAPINFO; i, j, r, g, b: INTEGER; X, Y, W, H, res: LONGINT;
+BEGIN
+	WITH P: WinPrinter DO
+		DEC(dx, PrinterX); INC(dy, PrinterY);
+		X := dx; Y := dy; W := dw; H := dh;
+		p.head.size := SIZE(BITMAPINFOHEADER);
+		p.head.width := (pict.width + 3) DIV 4 * 4; p.head.height := pict.height;
+		p.head.planes := 1; p.head.bits := 8;
+		p.head.compression := 0;
+		p.head.sizeImage := 0;
+		p.head.clrUsed := 0; p.head.clrImportant := 0;
+		
+		FOR i := 0 TO 255 DO
+			j := Win32.RevColTrans[i];
+			Pictures.GetColor(pict, j, r, g, b);
+			p.color[i].red := CHR(r);
+			p.color[i].green := CHR(g);
+			p.color[i].blue := CHR(b)
+		END;
+		res := StretchDIBits(P.hdc, X, P.PageH-(Y+H), W, H, sx, sy, sw, sh, Pictures.Address(pict), S.ADR(p), 0, SRCCOPY);
+	END
+END PictureM;
+
+PROCEDURE UseListFontM* (P: Printer.Printer; name: ARRAY OF CHAR); (* not implemented *)
+END UseListFontM;
+
+PROCEDURE SpecialString (P: Printer.Printer; X, Y: LONGINT; VAR s: ARRAY OF CHAR; f: Fonts.Font; VAR width: LONGINT);
+	VAR p: Win32.PatternPtr; i, dx, xp, yp, w, h: INTEGER; dmmy, pat: LONGINT; hdcMem: LONGINT;
+BEGIN
+	WITH P: WinPrinter DO
+		hdcMem := Win32.CreateCompatibleDC((*Win32.hdcDisp*) P.hdc);
+		Win32.SetTextColor(hdcMem, P.Color);
+		i := 0; width := 0;
+		WHILE s[i] # 0X DO
+			Fonts.GetChar(f, s[i], dx, xp, yp, w, h, pat);
+			p := S.VAL(Win32.PatternPtr, pat);
+			dmmy := Win32.SelectObject(hdcMem, p.bitmap);
+			Win32.BitBlt(P.hdc, X+xp, P.PageH-(Y+yp+p.h), w, h, hdcMem, p.x, p.y, 08800C6H (* SRCAND *) (* was 0220326H *));
+			INC(X, LONG(dx)); INC(width, LONG(dx));
+			INC(i);
+		END;
+		Win32.DeleteDC(hdcMem)
+	END
+END SpecialString;
+
+PROCEDURE BuildPrxName (VAR fname, pfname: ARRAY OF CHAR; unit: LONGINT);
+VAR ext: ARRAY 12 OF CHAR; i, j: INTEGER; 
+BEGIN
+	ext := ".Prx.Fnt"; ext[3] := CHR(30H + PrinterDPI DIV 100);
+	i := 0; j := 0;
+	WHILE (fname[i] # ".") & (fname[i] # 0X) DO pfname[i] := fname[i]; INC(i) END;
+	WHILE ext[j] # 0X DO pfname[i] := ext[j]; INC(i); INC(j) END;
+END BuildPrxName;
+
+PROCEDURE TranslateString (VAR s: ARRAY OF CHAR);
+VAR i: INTEGER;
+BEGIN
+	i := 0;
+	WHILE s[i] # 0X DO
+		s[i] := Win32.OberonToWin[ORD(s[i])]; INC(i)
+	END
+END TranslateString;
+
+PROCEDURE LoadFont(P: Printer.Printer; fname: ARRAY OF CHAR; VAR F: Fonts.Font; VAR oberon: BOOLEAN);
+VAR pfname: ARRAY 32 OF CHAR; oldfont: LONGINT; f0: Win32.Font;
+BEGIN
+	WITH P: WinPrinter DO
+		BuildPrxName(fname, pfname, P.Unit);
+		
+		F := Fonts.This(pfname);
+		f0 := S.VAL(Win32.Font, F.ind); oberon := f0.oberon & (f0.hfont = 0);
+		IF ~oberon THEN
+			oldfont := Win32.SelectObject(P.hdc, f0.hfont);
+		END
+	END
+END LoadFont;
+
+PROCEDURE StringM* (P: Printer.Printer; x, y: INTEGER; str: ARRAY OF CHAR; fnt: Fonts.Font);
+	VAR X, Y, len, W: LONGINT;
+		size: RECORD w: LONGINT END; F: Fonts.Font; oberon: BOOLEAN;
+BEGIN
+	WITH P: WinPrinter DO
+		DEC(x, PrinterX); INC(y, PrinterY);
+		IF P.newPage THEN NewPage(P) END;
+		X := x; Y := y; P.textX := X; P.textY := Y;
+		LoadFont(P, fnt.name, F, oberon);
+		IF oberon THEN
+			SpecialString(P, X, Y, str, F, W); 
+			INC(P.textX, W)
+		ELSE
+			TranslateString(str);
+			Win32.SetTextColor(P.hdc, P.Color);
+			len := 0; WHILE str[len] # 0X DO INC(len) END;
+			len := Win32.TextOut(P.hdc, X, P.PageH-Y, S.ADR(str), len);
+			GetTextExtentPoint(P.hdc, S.ADR(str), len, S.ADR(size));
+			INC(P.textX, size.w)
+		END
+	END
+END StringM;
+
+PROCEDURE ContStringM* (P: Printer.Printer; str: ARRAY OF CHAR; fnt: Fonts.Font);
+	VAR len, W: LONGINT; size: RECORD w: LONGINT END;
+	F: Fonts.Font; oberon: BOOLEAN;
+BEGIN
+	WITH P: WinPrinter DO
+		IF P.newPage THEN NewPage(P) END;
+		LoadFont(P, fnt.name, F, oberon);
+		IF oberon THEN
+			SpecialString(P, P.textX, P.textY, str, F, W); 
+			INC(P.textX, W)
+		ELSE
+			TranslateString(str);
+			Win32.SetTextColor(P.hdc, P.Color);
+			len := 0; WHILE str[len] # 0X DO INC(len) END;
+			len := Win32.TextOut(P.hdc, P.textX, P.PageH-P.textY, S.ADR(str), len);
+			GetTextExtentPoint(P.hdc, S.ADR(str), len, S.ADR(size));
+			INC(P.textX, size.w)
+		END
+	END
+END ContStringM;
+
+PROCEDURE UseColorM* (P: Printer.Printer; red, green, blue: INTEGER);
+BEGIN
+	WITH P: WinPrinter DO
+		P.Color := 10000H * (blue MOD 256) + 100H * (green MOD 256) + (red MOD 256)
+	END
+END UseColorM;
+
+PROCEDURE InitMetricsM*(P: Printer.Printer);
+CONST PdReturnDefault = 10; PdReturnDC = 8;
+VAR done: BOOLEAN; M: Display.ControlMsg; N: Oberon.ControlMsg; fntname: ARRAY 32 OF CHAR;
+BEGIN
+	WITH P: WinPrinter DO
+		P.Unit := Unit300;
+		
+		Win32.PD.hDevMode := NULL; Win32.PD.hDevNames := NULL;
+		Win32.PD.hdc := NULL;
+		Win32.PD.flags := {PdReturnDefault, PdReturnDC};
+		done := Win32.PrintDlg(S.ADR(Win32.PD));
+		P.hdc := Win32.PD.hdc;
+		IF P.hdc # NULL THEN GetUnits(P.hdc, P.PageW, P.PageH, P.Unit) END;
+		Win32.DeleteDC(P.hdc); P.hdc := NULL;
+		P.Width := SHORT(P.PageW); P.Height := SHORT(P.PageH);
+		P.Depth := 24; SetupFrame(P)
+	END;
+	fntname := "Mdx.Fnt";
+	fntname[2] := CHR(30H + PrinterDPI DIV 100);
+	Objects.Register(fntname, New);
+	fntname[0] := "P"; fntname[1] := "r";
+	Objects.Register(fntname, New);
+	SetupFrame(P);
+	N.id := Oberon.neutralize; M.F := NIL; Display.Broadcast(N);
+	M.id := Display.newprinter; M.F := NIL; Display.Broadcast(M);
+	M.id := Display.restore; M.F := NIL; Display.Broadcast(M)
+END InitMetricsM;
+
+PROCEDURE GetMetricM* (P: Printer.Printer; fnt: Fonts.Font): Fonts.Font;
+VAR name: ARRAY 32 OF CHAR; i: INTEGER; metric: Fonts.Font;
+BEGIN
+	COPY(fnt.name, name);
+	i := 0; WHILE (name[i] # ".") & (name[i] # 0X) DO INC(i) END;
+	(* look for Mdx *)
+	name[i] := "."; name[i+1] := "M"; name[i+2] := "d";
+	name[i+3] := CHR(30H + PrinterDPI DIV 100);
+	name[i+4] := "."; name[i+5] := "F"; name[i+6] := "n"; name[i+7] := "t";
+	name[i+8] := 0X;
+	metric := Fonts.This(name);
+	IF metric.type = Fonts.substitute THEN metric := NIL END;
+	RETURN metric
+END GetMetricM;
+
+PROCEDURE NewPrinter*(): Printer.Printer;
+VAR P: WinPrinter; 
+BEGIN
+	NEW(P);
+	P.name := "WinPrinter.Install";
+	P.hdc := NULL; P.Height := 0; P.Width := 0;
+	P.Unit := Unit300;
+	P.res := noconnection;
+	P.InitMetrics := InitMetricsM;
+	P.Open := OpenM;
+	P.Close := CloseM;
+	P.Page := PageM;
+	P.ReplConst := ReplConstM; 
+	P.ReplPattern := ReplPatternM;
+	P.Line := LineM;
+	P.Circle := CircleM;
+	P.Ellipse := EllipseM;
+	P.Spline := SplineM;
+	P.Picture := PictureM;
+	P.UseListFont := UseListFontM;
+	P.String := StringM;
+	P.ContString := ContStringM;
+	P.UseColor := UseColorM;
+	P.GetMetric := GetMetricM;
+	RETURN P
+END NewPrinter;
+
+PROCEDURE InitFontMapping;
+	VAR i, e: INTEGER; val: ARRAY 256 OF CHAR;
+
+	PROCEDURE SkipBlanks;
+	BEGIN WHILE (val[i] <= " ") & (val[i] # 0X) DO INC(i) END;
+	END SkipBlanks;
+
+	PROCEDURE ReadName(VAR name: ARRAY OF CHAR);
+		VAR j: INTEGER;
+	BEGIN
+		SkipBlanks; j := 0;
+		WHILE (val[i] # 0X) & (val[i] # ";") & (val[i] > " ") DO name[j] := val[i]; INC(j); INC(i) END;
+		name[j] := 0X;
+	END ReadName;
+
+BEGIN
+(* Printer mappings *)
+	Registry.Get("System", "PrinterFontSubstitution", val);
+	i := 0;
+	e := 0;
+	
+	LOOP SkipBlanks;
+		IF val[i] = 0X THEN EXIT END;
+		ReadName(Map[e].family); SkipBlanks;
+		IF (val[i] # 0X) THEN ReadName(Map[e].subst); SkipBlanks;
+		ELSE Map[e].family := ""; EXIT
+		END;
+		INC(e);
+		IF val[i] = ";" THEN INC(i); ELSE EXIT END;
+	END;
+	WHILE e < MapSize DO Map[e].family := ""; Map[e].subst := ""; INC(e) END;
+	Registry.Get("System", "Verbose", val);
+	verbose := CAP(val[0]) = "Y"
+END InitFontMapping;
+
+PROCEDURE Init;
+VAR mod: LONGINT;
+BEGIN
+	mod := Kernel.LoadLibrary("GDI32");
+	(*Kernel.GetAdr(mod, "CreateDCA", S.VAL(LONGINT, CreateDC));*)
+	(*Kernel.GetAdr(mod, "CreateCompatibleDC", S.VAL(LONGINT, CreateCompatibleDC));*)
+	Kernel.GetAdr(mod, "SetMapMode", S.VAL(LONGINT, SetMapMode));
+	Kernel.GetAdr(mod, "MoveToEx", S.VAL(LONGINT, MoveToEx));
+	Kernel.GetAdr(mod, "LineTo", S.VAL(LONGINT, LineTo));
+	Kernel.GetAdr(mod, "Ellipse", S.VAL(LONGINT, Ellipse0));
+	Kernel.GetAdr(mod, "CreateHatchBrush", S.VAL(LONGINT, CreateHatchBrush));
+	Kernel.GetAdr(mod, "CreatePen", S.VAL(LONGINT, CreatePen));
+	Kernel.GetAdr(mod, "StartDocA", S.VAL(LONGINT, StartDoc));
+	Kernel.GetAdr(mod, "EndDoc", S.VAL(LONGINT, EndDoc));
+	Kernel.GetAdr(mod, "StartPage", S.VAL(LONGINT, StartPage));
+	Kernel.GetAdr(mod, "EndPage", S.VAL(LONGINT, EndPage));
+	Kernel.GetAdr(mod, "GetCharABCWidthsA", S.VAL(LONGINT, GetCharABCWidths));
+	Kernel.GetAdr(mod, "GetTextExtentPointA", S.VAL(LONGINT, GetTextExtentPoint));
+	Kernel.GetAdr(mod, "GetTextMetricsA", S.VAL(LONGINT, GetTextMetrics));
+	Kernel.GetAdr(mod, "StretchDIBits", S.VAL(LONGINT, StretchDIBits));
+	Kernel.GetAdr(mod, "EnumFontFamiliesA", S.VAL(LONGINT, EnumFontFamilies));
+	Kernel.GetAdr(mod, "CreateFontIndirectA", S.VAL(LONGINT, CreateFontIndirect));
+		
+	mod := Kernel.LoadLibrary("COMDLG32");
+	Kernel.GetAdr(mod, "CommDlgExtendedError", S.VAL(LONGINT, CommDlgExtendedError));
+END Init;
+
+PROCEDURE InitT;
+	VAR i, k, bit, val: INTEGER;
+j: LONGINT;
+ch: CHAR;
+BEGIN i := 0;
+	WHILE i < 256 DO k := i; bit := 0; val := 0;
+		WHILE bit < 8 DO
+			val := val * 2;
+			IF ODD(k) THEN INC(val) END;
+			k := k DIV 2; INC(bit);
+		END;
+ch := CHR(i);
+j := (-ORD(ch)-1) MOD 256;
+T[j] := CHR(val);
+(*		T[i] := CHR(val);*) INC(i)
+	END;
+END InitT;
+
+PROCEDURE Install*;
+BEGIN Printer.Install(NewPrinter())
+END Install;
+
+BEGIN PrinterUnit := Unit300; PrinterDPI := 300; PrinterHDC := 0; Init; InitT; InitFontMapping
+END WinPrinter.Install
+
+Desktops.PrintDoc Default * ~
+
+System.State WinPrinter ~
+System.State Printer ~
+
+PSPrinter.Install ~
+
+System.Free WinPrinter ~
+

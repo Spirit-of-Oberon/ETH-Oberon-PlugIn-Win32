@@ -1,0 +1,739 @@
+﻿(* OBERON System 3, Release 2.2.
+
+Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
+e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon System 3 license contract.
+The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+or requested from the above mentioned address.
+
+Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
+in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE Profiler; (* jm 13.3.95 *)
+
+(*
+	28.3.95 - added support for marked procedures, i.e. PROCEDURE * bla;
+*)
+
+IMPORT
+	S := SYSTEM, Kernel, Types, Modules, 
+	Display, Oberon, Texts, Attributes, OPM := OOPM, OPS := OOPS,
+	Documents, TextGadgets, TextDocs, Desktops, Fonts, Compiler, cAP;
+
+CONST
+		(* symbol values *)
+		times = 1; period = 18; comma = 19;
+		then = 26; do = 27; becomes = 34;
+		ident = 38; semicolon = 39; end = 41; elsif = 43;
+		case = 46; loop = 50; return = 53; record = 55; begin = 57;
+		procedure = 61; import = 62; module = 63; eof = 64;
+	
+TYPE
+	Ret = POINTER TO RetDesc;
+	RetDesc = RECORD
+		next: Ret;
+		pos: LONGINT;
+	END;
+	
+	Proc = POINTER TO ProcDesc;
+	ProcDesc = RECORD
+		name: ARRAY 64 OF CHAR;
+		beg, end: LONGINT;
+		no: INTEGER;
+		returns: Ret;
+		outer, next: Proc;
+	END;
+
+VAR
+	R: Texts.Reader;
+	sym: SHORTINT;
+	modName: OPS.Name;
+	level: INTEGER; incode: BOOLEAN;
+	p, proclist, last: Proc;
+	procno: INTEGER;
+	skew: LONGINT;
+	W: Texts.Writer;
+	
+	(* special positions *)
+	bodypos: LONGINT; genbody: BOOLEAN;
+	importpos: LONGINT; genimport: BOOLEAN;
+	varpos: LONGINT;
+
+(* --------------------- Memory Analysis --------------------- *)
+CONST
+	MarkBit = 0;
+	B = 32;	(* must be a mutiple of 32 *)
+	SubObjBit = 3;
+	mark = {MarkBit}; array = {1}; subobj = {SubObjBit};
+
+TYPE
+	ADDRESS = LONGINT;
+	BlockPtr = POINTER TO Block;
+	Block = RECORD
+		lastElemToMark, currElem, firstElem: BlockPtr;
+	END;
+	
+	Tag = POINTER TO TypeDesc;
+	TypeDesc = RECORD
+		size: LONGINT;
+		ptroff: LONGINT
+	END;
+	Blockm4Ptr = POINTER TO Blockm4;
+	Blockm4 = RECORD
+		tag: Tag;
+		lastElemToMark, currElem, firstElem: LONGINT;
+	END;
+	
+	Mod = RECORD
+		name: ARRAY 32 OF CHAR;
+		mod, no, codesize: LONGINT;
+		size: LONGINT;
+	END;
+	
+	SuperBlockPtr = POINTER TO SuperBlock;
+	SuperBlock = RECORD
+		next: ADDRESS;
+		size: LONGINT;
+		firstblock: ADDRESS;
+		endblock: ADDRESS;
+	END;
+	
+VAR
+	Nobjects, Narrays: LONGINT;
+	Sobjects, Sarrays: LONGINT;
+	mods: ARRAY 256 OF Mod;
+	unknowns, unknownsize: LONGINT;
+	Nmod: INTEGER;
+
+(* --------------------- Profiling --------------------- *)
+PROCEDURE err(n: INTEGER);
+BEGIN OPM.err(n)
+END err;
+
+PROCEDURE CheckSym(s: INTEGER);
+BEGIN
+	IF sym = s THEN OPS.Get(sym) ELSE OPM.err(s) END
+END CheckSym;
+
+PROCEDURE Init(T: Texts.Text);
+BEGIN
+	level := 0; procno := 0;
+	bodypos := -1; genbody := FALSE;
+	importpos := -1; genimport := FALSE;
+	varpos := -1;
+	
+	Texts.OpenReader(R, T, 0);
+	OPM.Init({}, R, Oberon.Log);
+	OPS.Init;
+END Init;
+
+PROCEDURE Push(name: ARRAY OF CHAR);
+VAR q: Proc;
+BEGIN NEW(q); COPY(name, q.name); q.outer := p; p := q
+END Push;
+
+PROCEDURE Pop;
+BEGIN
+	IF p # NIL THEN
+		p := p.outer
+	END
+END Pop;
+
+PROCEDURE Module;
+VAR x: LONGINT; r, s: Ret;
+BEGIN
+	p := NIL; proclist := NIL;
+	
+	OPS.Get(sym);
+	IF sym = module THEN OPS.Get(sym) ELSE err(16) END ;
+	IF sym = ident THEN	(* module name *)
+		COPY(OPS.name, modName); OPS.Get(sym); CheckSym(semicolon);
+		
+		x := OPM.curpos;
+		IF sym = import THEN OPS.Get(sym);
+			LOOP
+				IF sym = ident THEN
+					importpos := OPM.curpos-1; OPS.Get(sym);
+					IF sym = becomes THEN OPS.Get(sym);
+						IF sym = ident THEN importpos := OPM.curpos-1; OPS.Get(sym) ELSE err(ident) END
+					END;
+				ELSE err(ident)
+				END;
+				IF sym = comma THEN OPS.Get(sym)
+				ELSIF sym = ident THEN err(comma)
+				ELSE EXIT
+				END
+			END;
+			IF sym = semicolon THEN varpos := OPM.curpos; OPS.Get(sym) ELSE err(semicolon) END;
+		ELSE (* no imports *)
+			importpos := x; genimport := TRUE;
+			varpos := x;
+		END ;
+	END;
+	LOOP
+		IF ~OPM.noerr OR (sym = eof) THEN EXIT END;
+		CASE sym OF
+			procedure:
+				OPS.Get(sym);
+				IF sym = times THEN OPS.Get(sym) END;
+				IF sym = ident THEN Push(OPS.name); OPS.Get(sym) END;
+			| case, do, loop, then, record: OPS.Get(sym); INC(level);
+			| elsif: OPS.Get(sym); DEC(level);
+			| begin: INC(level);
+				incode := TRUE;
+				IF p # NIL THEN p.beg := OPM.curpos ELSE bodypos := OPM.curpos END;
+				OPS.Get(sym)
+			| end:
+				IF level > 0 THEN DEC(level) END;
+				IF (level = 0) & incode THEN
+					IF p # NIL THEN
+						p.end := OPM.curpos - 4;
+						IF proclist = NIL THEN proclist := p ELSE last.next := p END;
+						last := p;
+						p.no := procno; INC(procno);
+						Pop
+					END;
+					incode := FALSE;
+					OPS.Get(sym);
+				ELSIF (level = 0) & ~incode THEN (* no body *)
+					x := OPM.curpos - 4;
+					OPS.Get(sym);
+					
+					IF sym = ident THEN (* end of module of proc *)
+						OPS.Get(sym);
+						IF sym = semicolon THEN (* end of proc *)
+							Pop; OPS.Get(sym);
+						ELSIF sym = period THEN (* end of module *)
+							OPS.Get(sym);
+							IF bodypos = -1 THEN (* no body *)
+								bodypos := x; genbody := TRUE;
+							END
+						END
+					END
+				ELSE OPS.Get(sym)
+				END;
+			| return: 
+				IF incode & (p # NIL) THEN
+					NEW(r); r.pos := OPM.curpos - 7;
+					IF p.returns = NIL THEN p.returns := r
+					ELSE
+						s := p.returns;
+						WHILE s.next # NIL DO s := s.next END;
+						s.next := r
+					END
+				END;
+				OPS.Get(sym)
+			ELSE OPS.Get(sym)
+		END
+	END
+END Module;
+
+PROCEDURE ShowText(T: Texts.Text; name: ARRAY OF CHAR);
+VAR F: TextGadgets.Frame; D: Documents.Document;
+BEGIN
+	NEW(F); TextGadgets.Init(F, T, FALSE);
+	NEW(D); TextDocs.InitDoc(D);
+	COPY(name, D.name);
+	Documents.Init(D, F);
+	D.W := 400;
+	Desktops.ShowDoc(D)
+END ShowText;
+
+PROCEDURE Ins(T: Texts.Text; pos: LONGINT);
+BEGIN
+	skew := skew + W.buf.len;
+	Texts.Insert(T, pos, W.buf);
+END Ins;
+
+PROCEDURE Instrument(T: Texts.Text; VAR error: BOOLEAN; compile: BOOLEAN);
+VAR q: Proc; r: Ret; R: Texts.Reader;
+BEGIN
+	Init(T);
+	
+	Module;
+	
+	IF OPM.noerr THEN
+		skew := 0;
+		IF genimport THEN
+			Texts.WriteString(W, " IMPORT cAP; "); Ins(T, importpos)
+		ELSE
+			Texts.WriteString(W, ",cAP"); Ins(T, importpos + skew)
+		END;
+		
+		Texts.WriteString(W, " VAR mcAP: cAP.Module; "); Ins(T, varpos + skew);
+		q := proclist;
+		WHILE q # NIL DO
+			Texts.WriteString(W, "cAP.B(mcAP,");
+			Texts.WriteInt(W, q.no, 0);
+			Texts.WriteString(W, "); "); Ins(T, q.beg + skew);
+			
+			r := q.returns;
+			WHILE r # NIL DO
+				Texts.WriteString(W, ";cAP.E(mcAP,");
+				Texts.WriteInt(W, q.no, 0);
+				Texts.WriteString(W, "); "); Ins(T, r.pos + skew);
+				r := r.next
+			END;
+			
+			Texts.WriteString(W, ";cAP.E(mcAP,");
+			Texts.WriteInt(W, q.no, 0);
+			Texts.WriteString(W, "); "); Ins(T, q.end + skew);
+			q := q.next
+		END;
+		
+		IF genbody THEN
+			Texts.WriteString(W, " BEGIN ");
+			Ins(T, bodypos + skew)
+		END;
+		Texts.WriteString(W, "cAP.Mod(mcAP,");
+		Texts.Write(W, 22X);
+		Texts.WriteString(W, modName);
+		Texts.Write(W, 22X);
+		Texts.Write(W, ",");
+		Texts.WriteInt(W, procno, 0);
+		Texts.WriteString(W, "); "); Ins(T, bodypos + skew);
+		
+		q := proclist;
+		WHILE q # NIL DO
+			Texts.WriteString(W, "cAP.R(mcAP,");
+			Texts.WriteInt(W, q.no, 0);
+			Texts.Write(W, ",");
+			Texts.Write(W, 22X);
+			Texts.WriteString(W, q.name);
+			Texts.Write(W, 22X);
+			Texts.WriteString(W, ");"); Texts.WriteLn(W);
+			q := q.next
+		END;
+		Ins(T, bodypos + skew);
+	END;
+	
+	Texts.WriteString(W, modName); Texts.Append(Oberon.Log, W.buf);
+	IF compile THEN
+		error := FALSE; OPS.Init;
+		Texts.OpenReader(R, T, 0);
+		Compiler.Module(R, "", MAX(LONGINT), Oberon.Log, error)
+	END
+END Instrument;
+
+(** Get the marked text *)
+PROCEDURE GetText(VAR par: Display.Frame): Texts.Text;
+BEGIN
+	par := Oberon.MarkedFrame();
+	RETURN Oberon.MarkedText()
+END GetText;
+
+PROCEDURE Compile*;
+VAR S: Attributes.Scanner; T, t: Texts.Text; error: BOOLEAN; par: Display.Frame; B: Texts.Buffer;
+BEGIN
+	Texts.WriteString(W, "Profiler.Compile"); Texts.WriteLn(W);
+	Texts.Append(Oberon.Log, W.buf);
+	
+	Attributes.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos); Attributes.Scan(S);
+	error := FALSE;
+	WHILE (S.class = Attributes.Name) & ~error DO
+		NEW(T); Texts.Open(T, S.s);
+		Instrument(T, error, TRUE);
+		IF error THEN ShowText(T, S.s) END;
+		Attributes.Scan(S)
+	END;
+	IF (S.class = Attributes.Char) & (S.c = "*") THEN
+		t := GetText(par);
+		IF t # NIL THEN
+			NEW(T); Texts.Open(T, "");
+			NEW(B); Texts.OpenBuf(B);
+			Texts.Save(t, 0, t.len, B);
+			Texts.Append(T, B);
+			Instrument(T, error, TRUE);
+			IF error THEN ShowText(T, S.s) END;
+		END;
+	END;
+END Compile;
+
+PROCEDURE ShowCode*;
+VAR S: Attributes.Scanner; T, t: Texts.Text; error: BOOLEAN; par: Display.Frame; B: Texts.Buffer;
+BEGIN
+	Texts.WriteString(W, "Profiler.ShowCode"); Texts.WriteLn(W);
+	Texts.Append(Oberon.Log, W.buf);
+	
+	t := GetText(par);
+	IF t # NIL THEN
+		NEW(T); Texts.Open(T, "");
+		NEW(B); Texts.OpenBuf(B);
+		Texts.Save(t, 0, t.len, B);
+		Texts.Append(T, B);
+		Instrument(T, error, FALSE);
+		ShowText(T, S.s)
+	END
+END ShowCode;
+
+PROCEDURE Show*;
+VAR T: Texts.Text; m: cAP.Module; i, k: INTEGER;
+	ind: POINTER TO ARRAY OF INTEGER;
+	total: LONGINT;
+	
+	PROCEDURE Sort(l, r: INTEGER);	
+	VAR i, j: INTEGER; m1: LONGINT; c: INTEGER;
+	BEGIN
+		i := l; j := r; m1 := m.p[ind[(i+j) DIV 2]].time;
+		REPEAT
+			WHILE m.p[ind[i]].time > m1 DO INC(i) END;
+			WHILE m.p[ind[j]].time < m1 DO DEC(j) END;
+			IF i <= j THEN
+				c := ind[i]; ind[i] := ind[j]; ind[j] := c; INC(i); DEC(j)
+			END
+		UNTIL i > j;
+		IF l < j THEN Sort(l, j) END;
+		IF i < r THEN Sort(i, r) END
+	END Sort;
+
+BEGIN
+	NEW(T); Texts.Open(T, "");
+	
+	Texts.SetFont(W, Fonts.This("Courier10.Scn.Fnt"));
+	Texts.WriteString(W, "       Calls       Time/Call       Total        %"); Texts.WriteLn(W); Texts.WriteLn(W);
+	
+	(* calculate total time *)
+	total := 0;
+	m := cAP.mods;
+	WHILE m # NIL DO
+		FOR i := 0 TO m.noprocs - 1 DO
+			INC(total, m.p[i].time);
+		END;
+		m := m.next
+	END;
+
+	m := cAP.mods;
+	WHILE m # NIL DO
+		(* sort data *)
+		NEW(ind, m.noprocs);
+		FOR i := 0 TO m.noprocs - 1 DO
+			ind[i] := i
+		END;
+		Sort(0, m.noprocs - 1);
+		
+		Texts.WriteString(W, m.name); Texts.WriteLn(W);
+		FOR i := 0 TO m.noprocs - 1 DO
+			k := ind[i];
+			IF m.p[k].nocalls > 0 THEN
+				Texts.Write(W, 9X); Texts.WriteInt(W, m.p[k].nocalls, 8);
+				Texts.Write(W, 9X); Texts.Write(W, 9X); Texts.WriteInt(W, m.p[k].time DIV m.p[k].nocalls, 8);
+				Texts.Write(W, 9X); Texts.WriteInt(W, m.p[k].time, 8);
+				Texts.Write(W, 9X); Texts.WriteRealFix(W, m.p[k].time / total * 100, 7, 2, 0);
+				Texts.Write(W, 9X); Texts.WriteString(W, m.p[k].name);
+				Texts.WriteLn(W)
+			END
+		END;
+		Texts.WriteLn(W);
+		m := m.next
+	END;
+	Texts.Append(T, W.buf);
+	Texts.SetFont(W, Fonts.Default);
+	ShowText(T, "Profiler.Show");
+END Show;
+
+PROCEDURE Reset*;
+VAR m: cAP.Module; i: INTEGER;
+BEGIN
+	m := cAP.mods;
+	WHILE m # NIL DO
+		FOR i := 0 TO m.noprocs - 1 DO
+			m.p[i].nocalls := 0;
+			m.p[i].time := 0;
+		END;
+		m := m.next
+	END
+END Reset;
+
+(* --------------------------------- Memory analysis --------------------------------- *)
+PROCEDURE Mark (block: BlockPtr);
+	TYPE Tag = POINTER TO RECORD (*size,*) ptroff: LONGINT  END;
+		(* size skipped, because accessed via tag = actual tag + 4 *)
+	VAR father, field, currElem: BlockPtr; offset: LONGINT; tag, downtag, marked: Tag; arraybit: SET;
+BEGIN
+	S.GET(S.VAL(ADDRESS, block)-4, tag);
+	IF ~(SubObjBit IN S.VAL(SET, block)) THEN	(* not a subobject *)
+		marked := S.VAL(Tag, S.VAL(SET, tag) + mark);
+		IF tag # marked THEN
+			S.PUT(S.VAL(ADDRESS, block)-4, marked);
+			S.GET(S.VAL(ADDRESS, S.VAL(SET, tag) - array)-4, marked);
+			(* unnecessary to mask mark bit *)
+			S.GET(S.VAL(ADDRESS, marked)-4, arraybit);
+			INCL(arraybit, MarkBit);
+			S.PUT(S.VAL(ADDRESS, marked)-4, arraybit);
+			arraybit := S.VAL(SET, tag) * array;
+			IF arraybit # {} THEN currElem := block^.firstElem;
+				tag := S.VAL(Tag, S.VAL(SET, tag) - arraybit)
+			ELSE currElem := block
+			END;
+			father := NIL;
+			LOOP
+				INC(S.VAL(ADDRESS, tag), 4);
+				offset := tag^.ptroff;
+				IF offset < 0 THEN
+					INC(S.VAL(ADDRESS, tag), offset);
+					IF (arraybit # {}) & (currElem # block^.lastElemToMark) THEN
+						INC(S.VAL(ADDRESS, currElem), tag^.ptroff)
+					ELSE (* up *)
+						S.PUT(S.VAL(ADDRESS, block)-4, S.VAL(SET, tag) + arraybit + mark);
+						IF father = NIL THEN EXIT END;
+						S.GET(S.VAL(ADDRESS, father)-4, tag);
+						arraybit := S.VAL(SET, tag) * array;
+						tag := S.VAL(Tag, S.VAL(SET, tag) - (array + mark));
+						IF arraybit # {} THEN currElem := father^.currElem
+						ELSE currElem := father
+						END;
+						offset (*field address*) := S.VAL(ADDRESS, currElem) + tag^.ptroff;
+						S.GET(offset, field);
+						S.PUT(offset, block);
+						block := father;
+						father := field
+					END
+				ELSE
+					offset (*field address*) := S.VAL(ADDRESS, currElem) + offset;
+					S.GET(offset, field);
+					IF field # NIL THEN
+						S.GET(S.VAL(ADDRESS, field)-4, downtag);
+						IF subobj * S.VAL(SET, field) = {} THEN	(* not a subobject *)
+							marked := S.VAL(Tag, S.VAL(SET, downtag) + mark);
+							IF downtag # marked THEN (* down *)
+								S.PUT(S.VAL(ADDRESS, field)-4, marked);
+								S.PUT(S.VAL(ADDRESS, block)-4, S.VAL(SET, tag) + arraybit + mark);
+								IF arraybit # {} THEN block^.currElem:= currElem END;
+								S.GET(S.VAL(ADDRESS, S.VAL(SET, downtag) - array)-4, marked);
+								(* unnecessary to mask mark bit *)
+								S.GET(S.VAL(ADDRESS, marked)-4, arraybit);
+								INCL(arraybit, MarkBit);
+								S.PUT(S.VAL(ADDRESS, marked)-4, arraybit);
+								arraybit := S.VAL(SET, downtag) * array;
+								IF arraybit # {} THEN currElem := field^.firstElem ELSE currElem := field END;
+								S.PUT(offset, father);
+								father := block;
+								block := field;
+								tag := S.VAL(Tag, S.VAL(SET, downtag) - arraybit)
+							END
+						ELSE	(* do not mark subobject *)
+							S.GET(S.VAL(ADDRESS, S.VAL(SET, downtag) - array)-4, marked);
+							EXCL(S.VAL(SET, marked), MarkBit);
+							S.GET(S.VAL(ADDRESS, marked)-4, downtag);
+							INCL(S.VAL(SET, downtag), MarkBit);
+							S.PUT(S.VAL(ADDRESS, marked)-4, downtag)
+						END
+					END
+				END
+			END
+		END
+	ELSE (* do not mark subobject, subobjects are not traced *)
+		S.GET(S.VAL(ADDRESS, S.VAL(SET, tag) - array)-4, tag);
+		EXCL(S.VAL(SET, tag), MarkBit);
+		S.GET(S.VAL(ADDRESS, tag)-4, arraybit);
+		INCL(arraybit, MarkBit);
+		S.PUT(S.VAL(ADDRESS, tag)-4, arraybit)
+	END;
+END Mark;
+
+PROCEDURE MarkPhase;
+VAR m: Modules.Module; i, p, ptradr: LONGINT; ptr: BlockPtr;
+BEGIN
+	Nmod := 0; unknowns := 0; unknownsize := 0;
+	m := Modules.modList;	(* ModuleDesc and ModuleBlock are marked via Kernel.modules *)
+	WHILE m # NIL DO
+		COPY(m.name, mods[Nmod].name);
+		mods[Nmod].size := 0; mods[Nmod].mod := S.VAL(LONGINT, m); mods[Nmod].no := 0;
+		mods[Nmod].codesize := LEN(m.code^) + LEN(m.data^);
+		INC(Nmod);
+		
+		i := m.nofPtrs; ptradr := S.ADR(m.ptrTab^);
+		WHILE i > 0 DO
+			S.GET(ptradr, p); S.GET(p, ptr);
+			IF ptr # NIL THEN Mark(ptr) END;
+			DEC(i); INC(ptradr, 4);
+		END;
+		
+		(* mark type descriptors *)
+		i := m.nofTds; ptradr := S.ADR(m.tdescs^);
+		WHILE i > 0 DO
+			S.GET(ptradr, ptr); Mark(ptr);
+			DEC(i); INC(ptradr, 4);
+		END;
+		
+		IF m.privates # 0 THEN Mark(S.VAL(BlockPtr, m.privates)) END;
+		IF m.publics # 0 THEN Mark(S.VAL(BlockPtr, m.publics)) END;
+
+		(* *)
+		m := m^.link;
+	END
+END MarkPhase;
+
+PROCEDURE AddMem(p: S.PTR; size: LONGINT);
+VAR t: Types.Type; i: INTEGER; m: Modules.Module;
+BEGIN
+	t := Types.TypeOf(p);
+	i := 0;
+	WHILE i < Nmod DO
+		IF S.VAL(LONGINT, t.module) = mods[i].mod THEN
+			INC(mods[i].size, size);
+			INC(mods[i].no);
+			RETURN
+		END;
+		INC(i)
+	END;
+	m := Modules.modList;
+	WHILE m # NIL DO
+		IF S.VAL(LONGINT, p) + 24 = S.VAL(LONGINT, m.entries) THEN
+			i := 0;
+			WHILE i < Nmod DO
+				IF S.VAL(LONGINT, m) = mods[i].mod THEN
+					INC(mods[i].codesize, size);
+					RETURN
+				END;
+				INC(i)
+			END;
+		END;
+		m := m^.link;
+	END;
+	INC(unknowns); INC(unknownsize, size);
+END AddMem;
+
+PROCEDURE Sweep;
+VAR p, end: Blockm4Ptr; tag, notmarked, tdesc: Tag; size, lastsize: LONGINT;
+	arrayb: BOOLEAN; thisSuper, lastSuper, nextSuper: SuperBlockPtr;
+
+BEGIN
+	Narrays := 0; Sarrays  := 0;
+	Nobjects := 0; Sobjects := 0;
+	
+	lastSuper := NIL;
+	thisSuper := S.VAL(SuperBlockPtr, Kernel.superblocks);
+	WHILE thisSuper # NIL DO
+		p := S.VAL(Blockm4Ptr, thisSuper^.firstblock);
+		end := S.VAL(Blockm4Ptr, thisSuper^.endblock);
+		nextSuper := S.VAL(SuperBlockPtr, thisSuper^.next);
+
+		lastsize := 0;
+		WHILE p # end DO
+			tag := p^.tag;
+			notmarked := S.VAL(Tag, S.VAL(SET, tag) - mark);
+			tdesc := S.VAL(Tag, S.VAL(SET, notmarked) - array);
+			IF notmarked # tdesc THEN (* array block *)
+				size := p^.lastElemToMark + tdesc^.size - S.VAL(ADDRESS, p);
+				arrayb := TRUE
+			ELSE
+				size := tdesc^.size + 4;
+				arrayb := FALSE
+			END;
+			size := S.VAL(LONGINT, S.VAL(SET, size + B-1)-S.VAL(SET, B-1));
+			IF tag = notmarked THEN (* collect *)
+			ELSE
+				p^.tag := notmarked;
+				IF arrayb THEN
+					INC(Narrays); INC(Sarrays, size)
+				ELSE
+					INC(Nobjects); INC(Sobjects, size);
+					AddMem(S.VAL(S.PTR, S.VAL(LONGINT, p) + 4), size);
+				END
+			END;
+			INC(S.VAL(ADDRESS, p), size)
+		END;
+		thisSuper := nextSuper;
+	END
+END Sweep;
+
+PROCEDURE IntToStr(i: LONGINT; VAR s: ARRAY OF CHAR; VAR len: INTEGER);
+VAR k, j: INTEGER; x0: LONGINT; a: ARRAY 10 OF CHAR;
+BEGIN k := 0;
+ IF i < 0 THEN
+      IF i = MIN(LONGINT) THEN COPY("-2147483648", s); RETURN
+      ELSE x0 := -i
+      END
+    ELSE x0 := i
+    END;	
+    REPEAT
+      a[k] := CHR(x0 MOD 10 + 30H); x0 := x0 DIV 10; INC(k)
+    UNTIL x0 = 0;
+    j := 0;
+    IF i < 0 THEN s[j] := "-"; INC(j); END;
+    REPEAT DEC(k); s[j] := a[k]; INC(j); UNTIL k = 0;
+    s[j] := 0X;
+    len := j;
+END IntToStr;
+
+PROCEDURE WriteFix(VAR W: Texts.Writer; x: LONGINT; c: INTEGER);
+VAR s: ARRAY 16 OF CHAR; len: INTEGER;
+BEGIN
+	IntToStr(x, s, len);
+	DEC(c, len);
+	WHILE c > 0 DO Texts.Write(W, " "); DEC(c) END;
+	Texts.WriteString(W, s);
+END WriteFix;
+
+PROCEDURE ShowMem*;
+VAR i: INTEGER; T: Texts.Text; moddata, objcount, total, used, avail: LONGINT;
+BEGIN
+	avail := Kernel.Available();
+	used := Kernel.HeapSize() - avail;
+	
+	MarkPhase;
+	Sweep;
+	
+	NEW(T); Texts.Open(T, "");
+	Texts.SetFont(W, Fonts.This("Courier10.Scn.Fnt"));
+	Texts.WriteInt(W,  Narrays, 0); Texts.WriteString(W, " array block(s): "); Texts.WriteInt(W, Sarrays, 0);
+	Texts.WriteString(W, " bytes");Texts.WriteLn(W);
+	
+	Texts.WriteInt(W,  Nobjects, 0); Texts.WriteString(W, " object(s): "); Texts.WriteInt(W, Sobjects, 0);
+	Texts.WriteString(W, " bytes"); Texts.WriteLn(W);
+	
+	Texts.WriteLn(W);
+	
+	Texts.WriteInt(W, Nmod, 0); Texts.WriteString(W, " loaded modules"); Texts.WriteLn(W); Texts.WriteLn(W);
+	
+	Texts.WriteString(W, "ModuleData    #Objects        Size"); Texts.WriteLn(W); Texts.WriteLn(W);
+	
+	moddata := 0; objcount := 0; total := 0;
+	FOR i := 0 TO Nmod - 1 DO
+		WriteFix (W, mods[i].codesize, 10); Texts.Write(W, 9X); INC(moddata, mods[i].codesize);
+		WriteFix (W, mods[i].no, 8); Texts.Write(W, 9X); INC(objcount, mods[i].no);
+		WriteFix (W, mods[i].size, 8); Texts.Write(W, 9X); INC(total, mods[i].size);
+		Texts.WriteString(W, mods[i].name);
+		Texts.WriteLn(W);
+	END;
+	Texts.WriteString(W, "----------------------------------------------------"); Texts.WriteLn(W);
+	WriteFix (W, moddata, 10); Texts.Write(W, 9X);
+	WriteFix (W, objcount, 8); Texts.Write(W, 9X);
+	WriteFix (W, total, 8); Texts.Write(W, 9X);
+	Texts.WriteString(W, "Total");
+	Texts.WriteLn(W); Texts.WriteLn(W);
+	
+	Texts.WriteInt(W, unknowns, 0); Texts.WriteString(W, " unknown object(s) with ");
+	Texts.WriteInt(W, unknownsize, 0); Texts.WriteString(W, " bytes");
+	Texts.WriteLn(W);
+
+	Texts.WriteInt(W, moddata + total + unknownsize, 0); Texts.WriteString(W, " bytes accounted for in listing"); Texts.WriteLn(W);
+	Texts.WriteInt(W, used, 0);  Texts.WriteString(W, " bytes used reported by Kernel"); Texts.WriteLn(W);
+	Texts.WriteInt(W, used -(moddata + total + unknownsize), 0);  Texts.WriteString(W, " unidentified bytes"); Texts.WriteLn(W);
+	
+	Texts.Append(T, W.buf);
+	ShowText(T, "MemoryDump.Text")
+END ShowMem;
+
+BEGIN Texts.OpenWriter(W)
+END Profiler.
+
+Profiler.Compile *
+Profiler.Compile Organizers.Mod BasicFigures.Mod ~
+Profiler.Compile BasicFigures.Mod
+Profiler.ShowMem
+
+Profiler.Show
+Profiler.Reset
+
+Gadgets.Insert Line ~
+Gadgets.Insert Spline ~
+Gadgets.Insert Organizer !
+System.Free BasicFigures Organizers Profiler cAP CAP cap~
+RembrandtDocs.Mod

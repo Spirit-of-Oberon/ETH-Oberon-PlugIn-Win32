@@ -1,0 +1,1006 @@
+﻿(* OBERON System 3, Release 2.2.
+
+Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
+e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon System 3 license contract.
+The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+or requested from the above mentioned address.
+
+Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
+in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE Modules;	(* Oberon for Windows Module Loader; RC/MH 10.12.93 / 3.2.94 / 25.5.94 / tk 4.1.96*)
+
+(**
+The Modules module implements the dynamic module loader of the Oberon system. It is responsible for loading and freeing modules.
+*)
+
+IMPORT Kernel, Kernel32, FileDir, Files, S := SYSTEM, C := Console;
+
+CONST
+	DefMaxImport=64; DefMaxStruct=32; DefMaxReimp=32;
+	ModNameLen* = 32;
+	PageSize = 4096; B = 32;
+
+TYPE
+	Command* = PROCEDURE;
+	CommandName = ARRAY 32 OF CHAR;
+	Cmd* = RECORD
+		name*: CommandName;	(** Name of the command *)
+		adr*: LONGINT;	(** Starting position of command code *)
+	END;
+	
+	ExportPtr* = POINTER TO ExportDesc;
+	ExportDesc* = RECORD
+		fp*: LONGINT; adr*: LONGINT;
+		nofExp*: INTEGER; 
+		dsc*: POINTER TO ARRAY OF ExportDesc
+	END;
+	
+	ADDRESS = LONGINT;
+	
+	ArrayPtr* = POINTER TO ARRAY OF LONGINT;
+
+	TerminationHandler* = Kernel.Handler;
+	Module* = POINTER TO ModDesc;
+	ModuleName* = ARRAY ModNameLen OF CHAR;
+	ModDesc* = RECORD
+		link*: Module;
+		name*: ModuleName;
+		init*: BOOLEAN;
+		refcnt*, sb*: LONGINT;
+		dataSize*, conSize*, codeSize*, refSize*: LONGINT;
+		nofEntries*, nofCmds*, nofImps*, nofTds*, nofPtrs*: LONGINT;
+		entries*: POINTER TO ARRAY OF ADDRESS;
+		cmds*: POINTER TO ARRAY OF Cmd;
+		ptrTab*: POINTER TO ARRAY OF ADDRESS;
+		tdescs*: POINTER TO ARRAY OF (* Tag *) ADDRESS;
+		imports*: POINTER TO ARRAY OF (* Module *) ADDRESS;
+		data*, code*: POINTER TO ARRAY OF CHAR;
+		refs*: POINTER TO ARRAY OF CHAR;
+		publics*, privates*: LONGINT;
+		nofimp*: INTEGER; import*: ArrayPtr;
+		nofstrc*: INTEGER; struct*: ArrayPtr;
+		nofreimp*: INTEGER; reimp*: ArrayPtr;
+		export*: ExportDesc;
+		term*: TerminationHandler;
+	END;
+
+VAR
+	res*: INTEGER;	(** Error code for ThisMod and ThisCommand. res = 0 indicates succes. *)
+	resMsgLen*: INTEGER; resMsg*: ARRAY 256 OF CHAR;	(** Explanation of res. *)
+	modList*: Module;
+
+	(** The res codes are listed in the table below.
+		done = 0;
+		fileNotFound = 1
+		invalidObjFile = 2
+		corruptedObjFile = 4
+		cmdNotFound = 5
+		moduleNotFound = 6
+		notEnoughSpace = 7
+		refCntNotZero = 8
+		cyclicImport = 9
+		incompImport = 16
+	*)
+	
+	KernelRoutines: ARRAY 3 OF ADDRESS;
+	loop: Command;
+
+CONST
+	done = 0;
+	fileNotFound = 1;
+	invalidObjFile = 2;
+	corruptedObjFile = 4;
+	cmdNotFound = 5;
+	moduleNotFound = 6;
+	notEnoughSpace = 7;
+	refCntNotZero = 8;
+	cyclicImport = 9;
+	incompImport = 16;
+
+	ExtTabWordSize = 16;
+	Tag0WordOffset = -2;
+	Mth0WordOffset = Tag0WordOffset - ExtTabWordSize;
+
+TYPE
+	LinkTab = ARRAY 256 OF RECORD
+		mod, entry: CHAR;
+		link: LONGINT
+	END;
+
+	DataLinkTab = ARRAY 128 OF RECORD
+		mod: CHAR;
+		entry: INTEGER;
+		nofFixups: INTEGER;
+		offset: POINTER TO ARRAY OF LONGINT;
+	END;
+	
+CONST
+	(* export/use section *)
+	EUEnd = 0; EURecord = 1; EUobjScope = 0; EUrecScope = 1;  EUerrScope = -1;
+	EUProcFlag = 80000000H; 
+
+VAR
+	extended*: RECORD
+		Load*: PROCEDURE(VAR R: Files.Rider; M: Module);
+		Unlink*: PROCEDURE(mod: Module; all: BOOLEAN)
+	END;
+
+PROCEDURE LSW (x: LONGINT): LONGINT;
+BEGIN (* least significant word (unsigned) *)
+	RETURN S.VAL(LONGINT, S.VAL(SET, x) * S.VAL(SET, 0FFFFH))
+END LSW;
+
+PROCEDURE MSW (x: LONGINT): LONGINT;
+BEGIN (* most significant word (unsigned) *)
+	RETURN S.LSH(x, -16)
+END MSW;
+
+PROCEDURE ReadUnsigned (VAR R: Files.Rider; VAR u: LONGINT);
+	(* read unsigned, 16 bit, little endian value *)
+	VAR low, high: CHAR;
+BEGIN
+	Files.Read(R, low); Files.Read(R, high);
+	u := 256*LONG(ORD(high)) + ORD(low);
+END ReadUnsigned;
+
+(* Error Messages *)
+
+PROCEDURE Str(s: ARRAY OF CHAR);
+	VAR i: INTEGER;
+BEGIN	i:=0; REPEAT resMsg[resMsgLen]:=s[i]; INC(i); INC(resMsgLen) UNTIL s[i-1]=0X; DEC(resMsgLen);
+	C.Str(s)
+END Str;
+
+PROCEDURE Ch(ch: CHAR);
+BEGIN	resMsg[resMsgLen]:=ch; INC(resMsgLen); resMsg[resMsgLen]:=0X;
+	C.Ch(ch)
+END Ch;
+
+PROCEDURE Ln;
+BEGIN	resMsg[resMsgLen]:=0DX; INC(resMsgLen); resMsg[resMsgLen]:=0X;
+	C.Ln()
+END Ln;
+
+PROCEDURE Clear;
+BEGIN	resMsg[0]:=0X; resMsgLen:=0; res := done
+END Clear;
+
+PROCEDURE ErrMsg(n: INTEGER; name: ARRAY OF CHAR);
+BEGIN IF res # 0 THEN RETURN END;
+	res := n;
+	IF res # 0 THEN
+		Str(name);
+		IF (res = fileNotFound) OR (res = moduleNotFound) THEN Str(" not found")
+		ELSIF res = invalidObjFile THEN Str(" not an obj-file")
+		ELSIF res = corruptedObjFile THEN Str(" corrupted obj file")
+		ELSIF res = notEnoughSpace THEN Str(" not enough space")
+		ELSIF res = refCntNotZero THEN Str(" reference count not zero")
+		ELSIF res = cyclicImport THEN Str(" imported cyclic")
+		ELSIF res = cmdNotFound THEN Str(" not found")  (* assumes importing = procedure name *)
+		ELSE Str(" unknown error code")
+		END;
+		C.Ln()
+	END
+END ErrMsg;
+
+PROCEDURE Find (VAR modname: ARRAY OF CHAR; VAR m: Module);
+BEGIN
+	m := modList;
+	WHILE m # NIL DO
+		IF m.name = modname THEN RETURN END;
+		m := m.link
+	END;
+END Find;
+
+(* ---- auxiliaries ---- *)
+
+PROCEDURE And(x, y: LONGINT): LONGINT;
+BEGIN RETURN S.VAL(LONGINT, S.VAL(SET, x) * S.VAL(SET, y));
+END And;
+
+PROCEDURE ReadString(VAR R: Files.Rider; VAR string: ARRAY OF CHAR);
+	VAR i: INTEGER; ch: CHAR;
+BEGIN i := 0;
+	LOOP Files.Read(R, ch);
+		IF ch = 0X THEN string[i] := 0X; RETURN
+		ELSIF ch > 7FX THEN string[i] := CHR(ORD(ch)-80H); string[i+1] := 0X; RETURN
+		ELSE string[i] := ch; INC(i) END
+	END
+END ReadString;
+
+(* ---- code/data allocation ----- *)
+
+PROCEDURE AllocCodeBlock*(VAR p: LONGINT; blocksize: LONGINT);
+	VAR size, adr, radr: LONGINT; 
+BEGIN
+	size := S.VAL(LONGINT, S.VAL(SET, blocksize + 4 + 12 + (28 + B-1))-S.VAL(SET, B-1))+B;
+	size := ((size+PageSize-1) DIV PageSize)*PageSize;
+	radr := Kernel32.VirtualAlloc(Kernel32.NULL, size, Kernel32.LongOr(Kernel32.MEMCommit, Kernel32.MEMReserve), Kernel32.PageExecuteReadWrite);
+	IF radr = Kernel32.NULL THEN
+		p := Kernel32.NULL; RETURN
+	END;
+	adr := radr; INC(adr, (-adr-4) MOD B);
+	ASSERT(((adr+4) MOD B) = 0);
+	ASSERT(radr <= (adr-8));
+	S.PUT(adr-4, radr); S.PUT(adr-8, size);
+	S.PUT(adr, adr+4);
+	S.PUT(adr+4, size-4);
+	S.PUT(adr+24, adr+4);
+	p := adr + 28;
+	S.PUT(p+12, blocksize)
+END AllocCodeBlock;
+
+PROCEDURE ShrinkCodeBlock*(p, blocksize: LONGINT);
+	VAR adr, radr, size, bsize: LONGINT;
+BEGIN
+	S.GET(p+12, bsize); bsize := bsize-blocksize;
+	IF bsize > PageSize THEN
+		adr := p-28;
+		S.GET(adr-4, radr); S.GET(adr-8, size);
+		bsize := (bsize DIV PageSize)*PageSize;
+		IF Kernel32.VirtualFree(radr+size-bsize, bsize, Kernel32.MEMDecommit) # Kernel32.False THEN
+			S.PUT(adr-8, size-bsize);
+			S.PUT(p+12, blocksize)
+		END
+	END
+END ShrinkCodeBlock;
+
+PROCEDURE DeAllocCodeBlock*(p: LONGINT);
+	VAR adr, radr, size: LONGINT;
+BEGIN
+	adr := p-28;
+	S.GET(adr-4, radr); S.GET(adr-8, size);
+	adr := Kernel32.VirtualFree(radr, size, Kernel32.MEMDecommit);
+	adr := Kernel32.VirtualFree(radr, 0, Kernel32.MEMRelease)
+END DeAllocCodeBlock;
+
+PROCEDURE *FinalizeModule(m: PTR);
+BEGIN
+	WITH m: Module DO
+		DeAllocCodeBlock(S.VAL(LONGINT, m.code));
+		DeAllocCodeBlock(S.VAL(LONGINT, m.data))
+	END
+END FinalizeModule;
+
+(*---- module loading ---- *)
+
+PROCEDURE ^Load (name: ARRAY OF CHAR; VAR m: Module; import: BOOLEAN);
+
+PROCEDURE thisMod*(name: ARRAY OF CHAR; import: BOOLEAN): Module;
+	VAR mod: Module;
+BEGIN
+	Clear(); mod := NIL;
+	Load(name, mod, import);
+	RETURN mod
+END thisMod;
+
+PROCEDURE LoadModule (VAR R: Files.Rider; m: Module);
+	TYPE TDesc = POINTER TO RECORD word: ARRAY 32000 OF LONGINT END;
+	VAR
+		ch: CHAR;
+		tmp, nofDataLinks, nofLinks: INTEGER;
+		i, mno, j, symSize, e, k, t: LONGINT;
+		imp: Module; mname: ModuleName;
+		body: Command; linkTab: LinkTab; dataLinks: DataLinkTab;
+		types: ARRAY 128 OF RECORD
+			initialized: BOOLEAN;
+			tdesc: TDesc;
+			entry, root, nofMeth, nofInhMeth, baseMod: INTEGER;
+			baseEntry: LONGINT
+		END;
+
+	PROCEDURE FixupCall(code, link, fixval: LONGINT);
+	VAR instr, nextlink, jmp: LONGINT;
+	BEGIN
+		REPEAT
+			S.GET(code + link, instr);
+			nextlink := MSW(instr);
+			S.GET(code + link - 1, jmp);
+			IF LSW(jmp) MOD 100H = 0E8H THEN
+				S.PUT(code + link, fixval - (code + link + 4)) (* + 4: to next instruction *)
+			ELSE
+				S.PUT(code + link, fixval)
+			END;
+			link := nextlink
+		UNTIL link = 0FFFFH
+	END FixupCall;
+	
+	PROCEDURE FixupVar(code, link, fixval: LONGINT);
+	VAR nofFixups: INTEGER; i, val: LONGINT;
+	BEGIN
+		nofFixups := dataLinks[link].nofFixups;
+		i := 0;
+		WHILE i < nofFixups DO
+			S.GET(code + dataLinks[link].offset[i], val);
+			S.PUT(code + dataLinks[link].offset[i], val + fixval);
+			INC(i)
+		END
+	END FixupVar;
+	
+	PROCEDURE Fixup(m: Module; VAR link: LinkTab);
+		VAR i, val, offs: LONGINT;
+			modNo, nofFixups: INTEGER;
+			codebase: ADDRESS;
+	BEGIN
+		codebase := S.ADR(m.code[0]);
+		(* global variables *)
+		modNo := ORD(dataLinks[0].mod); nofFixups := dataLinks[0].nofFixups;
+		IF modNo = 0 THEN
+			i := 0;
+			WHILE i < nofFixups DO
+				S.GET(codebase + dataLinks[0].offset[i], val);
+				S.PUT(codebase + dataLinks[0].offset[i], val + m.sb);
+				INC(i)
+			END
+		END;
+		(* Kernel.NewRec, Kernel.NewSys, Kernel.NewArr, local Procedure assignments, case table and imported procedures *)
+		i := 0;
+		WHILE i < nofLinks DO
+			IF ORD(link[i].mod) = 0 THEN
+				(* Kernel.NewRec, Kernel.NewSys, Kernel.NewArr, local Procedure assignments, case table *)
+				CASE ORD(link[i].entry) OF
+					255:	(* case table fixup in constant area *)
+						offs := link[i].link;
+						WHILE offs # 0FFFFH DO
+							S.GET(m.sb + offs, val); S.PUT(m.sb + offs, codebase + LSW(val));
+							offs := MSW(val);
+						END;
+				|   254:	(* local procedure assignment *)
+						offs := link[i].link;
+						WHILE offs # 0FFFFH DO
+							S.GET(codebase + offs, val); S.PUT(codebase + offs, m.entries[LSW(val)]);
+							offs := MSW(val);
+						END;
+				|   253:	(* Kernel.NewRec *)
+						(*offs := 12345678;*)
+						offs := link[i].link;
+						WHILE offs # 0FFFFH DO
+							S.GET(codebase + offs, val);
+							S.PUT(codebase + offs, KernelRoutines[0] - (codebase + offs + 4));
+							offs := MSW(val);
+						END;
+				|   252:	(* Kernel.NewSys *)
+						offs := link[i].link;
+						WHILE offs # 0FFFFH DO
+							S.GET(codebase + offs, val); S.PUT(codebase + offs, KernelRoutines[1] - (codebase + offs + 4));
+							offs := MSW(val);
+						END;
+				|   251:	(* Kernel.NewArr *)
+						offs := link[i].link;
+						WHILE offs # 0FFFFH DO
+							S.GET(codebase + offs, val); S.PUT(codebase + offs, KernelRoutines[2] - (codebase + offs + 4));
+							offs := MSW(val);
+						END
+				ELSE
+					HALT(98)
+				END
+			ELSE	(* imported procedure from module from *)
+				HALT(99) (* this case should never occure *)
+			END;
+			INC(i)
+		END
+	END Fixup;
+	
+	PROCEDURE LoadExpBlock(VAR R: Files.Rider; M: Module);
+		VAR struct: ARRAY 1024 OF ExportPtr; nofStr: INTEGER;
+		
+		PROCEDURE LoadScope(VAR scope: ExportDesc; level: INTEGER; adr: LONGINT);
+			VAR no, no2: INTEGER; fp, off: LONGINT; 
+		BEGIN
+			Files.ReadBytes(R, scope.nofExp, 2); no := 0; no2 := 0;
+			IF scope.nofExp # 0 THEN 
+				NEW(scope.dsc, scope.nofExp);
+				scope.dsc[0].adr := adr
+			END;
+			IF level = EUrecScope THEN INC(nofStr); struct[nofStr] := S.VAL(ExportPtr, S.ADR(scope)) END;
+			Files.ReadNum(R, fp);
+			WHILE fp#EUEnd DO
+				IF fp=EURecord THEN Files.ReadNum(R, off);
+					IF off < 0 THEN scope.dsc[no2].nofExp := struct[-off].nofExp; scope.dsc[no2].dsc := struct[-off].dsc; (* old type *)
+					ELSE LoadScope(scope.dsc[no2], EUrecScope, off)
+					END
+				ELSE 
+					IF level = EUobjScope THEN Files.ReadNum(R, scope.dsc[no].adr) END;
+					scope.dsc[no].fp := fp; no2 := no; INC(no)
+				END;
+				Files.ReadNum(R, fp)
+			END
+		END LoadScope;
+	
+	BEGIN nofStr := 0; LoadScope(M.export, EUobjScope, 0)
+	END LoadExpBlock;
+	
+	PROCEDURE CheckUseBlock(VAR R: Files.Rider; M: Module);
+		VAR mod: Module; name: ModuleName; 
+	
+		PROCEDURE Err;
+		BEGIN	
+			IF res = 0 THEN Str(M.name); Str(" imports incompatible version of "); Str(mod.name); Str(": "); res := incompImport
+			ELSE Ch(9X) END
+		END Err;
+	
+		PROCEDURE CheckScope(scope: ExportDesc; level: INTEGER);
+			VAR fp, link, i, tdadr: LONGINT; tadr: ExportPtr; tmpErr: BOOLEAN;
+		BEGIN tmpErr := (level = EUerrScope);
+			i := 0;
+			Files.ReadNum(R, fp);
+			WHILE fp # EUEnd DO
+				IF fp = EURecord THEN Files.ReadNum(R, link);
+					IF tmpErr THEN CheckScope(scope.dsc[i], EUerrScope)
+					ELSE
+						IF scope.dsc[i].dsc # NIL THEN
+							IF link # 0 THEN tadr := S.VAL(ExportPtr, S.ADR(scope.dsc[i].dsc[0]));
+								S.GET(mod.sb+tadr.adr, tdadr); S.PUT(M.sb-link, tdadr)	(* tdadr at tadr[0] *)
+							END
+						END;
+						CheckScope(scope.dsc[i], EUrecScope)
+					END
+				ELSE
+					ReadString(R, name);
+					IF level >= EUobjScope THEN tmpErr := FALSE;
+						IF level = EUobjScope THEN Files.ReadNum(R, link) END;
+						i := 0;
+						WHILE (i < scope.nofExp) & (scope.dsc[i].fp # fp) DO INC(i) END;
+						IF i >= scope.nofExp THEN Err; tmpErr := TRUE; Ln; Ch(9X);
+							IF name = "@" THEN Str("RECORD ") 
+							ELSE Str(name)
+							END;
+							Str(" incompatible");
+							DEC(i)
+						ELSIF (level = EUobjScope) & (link # 0) THEN
+							IF And(link, EUProcFlag) = 0 THEN
+								FixupVar(S.ADR(M.code[0]), link, mod.sb+scope.dsc[i].adr)
+							ELSE
+								FixupCall(S.ADR(M.code[0]), link-EUProcFlag, scope.dsc[i].adr+S.ADR(mod.code[0]))
+							END
+						END
+					END
+				END;
+				Files.ReadNum(R, fp)
+			END
+		END CheckScope;
+	
+	BEGIN ReadString(R, name);
+		WHILE (name # "") & (res = 0) DO
+			mod := thisMod(name, TRUE);
+			IF res = 0 THEN CheckScope(mod.export, EUobjScope) END;
+			ReadString(R, name)
+		END
+	END CheckUseBlock;
+	
+	PROCEDURE Expect (tag: CHAR);
+		VAR ch: CHAR;
+	BEGIN Files.Read(R, ch);
+		IF ch # tag THEN ErrMsg(corruptedObjFile, m.name) END
+	END Expect;
+	
+	PROCEDURE FindTDescAdr(M: Module; fp: LONGINT; VAR adr: LONGINT);
+	VAR i: INTEGER;
+	BEGIN
+		i := 0;
+		WHILE ( i < M.export.nofExp) & (M.export.dsc[i].fp # fp) DO INC(i) END;
+		IF i < M.export.nofExp THEN adr := M.export.dsc[i].dsc[0].adr
+		ELSE HALT(99)
+		END
+	END FindTDescAdr;
+	
+	PROCEDURE ReadTypes (VAR R: Files.Rider);
+		VAR
+			i, j, k, tdsize, recordSize: LONGINT;
+			tdEntry, nofMethods, nofNewMeths, mthNo, nofPointers, root, entryNo: INTEGER;
+			td: TDesc; 
+			name: ModuleName; 
+			ch: CHAR;
+	BEGIN
+		i := 0;
+		WHILE i < LEN(m.tdescs^) DO
+			types[i].initialized := FALSE;
+			Files.ReadLInt(R, recordSize);
+			Files.ReadInt(R, tdEntry); types[i].entry := tdEntry;
+			Files.ReadInt(R, types[i].baseMod);
+			Files.ReadLInt(R, types[i].baseEntry);
+			Files.ReadInt(R, nofMethods);
+			types[i].nofMeth := nofMethods; Files.ReadInt(R, types[i].nofInhMeth);
+			Files.ReadInt(R, nofNewMeths); Files.ReadInt(R, nofPointers);
+			Files.ReadString(R, name);
+			root := 13 (* fields tdsize..mdesc *) + nofMethods + ExtTabWordSize + 1 (* tag *);
+			INC(root, (-root+2) MOD 4);	(* ADR(td.word[root]) MOD 16 = 8 ! *)
+			types[i].root := root;
+			tdsize := (root + 1 (* recsize *) + nofPointers + 1 (* sentinel *) )*4;
+			(* IF Kernel.LargestAvailable() < tdsize THEN ErrMsg(notEnoughSpace, m.name); RETURN END; *)
+			S.NEW(td, tdsize - 24 (* overhead of SysBlk header *) );
+			IF td = NIL THEN HALT(88) END;
+			DEC(S.VAL(ADDRESS, td), 24);	(* overhead of SysBlk header *)
+			types[i].tdesc := td;
+			td.word[0] := tdsize;
+			td.word[1] := -4; (* sentinel *)
+			td.word[2] := S.ADR(td.word[root]) (* self *);
+			td.word[3] := 0; (* extlev *)
+			k := S.ADR(td.word[4]); j := 0;
+			REPEAT ch := name[j]; S.PUT(k, ch); INC(j); INC(k) UNTIL ch = 0X;
+			td.word[12] := S.ADR(m^); (* mdesc *)
+			j := 0;
+			WHILE j < nofNewMeths DO
+				Files.ReadInt(R, mthNo); Files.ReadInt(R, entryNo);
+				td.word[root + Mth0WordOffset - mthNo] := m.entries[entryNo];
+				INC(j);
+			END;
+			ASSERT(S.ADR(td.word[0]) # 0);
+			td.word[root - 1] := S.ADR(td.word[0]); (* tag of subobj *)
+			td.word[root] := recordSize;
+			S.PUT(m.sb + tdEntry, S.ADR(td.word[root]));
+			m.tdescs[i] := S.ADR(td.word[root]);
+			j := 0;
+			WHILE j < nofPointers DO Files.ReadLInt(R, td.word[root+1+j]); INC(j) END;
+			td.word[root+1+nofPointers] := -(nofPointers+1)*4; (* sentinel *)
+			INC(i)
+		END
+	END ReadTypes;
+
+	PROCEDURE InitType (i: LONGINT);
+		VAR t, baseType, tag, entry: LONGINT; extlev, n, root, baseModNo: INTEGER; td: TDesc; baseMod: Module;
+	BEGIN
+		IF ~types[i].initialized THEN
+			td := types[i].tdesc; baseModNo := types[i].baseMod; extlev := 0; root := types[i].root;
+			IF baseModNo # -1 THEN (* extended type *)
+				IF baseModNo = 0 THEN (* base type in this module, initialize first! *)
+					t := 0;
+					WHILE (t < LEN(m^.tdescs^)) & (types[t].entry # types[i].baseEntry) DO INC(t) END;
+					InitType(t);
+				END;
+				(* copy base type tags *)
+				IF baseModNo > 0 THEN
+					baseMod := S.VAL(Module, m.imports[baseModNo-1]);
+					FindTDescAdr(baseMod, types[i].baseEntry, types[i].baseEntry);
+				ELSE (* baseModNo = 0 *)
+					baseMod := m
+				END;
+				S.GET(baseMod.sb + types[i].baseEntry, baseType);
+				S.GET(baseType + Tag0WordOffset*4, tag);
+				WHILE tag # 0 DO
+					td.word[root + Tag0WordOffset - extlev] := tag;
+					INC(extlev);
+					S.GET(baseType + (Tag0WordOffset - extlev)*4, tag);
+				END;
+				(* copy non-overwritten base methods *)
+				n := types[i].nofInhMeth;
+				WHILE n > 0 DO DEC(n);
+					entry := td.word[root + Mth0WordOffset - n];
+					IF entry = 0 THEN
+						S.GET(baseType + (Mth0WordOffset - n)*4, td.word[root + Mth0WordOffset - n]);
+					END
+				END
+			END;
+			td.word[3] := extlev;
+			td.word[root + Tag0WordOffset - extlev] := S.ADR(td.word[root]); (* own type tag *)
+			types[i].initialized := TRUE;
+		END
+	END InitType;
+
+	PROCEDURE InitTypes;
+		VAR i: LONGINT;
+	BEGIN i := 0;
+		WHILE i < LEN(m.tdescs^) DO InitType(i); INC(i) END
+	END InitTypes;
+
+	PROCEDURE BuildModuleBlock (m: Module);
+		VAR t, size, gvarSize: LONGINT;
+			arrPtr: POINTER TO RECORD a, b, c, len, data: LONGINT END;
+	BEGIN
+		size := 16 * ((m.nofEntries*4 + 35) DIV 16
+			+ (m.nofCmds*SIZE(Cmd) + 35) DIV 16 + (m.nofPtrs*4 + 35) DIV 16 
+			+ (m.nofTds*4 + 35) DIV 16 + ((m.nofImps)*4 + 35) DIV 16
+			(* + (m.dataSize + (-m.dataSize) MOD 8 + m.conSize + 35) DIV 16 *)
+			(* + (m.codeSize + 35) DIV 16 *) + (m.refSize + 35) DIV 16);
+			
+		(* IF Kernel.LargestAvailable() < size + 24 THEN
+			ErrMsg(notEnoughSpace, m.name); RETURN
+		END; *)
+		S.NEW(arrPtr, size);
+		S.GET(S.VAL(ADDRESS, arrPtr) - 4, t);
+
+		S.PUT(S.ADR(m.entries), arrPtr);
+		arrPtr.len := m.nofEntries;
+		INC(S.VAL(ADDRESS, arrPtr), ((m.nofEntries*4 + 35) DIV 16)*16);
+
+		S.PUT(S.VAL(ADDRESS, arrPtr) - 4, t);
+		S.PUT(S.ADR(m.cmds), arrPtr);
+		arrPtr.len := m.nofCmds;
+		INC(S.VAL(ADDRESS, arrPtr), ((m.nofCmds*SIZE(Cmd) + 35) DIV 16)*16);
+
+		S.PUT(S.VAL(ADDRESS, arrPtr) - 4, t);
+		S.PUT(S.ADR(m.ptrTab), arrPtr);
+		arrPtr.len := m.nofPtrs;
+		INC(S.VAL(ADDRESS, arrPtr), ((m.nofPtrs*4 + 35) DIV 16)*16);
+
+		S.PUT(S.VAL(ADDRESS, arrPtr) - 4, t);
+		S.PUT(S.ADR(m.tdescs), arrPtr);
+		arrPtr.len := m.nofTds;
+		INC(S.VAL(ADDRESS, arrPtr), ((m.nofTds*4 + 35) DIV 16)*16);
+
+		S.PUT(S.VAL(ADDRESS, arrPtr) - 4, t);
+		S.PUT(S.ADR(m.imports), arrPtr);
+		arrPtr.len := m.nofImps;
+		INC(S.VAL(ADDRESS, arrPtr), (((m.nofImps)*4 + 35) DIV 16)*16);
+
+		(*
+		S.PUT(S.VAL(ADDRESS, arrPtr) - 4, t);
+		S.PUT(S.ADR(m.data), arrPtr);
+		gvarSize := m.dataSize + (-m.dataSize) MOD 8;
+		m.sb := S.ADR(arrPtr.data) + gvarSize;
+		arrPtr.len := (gvarSize + m.conSize + 3);	(* >> +3 noetig ?? *)
+		INC(S.VAL(ADDRESS, arrPtr), ((gvarSize + m.conSize + 35) DIV 16)*16);
+		*)
+		gvarSize := m.dataSize + (-m.dataSize) MOD 8;
+		AllocCodeBlock(S.VAL(LONGINT, m.data), gvarSize + m.conSize + 3);
+		m.sb := S.ADR(m.data[gvarSize]);
+		(*
+		S.PUT(S.VAL(ADDRESS, arrPtr) - 4, t);
+		S.PUT(S.ADR(m.code), arrPtr);
+		arrPtr.len := m.codeSize;
+		INC(S.VAL(ADDRESS, arrPtr), ((m.codeSize + 35) DIV 16)*16);
+		*)
+		AllocCodeBlock(S.VAL(LONGINT, m.code), m.codeSize);
+		Kernel.RegisterObject(m, FinalizeModule, TRUE);
+		S.PUT(S.VAL(ADDRESS, arrPtr) - 4, t);
+		S.PUT(S.ADR(m.refs), arrPtr);
+		arrPtr.len := m.refSize
+	END BuildModuleBlock;
+
+BEGIN (* LoadModule *)
+	Clear;
+	m.init := FALSE; m.refcnt := 0; m.term := NIL;
+
+	(* Skip sym file *)
+	Files.ReadNum(R, symSize); Files.Set(R, Files.Base(R), Files.Pos(R)+symSize);
+
+	(* HeaderBlk *)
+	Files.ReadLInt(R, m.refSize);
+	Files.ReadInt(R, tmp); m.nofEntries := tmp;
+	Files.ReadInt(R, tmp); m.nofCmds := tmp;
+	Files.ReadInt(R, tmp); m.nofPtrs := tmp;
+	Files.ReadInt(R, tmp); m.nofTds := tmp;
+	Files.ReadInt(R, tmp); m.nofImps := tmp;
+	Files.ReadInt(R, nofDataLinks);
+	Files.ReadInt(R, nofLinks);
+	Files.ReadLInt(R, m.dataSize);
+	Files.ReadInt(R, tmp); m.conSize := tmp;
+	ReadUnsigned(R, m.codeSize);
+	Files.ReadString(R, m.name);
+
+	Kernel.DisableGC();
+	BuildModuleBlock(m);
+	IF res # done THEN m := NIL; RETURN END;
+	Kernel.EnableGC();
+
+	(* EntryBlk *)
+	Expect(082X); i := 0; t := S.ADR(m.code[0]);
+	WHILE i < m.nofEntries DO ReadUnsigned(R, e); m.entries[i] := t + e; INC(i) END;
+
+	(* CmdBlk *)
+	Expect(083X); i := 0;
+	WHILE i < m.nofCmds DO
+		Files.ReadString(R, m.cmds[i].name); ReadUnsigned(R, e);
+		m.cmds[i].adr := t + e;
+		INC(i)
+	END;
+
+	(* PtrBlk *)
+	Expect(084X); i := 0; t := m.sb;
+	WHILE i < m.nofPtrs DO
+		Files.ReadLInt(R, k); m.ptrTab[i] := t + k;
+		INC(i)
+	END;
+
+	(* Import Block *)
+	Expect(085X); mno := 0;
+	WHILE (mno < m.nofImps) & (res = done) DO
+		ReadString(R, mname); imp := thisMod(mname, TRUE);
+		IF res = done THEN
+			INC(imp.refcnt);
+			m.imports[mno] := S.VAL(LONGINT, imp);
+			INC(mno)
+		END
+	END;
+
+	(* Data Link Block *)
+	Expect(08DX); i := 0;
+	WHILE i < nofDataLinks DO
+		Files.Read(R, dataLinks[i].mod);
+		Files.ReadInt(R, dataLinks[i].entry);
+		Files.ReadInt(R, dataLinks[i].nofFixups);
+		IF dataLinks[i].nofFixups > 0 THEN
+			NEW(dataLinks[i].offset, dataLinks[i].nofFixups);
+			j := 0;
+			WHILE j < dataLinks[i].nofFixups DO
+				ReadUnsigned(R, dataLinks[i].offset[j]);
+				INC(j)
+			END
+		ELSE dataLinks[i].offset := NIL
+		END;
+		INC(i)
+	END;
+
+	(* Link Block *)
+	Expect(086X); i := 0;
+	WHILE i < nofLinks DO
+		Files.Read(R, linkTab[i].mod); Files.Read(R, linkTab[i].entry); ReadUnsigned(R, linkTab[i].link);
+		INC(i)
+	END;
+
+	(* Const Block *)
+	Expect(087X); i := 0; t := m.sb;
+	WHILE i < m.conSize DO Files.Read(R, ch); S.PUT(t, ch); INC(t); INC(i) END;
+
+	(* Export Block *)
+	Expect(088X);
+	LoadExpBlock(R, m);
+	
+	(* Code Block *)
+	Expect(089X); Files.ReadBytes(R, m.code^, m.codeSize);
+
+	(* Use Block *)
+	Expect(08AX);
+	CheckUseBlock(R, m);
+
+	(* TypeBlk *)
+	Expect(08BX); IF res # done THEN RETURN END;
+	ReadTypes(R);
+	IF res # done THEN RETURN END;
+
+	(* Reference Block *)
+	Expect(08CX); Files.ReadBytes(R, m.refs^, m.refSize);
+
+	IF res = done THEN
+		Fixup(m, linkTab);
+		InitTypes;
+		m.init := TRUE;
+		S.PUT(S.ADR(body), S.ADR(m.code[0]));
+		body
+	ELSE 
+		WHILE mno > 0 DO DEC(mno); imp := S.VAL(Module, m.imports[mno]); DEC(imp.refcnt) END;
+		IF m = modList THEN modList := m.link 
+		ELSE 
+			imp := modList; WHILE (imp # NIL) & (imp.link # m) DO imp := imp.link END;
+			IF (imp # NIL) & (m # NIL) THEN
+				imp.link := m.link
+			END
+		END;
+		m := NIL
+	END
+END LoadModule;
+
+PROCEDURE Load (name: ARRAY OF CHAR; VAR m: Module; import: BOOLEAN);
+	VAR f: Files.File; R: Files.Rider; i, j: LONGINT; fname: ARRAY 64 OF CHAR; tag: CHAR; imp: Module;
+BEGIN
+	COPY(name, fname);
+	i := 0; j := 0;
+	WHILE name[i] # 0X DO
+		IF name[i] = FileDir.PathChar THEN
+			j := 0
+		ELSE
+			name[j] := name[i]; INC(j)
+		END;
+		INC(i)
+	END;
+	name[j] := 0X;
+	Find(name, m); Clear;
+	IF m = NIL THEN
+		i := 0;
+		WHILE fname[i] # 0X DO INC(i) END;
+		fname[i] := "."; fname[i+1] := "O"; fname[i+2] := "b"; fname[i+3] := "j"; fname[i+4] := 0X;
+		f := Files.Old(fname);
+		IF f = NIL THEN
+			ErrMsg(fileNotFound, name);
+			RETURN
+		END;
+		Files.Set(R, f, 0); Files.Read(R, tag);
+		IF tag = 0BBX THEN
+			(* IF Kernel.LargestAvailable() < SIZE(ModDesc) THEN
+				ErrMsg(notEnoughSpace, name); RETURN
+			END; *)
+			NEW(m); NEW(m.import, DefMaxImport); NEW(m.struct, DefMaxStruct); 
+			NEW(m.reimp, DefMaxReimp); m.nofImps := -1;
+			COPY(name, m.name);
+			Files.Read(R, tag);
+			IF tag = 055X THEN
+				m.link := modList; modList := m; LoadModule(R, m)
+			ELSIF (tag = 088X) & (extended.Load # NIL) THEN m.link := modList; modList := m; extended.Load(R, m);
+				IF res # done THEN
+					IF m = modList THEN modList := m.link 
+					ELSE 
+						imp := modList; WHILE (imp # NIL) & (imp.link # m) DO imp := imp.link END;
+						IF (imp # NIL) & (m # NIL) THEN
+							imp.link := m.link
+						END
+					END;
+					m := NIL
+				END
+			ELSE ErrMsg(invalidObjFile, name)
+			END
+		ELSE ErrMsg(invalidObjFile, name)
+		END
+	ELSIF ~m.init & import THEN ErrMsg(cyclicImport, name)
+	END
+END Load;
+
+(** Returns a handle to an already loaded module, or loads a module and all its imported modules. *)
+PROCEDURE ThisMod* (name: ARRAY OF CHAR): Module;
+BEGIN
+	RETURN thisMod(name, FALSE)
+END ThisMod;
+
+(** Returns a procedure variable representing an exported command in a module. Calling this procedure, executes the command. *)
+PROCEDURE ThisCommand* (mod: Module; name: ARRAY OF CHAR): Command;
+	VAR i: LONGINT;
+BEGIN
+	i := mod.nofCmds;
+	WHILE i > 0 DO DEC(i);
+		IF mod.cmds[i].name = name THEN
+			Clear;
+			RETURN S.VAL(Command, mod.cmds[i].adr)
+		END
+	END;
+	ErrMsg(cmdNotFound, name); RETURN NIL
+END ThisCommand;
+
+PROCEDURE Delete (m: Module);
+	VAR m1: Module;
+BEGIN
+	m1 := modList;
+	IF m = m1 THEN modList := m.link;
+	ELSE
+		WHILE m1.link # m DO m1 := m1.link END;
+		m1.link := m.link;
+	END
+END Delete;
+
+(** Free a module from memory. Only modules with no clients can be freed. The all flag requests that all imported modules should be freed too (i.e. a recursive call to Free). *)
+PROCEDURE Free* (name: ARRAY OF CHAR; all: BOOLEAN);
+	VAR m, m1: Module; nofImps, i: LONGINT; h: TerminationHandler;
+BEGIN Clear;
+	Find(name, m);
+	IF m = NIL THEN ErrMsg(moduleNotFound, name)
+	ELSIF m.refcnt # 0 THEN ErrMsg(refCntNotZero, m.name)
+	ELSE
+		IF m.term # NIL THEN h := m.term; m.term := NIL; h END;
+		IF m.imports # NIL THEN
+			nofImps := LEN(m.imports^);
+			i := nofImps;
+			IF i > 0 THEN
+				WHILE i > 0 DO DEC(i); m1 := S.VAL(Module, m.imports[i]); IF m1 # NIL THEN DEC(m1.refcnt) END END;
+				IF all THEN i := nofImps;
+					WHILE i > 0 DO DEC(i); m1 := S.VAL(Module, m.imports[i]); IF m1 # NIL THEN Free(m1.name, TRUE) END END;
+					Clear;
+				END
+			ELSIF (i < 0) & (extended.Unlink # NIL) THEN extended.Unlink(m, all)
+			END
+		END;
+		IF m.import # NIL THEN
+			nofImps := LEN(m.import^);
+			i := nofImps;
+			IF i > 0 THEN
+				WHILE i > 0 DO DEC(i); m1 := S.VAL(Module, m.import[i]); IF m1 # NIL THEN DEC(m1.refcnt) END END;
+				IF all THEN i := nofImps;
+					WHILE i > 0 DO DEC(i); m1 := S.VAL(Module, m.import[i]);IF m1 # NIL THEN Free(m1.name, TRUE) END END;
+					Clear;
+				END
+			ELSIF (i < 0) & (extended.Unlink # NIL) THEN extended.Unlink(m, all)
+			END
+		END;
+		IF (m.imports = NIL) & (m.import = NIL) & (m.nofImps < 0) & (m.nofimp < 0) & (extended.Unlink # NIL) THEN
+			extended.Unlink(m, all)
+		END;
+		Delete(m)
+	END
+END Free;
+
+PROCEDURE MarkModules;
+	VAR m: Module; ptradr, i, p: LONGINT; ptr: Kernel.BlockPtr;
+BEGIN
+	m := modList;	(* ModuleDesc and ModuleBlock are marked via Kernel.modules *)
+	WHILE m # NIL DO
+		i := m.nofPtrs; ptradr := S.ADR(m.ptrTab^);
+		WHILE i > 0 DO
+			S.GET(ptradr, p); S.GET(p, ptr);
+			IF ptr # NIL THEN Kernel.Mark(ptr) END;
+			DEC(i); INC(ptradr, 4);
+		END;
+		i := m.nofTds; ptradr := S.ADR(m.tdescs^);
+		WHILE i > 0 DO
+			S.GET(ptradr, ptr);
+			IF ptr # NIL THEN Kernel.Mark(ptr) END; (* tk *)
+			DEC(i); INC(ptradr, 4);
+		END;
+		IF m.privates # 0 THEN Kernel.Mark(S.VAL(Kernel.BlockPtr, m.privates)) END;
+		IF m.publics # 0 THEN Kernel.Mark(S.VAL(Kernel.BlockPtr, m.publics)) END;
+		IF m.import # NIL THEN Kernel.Mark(S.VAL(Kernel.BlockPtr, m.import)) END;
+		IF m.struct # NIL THEN Kernel.Mark(S.VAL(Kernel.BlockPtr, m.struct)) END;
+		IF m.reimp # NIL THEN Kernel.Mark(S.VAL(Kernel.BlockPtr, m.reimp)) END;
+		m := m^.link;
+	END;
+END MarkModules;
+
+(** Install a procedure to be called before a module is freed from memory, or before the Oberon system terminates. The termination handler  is associated with the module where it is located *)
+PROCEDURE InstallTermHandler* (h: TerminationHandler);
+	VAR codebase, handlerAdr: LONGINT; m: Module; found: BOOLEAN;
+BEGIN
+	m := modList; handlerAdr := S.VAL(LONGINT, h); found := FALSE;
+	WHILE (m # NIL) & ~found DO
+		codebase := S.ADR(m.code[0]);
+		IF (codebase <= handlerAdr) & (handlerAdr <= codebase + LEN(m.code^)) THEN found := TRUE
+		ELSE m := m.link
+		END
+	END;
+	IF found THEN m.term := h END;
+END InstallTermHandler;
+
+PROCEDURE TermModules();
+	VAR m: Module; h: TerminationHandler;
+BEGIN
+	m := modList;
+	WHILE m # NIL DO
+		IF m.term # NIL THEN h := m.term; m.term := NIL; h END;
+		m := m.link;
+	END
+END TermModules;
+
+PROCEDURE GetCodeSize(VAR code, data: LONGINT);
+	VAR m: Module;
+BEGIN
+	code := 0; data := 0;
+	m := modList;
+	WHILE m # NIL DO
+		IF m.code # NIL THEN code := code + LEN(m.code^) END;
+		IF m.data # NIL THEN data := data + LEN(m.data^) END;
+		m := m.link
+	END
+END GetCodeSize;
+
+PROCEDURE Init;
+	VAR modPtr, cmdPtr: POINTER TO RECORD name: ARRAY 32 OF CHAR END;
+		newRec: PROCEDURE(tag: Kernel.Tag; VAR p: ADDRESS);
+		newSys: PROCEDURE(size: LONGINT; VAR p: ADDRESS);
+		newArr: PROCEDURE(nofdim, nofelem: LONGINT; eltag: Kernel.Tag; VAR p: ADDRESS);
+		m: Module;
+BEGIN
+	newRec := Kernel.NewRec; 
+	newSys := Kernel.NewSys;
+	newArr := Kernel.NewArr;
+	KernelRoutines[0] := S.VAL(ADDRESS, newRec);
+	KernelRoutines[1] := S.VAL(ADDRESS, newSys);
+	KernelRoutines[2] := S.VAL(ADDRESS, newArr);
+	(* init loop only if Modules is last module in boot file: *)
+	Kernel.GetAdr(0, "modPtr", S.VAL(LONGINT, modPtr));
+	Kernel.GetAdr(0, "cmdPtr", S.VAL(LONGINT, cmdPtr));
+	modList := S.VAL(Module, Kernel.modules);
+	Kernel.getCodeSize := GetCodeSize;
+	Kernel.InstallQ(Kernel.mkQ, MarkModules);
+	Kernel.InstallQ(Kernel.quitQ, TermModules);
+	m := ThisMod("Interchange");
+	loop := ThisCommand(ThisMod(modPtr.name), cmdPtr.name)
+END Init;
+
+BEGIN
+	(* for debugger *) C.Str("Kernel.modules "); C.Hex(S.ADR(modList)); C.Ln();
+	Init();
+	loop	(* call loop only if Modules is last module in boot file *)
+END Modules.
+
+(** Remarks:
+
+1. Oberon uses reference counting to determine how many clients of a module are loaded. A module can only be freed when the reference count is 0.
+
+2. The res codes are not the same numerically on all Oberon platforms. It is advisable to use the resMsg as a correct indication of the error condition.
+
+3. Module and command names are single words consisting of A to Z, a to z, and 0 to 9. Names must not start with a digit.
+
+4. Care should be taken freeing modules. Oberon cannot detect if a client has a procedure variable still "pointing" at code in a freed module. Calling such a procedure can be unpredictable at times, although the system generates a trap most of the time.
+*)

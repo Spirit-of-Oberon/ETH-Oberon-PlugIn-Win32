@@ -1,0 +1,149 @@
+﻿(* OBERON System 3, Release 2.2.
+
+Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
+e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon System 3 license contract.
+The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+or requested from the above mentioned address.
+
+Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
+in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE UDP;
+
+IMPORT SYSTEM, Kernel, Input, TCP;
+
+CONST
+	Done* = 0; NotDone* = 1; Timeout* = 2; LocalPortInUse* = 3;
+	AnyAdr* = 0; AnyPort* = 0;
+	
+	PFInet = 2; SockStream = 1; SockDgram = 2;
+	IPProtoTCP = 6; IPProtoUDP = 17;
+	InvalidSocket = -1;
+	ADDRINUSE = 10048; TIMEDOUT = 10060; INTR = 10004;
+	SysNotReady = 10091; VerNotSupported = 10092; EInval = 10022;
+	
+TYPE
+	Socket* = POINTER TO SocketDesc;
+	SocketDesc* = RECORD
+		winsock: LONGINT;
+	END;
+	IpAdr* = LONGINT;
+
+	SockAddr = RECORD	(* struct sockaddr_in *)
+		family: INTEGER;
+		port: INTEGER;
+		internetAddr: LONGINT;
+		zero: ARRAY 8 OF CHAR;
+	END;
+	WSAData = RECORD	(* WSADATA *)
+		wVersion, wHighVersion: INTEGER;
+		szDescription: ARRAY 257 OF CHAR;
+		szSystemStatus: ARRAY 129 OF CHAR;
+		iMaxSockets, iMaxUdpDg: INTEGER;
+		filler: LONGINT;
+	END;
+	HookProcedure = PROCEDURE(): LONGINT;
+
+VAR
+	ready: BOOLEAN;
+	WSAGetLastError: PROCEDURE (): LONGINT;
+	WSASetBlockingHook: PROCEDURE (proc: HookProcedure): HookProcedure;
+	WSAUnhookBlockingHook: PROCEDURE;
+	WSACancelBlockingCall: PROCEDURE();
+
+	socket: PROCEDURE (af, type, protocol: LONGINT): LONGINT;
+	bind: PROCEDURE (socket, name, namelen: LONGINT): LONGINT;
+	ioctlsocket: PROCEDURE (socket, cmd, argptr: LONGINT): LONGINT;
+	closesocket: PROCEDURE (s: LONGINT): LONGINT;
+	sendto: PROCEDURE (socket, bufaddr, buflen, flags, addrptr, addrsize: LONGINT): LONGINT;
+	recvfrom: PROCEDURE (socket, bufaddr, buflen, flags, addrptr, addrsizeptr: LONGINT): LONGINT;
+	gethostbyname: PROCEDURE (name: LONGINT): LONGINT;
+
+PROCEDURE Finalizer (s: PTR);
+	VAR x: LONGINT;
+BEGIN
+	WITH s: Socket DO x := closesocket(s.winsock); s.winsock := InvalidSocket ELSE END
+END Finalizer;
+
+PROCEDURE NewSocket*(lport: INTEGER; VAR res: INTEGER): Socket;
+VAR s: Socket; x: LONGINT; sadr: SockAddr;
+BEGIN res := Done;
+	NEW(s);
+	s.winsock := socket(PFInet, SockDgram, IPProtoUDP);
+	IF s.winsock = InvalidSocket THEN res := NotDone
+	ELSE
+		IF lport # AnyPort THEN
+			sadr.family := PFInet; sadr.port := TCP.htons(lport); sadr.internetAddr := AnyAdr;
+			x := bind(s.winsock, SYSTEM.ADR(sadr), SIZE(SockAddr));
+			IF x # 0 THEN
+				x := WSAGetLastError();
+				IF x =  ADDRINUSE THEN res := LocalPortInUse ELSE res := NotDone END;
+				x := closesocket(s.winsock); s.winsock := InvalidSocket;
+				RETURN NIL
+			ELSE Kernel.RegisterObject(s, Finalizer, FALSE);
+			END
+		END
+	END;
+	RETURN s
+END NewSocket;
+
+PROCEDURE SendTo*(s: Socket; VAR buf: ARRAY OF SYSTEM.BYTE; beg, len: LONGINT; rport: INTEGER; raddr: LONGINT;
+		VAR res: LONGINT);
+VAR sadr: SockAddr;
+BEGIN
+	sadr.family := PFInet; sadr.port := TCP.htons(rport); sadr.internetAddr := raddr;
+	res := sendto(s.winsock, SYSTEM.ADR(buf[beg]), len, 0, SYSTEM.ADR(sadr), SIZE(SockAddr));
+END SendTo;
+
+PROCEDURE ReceiveFrom*(s: Socket; VAR buf: ARRAY OF SYSTEM.BYTE; VAR rport, raddr: LONGINT; VAR pos, len: LONGINT);
+VAR sadr: SockAddr; l: LONGINT;
+BEGIN l := SIZE(SockAddr);
+	len := recvfrom(s.winsock, SYSTEM.ADR(buf[0]), len, 0, SYSTEM.ADR(sadr), SYSTEM.ADR(l));
+	rport := TCP.ntohs(sadr.port); raddr := sadr.internetAddr
+END ReceiveFrom;
+
+PROCEDURE Available* (s: Socket): LONGINT;	(* number of bytes that can be read without blocking *)
+	CONST FIONREAD = 4004667FH;
+	VAR x, avail: LONGINT;
+BEGIN
+	x := ioctlsocket(s.winsock, FIONREAD, SYSTEM.ADR(avail));
+	RETURN avail;
+END Available;
+
+PROCEDURE Close*(s: Socket);
+VAR x: LONGINT;
+BEGIN x := closesocket(s.winsock); s.winsock := InvalidSocket;
+END Close;
+
+PROCEDURE Init;
+	VAR mod, res: LONGINT; data: WSAData; err, hostname: ARRAY 32 OF CHAR; i: INTEGER;
+BEGIN
+	ready := FALSE;
+	mod := Kernel.LoadLibrary("WSOCK32");
+	IF mod # 0 THEN
+		Kernel.GetAdr(mod, "WSAGetLastError", SYSTEM.VAL(LONGINT, WSAGetLastError));
+		Kernel.GetAdr(mod, "WSASetBlockingHook", SYSTEM.VAL(LONGINT, WSASetBlockingHook));
+		Kernel.GetAdr(mod, "WSAUnhookBlockingHook", SYSTEM.VAL(LONGINT, WSAUnhookBlockingHook));
+		Kernel.GetAdr(mod, "WSACancelBlockingCall", SYSTEM.VAL(LONGINT, WSACancelBlockingCall));
+		Kernel.GetAdr(mod, "socket", SYSTEM.VAL(LONGINT, socket));
+		Kernel.GetAdr(mod, "bind", SYSTEM.VAL(LONGINT, bind));
+		Kernel.GetAdr(mod, "sendto", SYSTEM.VAL(LONGINT, sendto));
+		Kernel.GetAdr(mod, "recvfrom", SYSTEM.VAL(LONGINT, recvfrom));
+		Kernel.GetAdr(mod, "ioctlsocket", SYSTEM.VAL(LONGINT, ioctlsocket));
+		Kernel.GetAdr(mod, "closesocket", SYSTEM.VAL(LONGINT, closesocket));
+		Kernel.GetAdr(mod, "gethostbyname", SYSTEM.VAL(LONGINT, gethostbyname));
+		(* Startup is done by the TCP module
+		*)
+		ready := TRUE
+	END
+END Init;
+
+
+BEGIN Init
+END UDP.

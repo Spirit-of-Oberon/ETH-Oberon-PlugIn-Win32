@@ -1,0 +1,259 @@
+﻿MODULE IniEdit;
+	IMPORT Registry, Objects, Display, Fonts, Texts, Oberon, Attributes, Links, Gadgets, TextFields, Panels, Strings, Views;
+
+	VAR
+		P: Panels.Panel;
+		Y: INTEGER;
+
+	PROCEDURE Caption(cap: ARRAY OF CHAR): Gadgets.Frame;
+		VAR F: Objects.Object;
+	BEGIN
+		F := Gadgets.CreateObject("TextFields.NewCaption");
+		Attributes.SetString(F, "Value", cap);
+		RETURN F(Gadgets.Frame)
+	END Caption;
+
+	PROCEDURE FindObj(context: Objects.Object; name: ARRAY OF CHAR): Objects.Object;
+		VAR obj: Objects.Object;
+	BEGIN
+		obj := Gadgets.FindObj(context, name);
+		WHILE (context # NIL) & (obj = NIL) DO
+			context := context(Display.Frame).dlink;
+			obj := Gadgets.FindObj(context, name)
+		END;
+		RETURN obj
+	END FindObj;
+
+	PROCEDURE ShowText(F, dlink: Gadgets.Frame; scroll: BOOLEAN);
+		VAR
+			section, key: ARRAY 64 OF CHAR;
+			obj: Objects.Object;
+			T: Texts.Text;
+			S: Texts.Scanner;
+			beg, cur: LONGINT;
+			R: Texts.Reader;
+			buf: Texts.Buffer;
+			U: Gadgets.UpdateMsg;
+			V: Views.View;
+			ch: CHAR;
+	BEGIN
+		IF scroll THEN
+			V := dlink.dlink(Views.View);
+			IF ABS(F.Y) > (V.vy+V.H) THEN
+				INC(V.vy, F.H);
+				U.F := V; U.obj := V; Display.Broadcast(U)
+			END
+		END;
+		Gadgets.GetObjName(F, key);
+		obj := FindObj(dlink, "Section");
+		Attributes.GetString(obj, "Value", section);
+		Strings.AppendCh(section, ".");
+		Strings.Append(section, key);
+		NEW(T); Texts.Open(T, "IniEdit.Help");
+		Texts.OpenScanner(S, T, 0); Texts.Scan(S);
+		LOOP
+			IF (S.class = Texts.Name) & (S.s = section) THEN
+				EXIT
+			ELSIF (S.class = Texts.Char) & (S.c = "{") THEN
+				WHILE ~S.eot & ~((S.class = Texts.Char) & (S.c = "}")) DO
+					Texts.Scan(S)
+				END
+			ELSIF ~S.eot THEN
+				Texts.Scan(S)
+			ELSE
+				EXIT
+			END
+		END;
+		IF S.eot THEN
+			obj := FindObj(dlink, "Section");
+			Attributes.GetString(obj, "Value", section);
+			Texts.OpenScanner(S, T, 0); Texts.Scan(S);
+			LOOP
+				IF (S.class = Texts.Name) & (S.s = section) THEN
+					EXIT
+				ELSIF (S.class = Texts.Char) & (S.c = "{") THEN
+					WHILE ~S.eot & ~((S.class = Texts.Char) & (S.c = "}")) DO
+						Texts.Scan(S)
+					END
+				ELSIF ~S.eot THEN
+					Texts.Scan(S)
+				ELSE
+					EXIT
+				END
+			END
+		END;
+		obj := FindObj(dlink, "Description");
+		cur := -1; beg := Texts.Pos(S)+1;
+		Attributes.GetInt(obj, "CurDesc", cur);
+		IF cur # beg THEN
+			NEW(buf); Texts.OpenBuf(buf);
+			IF ~S.eot THEN
+				cur := beg;
+				Texts.OpenReader(R, T, beg);
+				Texts.Read(R, ch);
+				WHILE ~R.eot & ~((ch = "}") & (R.lib IS Fonts.Font)) DO
+					Texts.Read(R, ch)
+				END;
+				Texts.Save(T, beg, Texts.Pos(R)-1, buf)
+			END;
+			NEW(T); Texts.Open(T, "");
+			Texts.Append(T, buf);
+			Links.SetLink(obj, "Model", T);
+			Gadgets.Update(obj)
+		END;
+		Attributes.SetInt(obj, "CurDesc", cur);
+		obj := FindObj(dlink, "Key");
+		IF ~scroll THEN key := "" END;
+		Attributes.SetString(obj, "Value", key);
+		Gadgets.Update(obj)
+	END ShowText;
+
+	PROCEDURE *TextFieldHandler(F: Objects.Object; VAR M: Objects.ObjMsg);
+		VAR
+			f: Display.Frame;
+			car: BOOLEAN;
+	BEGIN
+		WITH F: TextFields.TextField DO
+			IF M IS Oberon.InputMsg THEN
+				WITH M: Oberon.InputMsg DO
+					car := F.carpos >= 0;
+					IF car & (M.id = Oberon.consume) & (M.ch = 09X) THEN
+						TextFields.TextFieldHandler(F, M);
+						f := F.next;
+						WHILE (f # NIL) & ~(f IS TextFields.TextField) DO
+							f := f.next
+						END;
+						IF f # NIL THEN
+							ShowText(f(Gadgets.Frame), M.dlink(Gadgets.Frame), TRUE)
+						END
+					ELSE
+						TextFields.TextFieldHandler(F, M);
+						IF ~car & (F.carpos >= 0) THEN
+							ShowText(F, M.dlink(Gadgets.Frame), TRUE)
+						END
+					END
+				END
+			ELSE
+				TextFields.TextFieldHandler(F, M)
+			END
+		END
+	END TextFieldHandler;
+
+	PROCEDURE TextField(name, value, cmd: ARRAY OF CHAR): Gadgets.Frame;
+		VAR F: Objects.Object;
+	BEGIN
+		F := Gadgets.CreateObject("TextFields.NewTextField");
+		Gadgets.NameObj(F, name);
+		Attributes.SetString(F, "Value", value);
+		Attributes.SetString(F, "Cmd", cmd);
+		F. handle := TextFieldHandler;
+		RETURN F(Gadgets.Frame)
+	END TextField;
+
+	PROCEDURE *EnumSection(key, value: ARRAY OF CHAR);
+		VAR F: Gadgets.Frame;
+	BEGIN
+		F := TextField(key, value, "IniEdit.Set");
+		DEC(Y, F.H); F.W := P.W-8-88-1;
+		Panels.InsertChild(P, F, 8+88, Y);
+		F := Caption(key); Panels.InsertChild(P, F, 8, Y)
+	END EnumSection;
+
+	PROCEDURE SectionList(list: Gadgets.Frame; section: ARRAY OF CHAR);
+	BEGIN
+		NEW(P); Panels.InitPanel(P); Y := 1;
+		Attributes.SetBool(P, "Flat", TRUE);
+		Attributes.SetInt(P, "Border", 0);
+		P.W := list.W-16;
+		Registry.Enumerate(section, EnumSection);
+(* check res *)
+		P.H := ABS(Y)+1;
+		Attributes.SetBool(P, "Locked", TRUE);
+		Links.SetLink(list, "Model", P);
+		Gadgets.Update(list); Gadgets.Update(P)
+	END SectionList;
+
+	PROCEDURE Section*;
+		VAR
+			obj: Objects.Object;
+			S: Attributes.Scanner;
+			F: Gadgets.Frame;
+	BEGIN
+		Attributes.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos);
+		Attributes.Scan(S);
+		IF ~(S.class IN {Attributes.Name, Attributes.String}) THEN
+			S.s := "System"
+		END;
+		obj := FindObj(Gadgets.context, "Section");
+		F := obj(Gadgets.Frame);
+		Attributes.SetString(obj, "Value", S.s);
+		Gadgets.Update(obj);
+		obj := FindObj(Gadgets.context, "TheList");
+		SectionList(obj(Gadgets.Frame), S.s);
+		ShowText(F, Gadgets.context(Gadgets.Frame), FALSE)
+	END Section;
+
+	PROCEDURE Set*;
+		VAR
+			section, key, value: ARRAY 64 OF CHAR;
+			obj, tf: Objects.Object;
+			list: Gadgets.Frame;
+	BEGIN
+		tf := Gadgets.executorObj;
+		Gadgets.GetObjName(tf, key);
+		Attributes.GetString(tf, "Value", value);
+		list := Gadgets.context(Gadgets.Frame).dlink(Gadgets.Frame);
+		obj := FindObj(list, "Section");
+		Attributes.GetString(obj, "Value", section);
+		Registry.Set(section, key, value);
+		IF Registry.res # Registry.Done THEN
+			SectionList(list, section)
+		ELSE
+			Registry.Get(section, key, value);
+			IF Registry.res # Registry.Done THEN value := "" END;
+			Attributes.SetString(tf, "Value", value);
+			Gadgets.Update(tf)
+		END
+	END Set;
+
+	PROCEDURE AddKey*;
+		VAR
+			obj: Objects.Object;
+			section, key, value: ARRAY 64 OF CHAR;
+	BEGIN
+		obj := FindObj(Gadgets.context, "Key");
+		Attributes.GetString(obj, "Value", key);
+		obj := FindObj(Gadgets.context, "Section");
+		Attributes.GetString(obj, "Value", section);
+		Registry.Get(section, key, value);
+		IF Registry.res # Registry.Done THEN 
+			Registry.Set(section, key, key)
+		END;
+		obj := FindObj(Gadgets.context, "TheList");
+		SectionList(obj(Gadgets.Frame), section)
+	END AddKey;
+
+	PROCEDURE DelKey*;
+		VAR
+			obj: Objects.Object;
+			section, key, value: ARRAY 64 OF CHAR;
+	BEGIN
+		obj := FindObj(Gadgets.context, "Key");
+		Attributes.GetString(obj, "Value", key);
+		obj := FindObj(Gadgets.context, "Section");
+		Attributes.GetString(obj, "Value", section);
+		Registry.Get(section, key, value);
+		IF Registry.res = Registry.Done THEN 
+			Registry.Set(section, key, "")
+		END;
+		obj := FindObj(Gadgets.context, "TheList");
+		SectionList(obj(Gadgets.Frame), section)
+	END DelKey;
+
+END IniEdit.
+
+System.Free IniEdit ~
+
+IniEdit.Panel
+
+IniEdit.Help

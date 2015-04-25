@@ -1,0 +1,98 @@
+﻿(* OBERON System 3, Release 2.2.
+
+Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
+e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon System 3 license contract.
+The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+or requested from the above mentioned address.
+
+Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
+in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE Input; (* MH *)
+
+(**
+Module Input is responsible for event timing, mouse and keyboard input.
+*)
+
+IMPORT Kernel32, User32, Win32;
+
+CONST
+	SHIFT* = Win32.SHIFT; CTRL* = Win32.CTRL; ALT* = Win32.ALT; (** constants for KeyState *)
+
+VAR
+	TimeUnit*: LONGINT; (** timer ticks per second (platform dependent). *)
+	maxX, maxY: INTEGER; (* Mouse Limits *)
+
+(** Returns the number of keystrokes in the keyboard input buffer. *)
+PROCEDURE Available* (): INTEGER;
+BEGIN RETURN Win32.Available()
+END Available;
+
+(** Read a character from the keyboard buffer. Blocks if no character is available. *)
+PROCEDURE Read* (VAR ch: CHAR);
+BEGIN Win32.GetChar(ch)
+END Read;
+
+PROCEDURE Write* (ch: CHAR);
+BEGIN Win32.PutChar(ch)
+END Write;
+
+(** Reads the current mouse position x, y and the key state of the mouse buttons (also called keys). The mouse buttons are numbered from the right to the left as 0, 1, 2 (i.e. 1 is the middle mouse button). For example, when the left and middle buttons are pressed, keys will be set to {1, 2}. *)
+PROCEDURE Mouse* (VAR keys: SET; VAR x, y: INTEGER);
+BEGIN
+	Win32.Mouse(keys, x, y);
+	IF x > maxX THEN x := maxX ELSIF x < 0 THEN x := 0 END;
+	IF y > maxY THEN y := maxY ELSIF y < 0 THEN y := 0 END;
+END Mouse;
+
+(** Restricts the extent of the mouse coordinates returned by Mouse. *)
+PROCEDURE SetMouseLimits* (w, h: INTEGER);
+BEGIN
+	maxX := w - 1; maxY := h - 1;
+END SetMouseLimits;
+
+(** Returns the elapsed number of timer ticks from Oberon startup. *)
+PROCEDURE Time* (): LONGINT;
+BEGIN RETURN Kernel32.GetTickCount();
+END Time;
+
+(** Returns wether key (SHIFT, CTRL or ALT) is pressed. *)
+PROCEDURE KeyState*(VAR keys: SET);
+BEGIN
+	Win32.KeyState(keys)
+END KeyState;
+
+BEGIN
+	TimeUnit := 1000
+END Input.
+
+(** Remark:
+
+1. Keyboard character codes correspond to the ASCII character set. Some other important codes are:
+
+	SHIFT-BREAK	0ADX
+	BREAK	0ACX
+	F1, SETUP	0A4X
+	UP ARROW	0C1X
+	RIGHT ARROW	0C3X
+	DOWN ARROW	0C2X
+	LEFT ARROW	0C4X
+	INSERT	0A0X
+	DELETE	0A1X
+	PAGE-UP	0A2X
+	PAGE-DOWN	0A3X
+	ä, Ä	131, 128
+	ö, Ö	132, 129
+	ü, Ü	133, 130
+	ß	150
+
+The module EditKeys allows you to determine the keyboard code of any key pressed. For cross-platform portability, Oberon does not normally support all keys available on your keyboard.
+
+2. On some platforms, SetMouseLimits may not influence the physical movement of the mouse cursor itself, only the magnitude of the coordinates returned by Mouse.
+*)

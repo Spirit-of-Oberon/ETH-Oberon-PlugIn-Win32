@@ -1,0 +1,86 @@
+﻿(* OBERON System 3, Release 2.2.
+
+Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
+e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon System 3 license contract.
+The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+or requested from the above mentioned address.
+
+Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
+in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE Types;       (* RC 16.1.92 / MH 30.8.93 adapted to Oberon for Windows *)
+
+(**Module Types allow mappings between type names and types, and for exploring the type extensions at run time. 
+*)
+
+IMPORT Modules, Kernel, S := SYSTEM;
+
+TYPE
+	Type* = POINTER TO TypeDesc;
+	TypeDesc* = RECORD
+		tdsize: LONGINT;
+		sentinel: LONGINT; (* -4 *)
+		tag: Kernel.Tag;
+		ext0: RECORD
+			extlev: SHORTINT;
+			filler: ARRAY 3 OF CHAR
+		END;
+		name*: ARRAY 32 OF CHAR;
+		module*: Modules.Module	(** Module where type is defined. *)
+	END;
+
+(** Returned the named type name in module mod. *)
+PROCEDURE This* (mod: Modules.Module; name: ARRAY OF CHAR): Type;
+	VAR type: Type; i: LONGINT;
+BEGIN
+	IF name # "" THEN
+		i := LEN(mod.tdescs^);
+		WHILE i > 0 DO DEC(i); type := S.VAL(Type, mod.tdescs[i]);
+			S.GET(S.VAL(LONGINT, type) - 4, type);
+			IF type.name = name THEN RETURN type END
+		END
+	END;
+	RETURN NIL
+END This;
+
+(** Return the type extension level level of type t. *)
+PROCEDURE BaseOf* (t: Type; level: INTEGER): Type;
+BEGIN
+	S.GET(S.VAL(LONGINT, t.tag) - 8 - 4*level, t);
+	IF t # NIL THEN
+		S.GET(S.VAL(LONGINT, t) - 4, t)
+	END;
+	RETURN t
+END BaseOf;
+
+(** What is the extension level of t? *)
+PROCEDURE LevelOf* (t: Type): INTEGER;
+BEGIN
+	RETURN LONG(t.ext0.extlev)
+END LevelOf;
+
+(** What is the type of pointer based type o? *)
+PROCEDURE TypeOf* (o: S.PTR): Type;
+	VAR type: Type;
+BEGIN
+	S.GET(S.VAL(LONGINT, o)-4, type);
+	S.GET(S.VAL(LONGINT, type)-4, type);
+	RETURN type
+END TypeOf;
+
+(** Allocate a new pointer based type of type t, assigning it to o. *)
+PROCEDURE NewObj* (VAR o: S.PTR; t: Type);
+	VAR otype: Type;
+BEGIN
+	S.GET(S.VAL(LONGINT, o) - 4, otype);
+	IF BaseOf(t, LevelOf(otype)) # otype THEN o := NIL; RETURN END ;
+	Kernel.NewRec(t.tag, S.VAL(LONGINT, o))
+END NewObj;
+
+END Types.

@@ -1,0 +1,319 @@
+﻿(* OBERON System 3, Release 2.2.
+
+Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
+e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon System 3 license contract.
+The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+or requested from the above mentioned address.
+
+Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
+in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE Kernel32; (* ejz,  *)
+	IMPORT S := SYSTEM, Kernel;
+
+	CONST
+		NULL* = 0; False* = NULL; True* = False+1;
+		InvalidHandleValue* = -1;
+		FileAttributeReadOnly* = 01H; FileAttributeDirectory* = 010H; FileAttributeNormal* = 080H; FileAttributeTemporary* = 0100H;
+		ErrorTooManyOpenFiles* = 4; ErrorAccessDenied* = 5; ErrorWriteProtect* = 19; ErrorSharingViolation* = 32; ErrorNetworkAccessDenied* = 65;
+		GenericRead* = 080000000H; GenericWrite* = 040000000H;
+		FileShareRead* = 1; FileShareWrite* = 2;
+		FileFlagRandomAccess* = 010000000H;
+		MoveFileReplaceExisting* = 1; MoveFileCopyAllowed* = 2;
+		FileBegin* = 0;
+		CreateAlways* = 2; OpenExisting* = 3;
+		GMemMoveable* = 2; GMemShare* = 2000H;
+		PageExecuteReadWrite* = 040H; PageGuard* = 0100H;
+		MEMCommit* = 01000H; MEMReserve* = 02000H; MEMDecommit* = 04000H; MEMRelease* = 08000H;
+		ContextFull* = 65567; ContextControl* = 65537; ContextInteger* = 65538;
+		ContextSegment* = 65540; ContextFloat* = 65544; ContextDebug* = 65552;
+		DuplicateCloseSource* = 01H; DuplicateSameAccess* = 02H;
+		ThreadBasePrioLowRT* = 15; ThreadBasePrioMax* = 2; ThreadBasePrioMin* = -2; ThreadBasePrioIdle* = -15;
+		ThreadPrioLowest* = ThreadBasePrioMin;
+		ThreadPrioBelowNormal* = ThreadPrioLowest+1;
+		ThreadPrioNormal* = 0;
+		ThreadPrioHighest* = ThreadBasePrioMax;
+		ThreadPrioAboveNormal* = ThreadPrioHighest-1;
+		ThreadPrioErrorReturn* = MIN(LONGINT);
+		ThreadPrioTimeCritical* = ThreadBasePrioLowRT;
+		ThreadPrioIdle* = ThreadBasePrioIdle;
+		ExceptionContinueException* = 0; ExceptionSearchException* = 1;
+		CreateNewConsole* = 010H; StartFUseShowWindow* = 01H; StartFUseSTDHandles* = 0100H;
+		STDInput* = -10; STDOutput* = -11; STDError* = -12;
+
+	TYPE
+		FileTime* = RECORD
+			lowDT*, highDT*: LONGINT
+		END;
+		FindData* = RECORD
+			fileAttrs*: LONGINT;
+			creation*, lastAcc*, lastWrite*: FileTime;
+			sizeHigh*, sizeLow*: LONGINT;
+			res0, res1: LONGINT;
+			name*: ARRAY 260 OF CHAR;
+			altName*: ARRAY 14 OF CHAR
+		END;
+		SmallRect* = RECORD
+			left*, top*, right*, bottom*: SHORTINT
+		END;
+		SystemTime* = RECORD
+			year*, month*, dayOfWeek*, day*: INTEGER;
+			hour*, min*, sec*, millisec*: INTEGER
+		END;
+		CriticalSection* = RECORD
+			a, b, c, d, e, f: LONGINT
+		END;
+		ThreadProc* = PROCEDURE (par: LONGINT);
+		Object* = POINTER TO ObjectDesc;
+		ObjectDesc* = RECORD
+			handle*: LONGINT
+		END;
+		StartUpInfo* = RECORD
+			cb*, res*, desk*, title*: LONGINT;
+			x*, y*, xSize*, ySize*: LONGINT;
+			xCChars*, yCChars*: LONGINT;
+			fillAttrs*, flags*: LONGINT;
+			showWindow*, res2*: INTEGER;
+			lres2*: LONGINT;
+			in*, out*, err*: LONGINT
+		END;
+		ProcInfo* = RECORD
+			hProc*, hThread*: LONGINT;
+			procId*, threadId*: LONGINT
+		END;
+		SecurityAttrs* = RECORD 
+			length*: LONGINT;
+			lpSecurityDesc*: LONGINT;
+    		inherit*: LONGINT
+		END; 
+
+	VAR
+		AllocConsole-: PROCEDURE (): LONGINT;
+		CloseHandle-: PROCEDURE (handle: LONGINT): LONGINT;
+		CompareFileTime-: PROCEDURE (FT1, FT2: LONGINT): LONGINT;
+		CopyFile-: PROCEDURE (existing, new, failIfExist: LONGINT): LONGINT;
+		CreateDirectory-: PROCEDURE (newDir, sa: LONGINT): LONGINT;
+		CreateEvent-: PROCEDURE (securityAttr, manualReset, initialState, eventName: LONGINT): LONGINT;
+		CreateFile-: PROCEDURE (name, accessMode, shareMode, securityAttr, createOpts, attrAndFlags, template: LONGINT): LONGINT;
+		CreatePipe-: PROCEDURE (VAR read, write: LONGINT; securityAttr, size: LONGINT): LONGINT;
+		CreateProcess-: PROCEDURE (appName, cmdLine, procAttr, threadAttr, inherit, flags, env, curDir, startInfo, procInfo: LONGINT): LONGINT;
+		CreateThread-: PROCEDURE (sa, stackSize: LONGINT; thrProc: ThreadProc; thrAttr, flags: LONGINT; VAR id: LONGINT): LONGINT;
+		DeleteCriticalSection-: PROCEDURE (CS: LONGINT);
+		DeleteFile-: PROCEDURE (name: LONGINT): LONGINT;
+		DeviceIoControl-: PROCEDURE (device, ioControlCode, inBuffer, inBufferSize, outBuffer, outBufferSize: LONGINT; VAR bytesReturned: LONGINT; overlapped: LONGINT): LONGINT;
+		DuplicateHandle-: PROCEDURE (sourceProc, source, targetProc: LONGINT; VAR target: LONGINT; access, inherit, options: LONGINT): LONGINT;
+		EnterCriticalSection-: PROCEDURE (CS: LONGINT);
+		ExitThread-: PROCEDURE (exitCode: LONGINT);
+		FileTimeToLocalFileTime-: PROCEDURE (FT, LFT: LONGINT): LONGINT;
+		FileTimeToSystemTime-: PROCEDURE (FT, ST: LONGINT): LONGINT;
+		FindClose-: PROCEDURE (findFile: LONGINT): LONGINT;
+		FindFirstFile-: PROCEDURE (searchFile, FD: LONGINT): LONGINT;
+		FindNextFile-: PROCEDURE (findFile, FD: LONGINT): LONGINT;
+		FlushFileBuffers-: PROCEDURE (file: LONGINT): LONGINT;
+		GetCurrentDirectory-: PROCEDURE (lenCurDir, curDir: LONGINT): LONGINT;
+		GetCurrentProcess-: PROCEDURE (): LONGINT;
+		GetCurrentThread-: PROCEDURE (): LONGINT;
+		GetCurrentThreadId-: PROCEDURE (): LONGINT;
+		GetDiskFreeSpace-: PROCEDURE (root: LONGINT; VAR SectorsPerCluster, BytesPerSector, FreeClusters, Clusters: LONGINT): LONGINT;
+		GetDriveType-: PROCEDURE (driveName: LONGINT): LONGINT;
+		GetExitCodeProcess-: PROCEDURE (handle: LONGINT; VAR code: LONGINT): LONGINT;
+		GetFileAttributes-: PROCEDURE (fileName: LONGINT): LONGINT;
+		GetFileSize-: PROCEDURE (file, highDIst: LONGINT): LONGINT;
+		GetFileTime-: PROCEDURE (file, FTCreate, FTLastA, FTWrite: LONGINT): LONGINT;
+		GetFullPathName-: PROCEDURE (file, path, lenPath: LONGINT; VAR pos: LONGINT): LONGINT;
+		GetLastError-: PROCEDURE (): LONGINT;
+		GetLocalTime-: PROCEDURE (systime: LONGINT);
+		GetModuleFileName-: PROCEDURE (mod, name, len: LONGINT): LONGINT;
+		GetPrivProfileString-: PROCEDURE (section, key, default, value, valLen, iniFile: LONGINT): LONGINT;
+		GetStartupInfo-: PROCEDURE (startInfo: LONGINT);
+		GetStdHandle-: PROCEDURE (device: LONGINT): LONGINT;
+		GetTempFileName-: PROCEDURE (path, prefix, unique, tempName: LONGINT): LONGINT;
+		GetTempPath-: PROCEDURE (lenTempDir, tempDir: LONGINT): LONGINT;
+		GetThreadContext-: PROCEDURE (handle, context: LONGINT): LONGINT;
+		GetThreadPriority-: PROCEDURE (handle: LONGINT): LONGINT;
+		GetTickCount-: PROCEDURE (): LONGINT;
+		GetVersion-: PROCEDURE(): LONGINT;
+		GlobalAddAtom-: PROCEDURE (name: LONGINT): LONGINT;
+		GlobalAlloc-: PROCEDURE (type, size: LONGINT): LONGINT;
+		GlobalDeleteAtom-: PROCEDURE (atom: LONGINT): LONGINT;
+		GlobalFree-: PROCEDURE (handle: LONGINT);
+		GlobalGetAtomName-: PROCEDURE (atom, buf, bufLen: LONGINT): LONGINT;
+		GlobalLock-: PROCEDURE (handle: LONGINT): LONGINT;
+		GlobalUnlock-: PROCEDURE (handle: LONGINT);
+		InitCriticalSection-: PROCEDURE (CS: LONGINT);
+		LeaveCriticalSection-: PROCEDURE (CS: LONGINT);
+		LocalFileTimeToFileTime-: PROCEDURE (LFT, FT: LONGINT): LONGINT;
+		MoveFile-: PROCEDURE (existing, new: LONGINT): LONGINT;
+		MoveFileEx-: PROCEDURE (existing, new, flags: LONGINT): LONGINT;
+		OutputDebugString-: PROCEDURE (adr: LONGINT);
+		QueryPerformanceCounter-: PROCEDURE (VAR counter: LONGINT): LONGINT;
+		QueryPerformanceFrequency-: PROCEDURE (VAR frequency: LONGINT): LONGINT;
+		ReadFile-: PROCEDURE (file, buf, lenBuf: LONGINT; VAR nRe: LONGINT; overlapp: LONGINT): LONGINT;
+		ReadProcessMemory-: PROCEDURE (proc, adr, buf, len: LONGINT; VAR rLen: LONGINT): LONGINT;
+		RemoveDirectory-: PROCEDURE (path: LONGINT): LONGINT;
+		ResetEvent-: PROCEDURE (handle: LONGINT): LONGINT;
+		ResumeThread-: PROCEDURE (handle: LONGINT): LONGINT;
+		SearchPath-: PROCEDURE (path, file, ext, lenBuf, buf: LONGINT; VAR LPart: LONGINT): LONGINT;
+		SetConsoleScreenBufferSize-: PROCEDURE (console, size: LONGINT): LONGINT;
+		SetConsoleTitle-: PROCEDURE (title: LONGINT): LONGINT;
+		SetConsoleWindowInfo-: PROCEDURE (console, absolut, rect: LONGINT): LONGINT;
+		SetCurrentDirectory-: PROCEDURE (curDir: LONGINT): LONGINT;
+		SetEvent-: PROCEDURE (handle: LONGINT): LONGINT;
+		SetFilePointer-: PROCEDURE (file, dist, highDIst, method: LONGINT): LONGINT;
+		SetFileTime-: PROCEDURE (file, FTCreate, FTLastA, FTWrite: LONGINT): LONGINT;
+		SetHandleCount-: PROCEDURE (nofHandles: LONGINT): LONGINT;
+		SetLocalTime-: PROCEDURE (systime: LONGINT);
+		SetThreadContext-: PROCEDURE (handle, context: LONGINT): LONGINT;
+		SetThreadPriority-: PROCEDURE (handle, prio: LONGINT): LONGINT;
+		Sleep-: PROCEDURE (cMs: LONGINT);
+		SuspendThread-: PROCEDURE (handle: LONGINT): LONGINT;
+		SystemTimeToFileTime-: PROCEDURE (ST, FT: LONGINT): LONGINT;
+		TerminateThread-: PROCEDURE (handle, exitCode: LONGINT): LONGINT;
+		VirtualAlloc-: PROCEDURE (address, size, allocationType, protect: LONGINT): LONGINT;	
+		VirtualFree-: PROCEDURE (address, size, freeType: LONGINT): LONGINT;
+		VirtualProtect-: PROCEDURE (address, size, newProtect: LONGINT; VAR oldProtect: LONGINT): LONGINT;
+		WaitForSingleObject-: PROCEDURE (handle, timeOut: LONGINT): LONGINT;
+		WriteFile-: PROCEDURE (file, buf, lenBuf: LONGINT; VAR nWr: LONGINT; overlapp: LONGINT): LONGINT;
+		WritePrivProfileString-: PROCEDURE (section, key, value, iniFile: LONGINT): LONGINT;
+
+	PROCEDURE BOOL*(b: BOOLEAN): LONGINT;
+	BEGIN
+		IF b THEN
+			RETURN True
+		ELSE
+			RETURN False
+		END
+	END BOOL;
+
+	PROCEDURE MakeLong*(a, b: LONGINT): LONGINT;
+		VAR l: LONGINT;
+	BEGIN
+		S.MOVE(S.ADR(a), S.ADR(l), 2);
+		S.MOVE(S.ADR(b), S.ADR(l)+2, 2);
+		RETURN l
+	END MakeLong;
+
+	PROCEDURE LoWord*(x: LONGINT): LONGINT;
+	BEGIN
+		RETURN x MOD 10000H
+	END LoWord;
+	
+	PROCEDURE HiWord*(x: LONGINT): LONGINT;
+	BEGIN
+		x := S.LSH(x, -16); RETURN S.VAL(LONGINT, S.VAL(SET, x) * S.VAL(SET, 0FFFFH))
+	END HiWord;
+
+	PROCEDURE LongOr*(a, b: LONGINT): LONGINT;
+	BEGIN
+		RETURN S.VAL(LONGINT, S.VAL(SET, a) + S.VAL(SET, b))
+	END LongOr;
+	
+	PROCEDURE Includes*(flags, option: LONGINT): BOOLEAN;
+		VAR fl, op: SET;
+	BEGIN
+		fl := S.VAL(SET, flags); op := S.VAL(SET, option);
+		RETURN (op * fl) = op
+	END Includes;
+
+	PROCEDURE InitAPI();
+		VAR mod: LONGINT;
+	BEGIN
+		mod := Kernel.LoadLibrary("Kernel32");
+		Kernel.GetAdr(mod, "AllocConsole", S.VAL(LONGINT, AllocConsole));
+		Kernel.GetAdr(mod, "CloseHandle", S.VAL(LONGINT, CloseHandle));
+		Kernel.GetAdr(mod, "CompareFileTime", S.VAL(LONGINT, CompareFileTime));
+		Kernel.GetAdr(mod, "CopyFileA", S.VAL(LONGINT, CopyFile));
+		Kernel.GetAdr(mod, "CreateDirectoryA", S.VAL(LONGINT, CreateDirectory));
+		Kernel.GetAdr(mod, "CreateEventA", S.VAL(LONGINT, CreateEvent));
+		Kernel.GetAdr(mod, "CreateFileA", S.VAL(LONGINT, CreateFile));
+		Kernel.GetAdr(mod, "CreatePipe", S.VAL(LONGINT, CreatePipe));
+		Kernel.GetAdr(mod, "CreateProcessA", S.VAL(LONGINT, CreateProcess));
+		Kernel.GetAdr(mod, "CreateThread", S.VAL(LONGINT, CreateThread));
+		Kernel.GetAdr(mod, "DeleteCriticalSection", S.VAL(LONGINT, DeleteCriticalSection));
+		Kernel.GetAdr(mod, "DeleteFileA", S.VAL(LONGINT, DeleteFile));
+		Kernel.GetAdr(mod, "DeviceIoControl", S.VAL(LONGINT, DeviceIoControl));
+		Kernel.GetAdr(mod, "DuplicateHandle", S.VAL(LONGINT, DuplicateHandle));
+		Kernel.GetAdr(mod, "EnterCriticalSection", S.VAL(LONGINT, EnterCriticalSection));
+		Kernel.GetAdr(mod, "ExitThread", S.VAL(LONGINT, ExitThread));
+		Kernel.GetAdr(mod, "FileTimeToLocalFileTime", S.VAL(LONGINT, FileTimeToLocalFileTime));
+		Kernel.GetAdr(mod, "FileTimeToSystemTime", S.VAL(LONGINT, FileTimeToSystemTime));
+		Kernel.GetAdr(mod, "FindClose", S.VAL(LONGINT, FindClose));
+		Kernel.GetAdr(mod, "FindFirstFileA", S.VAL(LONGINT, FindFirstFile));
+		Kernel.GetAdr(mod, "FindNextFileA", S.VAL(LONGINT, FindNextFile));
+		Kernel.GetAdr(mod, "FlushFileBuffers", S.VAL(LONGINT, FlushFileBuffers));
+		Kernel.GetAdr(mod, "GetCurrentDirectoryA", S.VAL(LONGINT, GetCurrentDirectory));
+		Kernel.GetAdr(mod, "GetCurrentProcess", S.VAL(LONGINT, GetCurrentProcess));
+		Kernel.GetAdr(mod, "GetCurrentThread", S.VAL(LONGINT, GetCurrentThread));
+		Kernel.GetAdr(mod, "GetCurrentThreadId", S.VAL(LONGINT, GetCurrentThreadId));
+		Kernel.GetAdr(mod, "GetDiskFreeSpaceA", S.VAL(LONGINT, GetDiskFreeSpace));
+		Kernel.GetAdr(mod, "GetDriveTypeA", S.VAL(LONGINT, GetDriveType));
+		Kernel.GetAdr(mod, "GetExitCodeProcess", S.VAL(LONGINT, GetExitCodeProcess));
+		Kernel.GetAdr(mod, "GetFileAttributesA", S.VAL(LONGINT, GetFileAttributes));
+		Kernel.GetAdr(mod, "GetFileSize", S.VAL(LONGINT, GetFileSize));
+		Kernel.GetAdr(mod, "GetFileTime", S.VAL(LONGINT, GetFileTime));
+		Kernel.GetAdr(mod, "GetFullPathNameA", S.VAL(LONGINT, GetFullPathName));
+		Kernel.GetAdr(mod, "GetLastError", S.VAL(LONGINT, GetLastError));
+		Kernel.GetAdr(mod, "GetLocalTime", S.VAL(LONGINT, GetLocalTime));
+		Kernel.GetAdr(mod, "GetModuleFileNameA", S.VAL(LONGINT, GetModuleFileName));
+		Kernel.GetAdr(mod, "GetPrivateProfileStringA", S.VAL(LONGINT, GetPrivProfileString));
+		Kernel.GetAdr(mod, "GetStartupInfoA", S.VAL(LONGINT, GetStartupInfo));
+		Kernel.GetAdr(mod, "GetStdHandle", S.VAL(LONGINT, GetStdHandle));
+		Kernel.GetAdr(mod, "GetTempFileNameA", S.VAL(LONGINT, GetTempFileName));
+		Kernel.GetAdr(mod, "GetTempPathA", S.VAL(LONGINT, GetTempPath));
+		Kernel.GetAdr(mod, "GetThreadContext", S.VAL(LONGINT, GetThreadContext));
+		Kernel.GetAdr(mod, "GetThreadPriority", S.VAL(LONGINT, GetThreadPriority));
+		Kernel.GetAdr(mod, "GetTickCount", S.VAL(LONGINT, GetTickCount));
+		Kernel.GetAdr(mod, "GetVersion", S.VAL(LONGINT, GetVersion));
+		Kernel.GetAdr(mod, "GlobalAddAtomA", S.VAL(LONGINT, GlobalAddAtom));
+		Kernel.GetAdr(mod, "GlobalAlloc", S.VAL(LONGINT, GlobalAlloc));
+		Kernel.GetAdr(mod, "GlobalDeleteAtom", S.VAL(LONGINT, GlobalDeleteAtom));
+		Kernel.GetAdr(mod, "GlobalFree", S.VAL(LONGINT, GlobalFree));
+		Kernel.GetAdr(mod, "GlobalGetAtomNameA", S.VAL(LONGINT, GlobalGetAtomName));
+		Kernel.GetAdr(mod, "GlobalLock", S.VAL(LONGINT, GlobalLock));
+		Kernel.GetAdr(mod, "GlobalUnlock", S.VAL(LONGINT, GlobalUnlock));
+		Kernel.GetAdr(mod, "InitializeCriticalSection", S.VAL(LONGINT, InitCriticalSection));
+		Kernel.GetAdr(mod, "LeaveCriticalSection", S.VAL(LONGINT, LeaveCriticalSection));
+		Kernel.GetAdr(mod, "LocalFileTimeToFileTime", S.VAL(LONGINT, LocalFileTimeToFileTime));
+		Kernel.GetAdr(mod, "MoveFileA", S.VAL(LONGINT, MoveFile));
+		Kernel.GetAdr(mod, "MoveFileExA", S.VAL(LONGINT, MoveFileEx));
+		Kernel.GetAdr(mod, "OutputDebugStringA", S.VAL(LONGINT, OutputDebugString));
+		Kernel.GetAdr(mod, "QueryPerformanceCounter", S.VAL(LONGINT, QueryPerformanceCounter));
+		Kernel.GetAdr(mod, "QueryPerformanceFrequency", S.VAL(LONGINT, QueryPerformanceFrequency));
+		Kernel.GetAdr(mod, "ReadFile", S.VAL(LONGINT, ReadFile));
+		Kernel.GetAdr(mod, "ReadProcessMemory", S.VAL(LONGINT, ReadProcessMemory));
+		Kernel.GetAdr(mod, "RemoveDirectoryA", S.VAL(LONGINT, RemoveDirectory));
+		Kernel.GetAdr(mod, "ResetEvent", S.VAL(LONGINT, ResetEvent));
+		Kernel.GetAdr(mod, "ResumeThread", S.VAL(LONGINT, ResumeThread));
+		Kernel.GetAdr(mod, "SearchPathA", S.VAL(LONGINT, SearchPath));
+		Kernel.GetAdr(mod, "SetConsoleScreenBufferSize", S.VAL(LONGINT, SetConsoleScreenBufferSize));
+		Kernel.GetAdr(mod, "SetConsoleTitleA", S.VAL(LONGINT, SetConsoleTitle));
+		Kernel.GetAdr(mod, "SetConsoleWindowInfo", S.VAL(LONGINT, SetConsoleWindowInfo));
+		Kernel.GetAdr(mod, "SetCurrentDirectoryA", S.VAL(LONGINT, SetCurrentDirectory));
+		Kernel.GetAdr(mod, "SetEvent", S.VAL(LONGINT, SetEvent));
+		Kernel.GetAdr(mod, "SetFilePointer", S.VAL(LONGINT, SetFilePointer));
+		Kernel.GetAdr(mod, "SetFileTime", S.VAL(LONGINT, SetFileTime));
+		Kernel.GetAdr(mod, "SetHandleCount", S.VAL(LONGINT, SetHandleCount));
+		Kernel.GetAdr(mod, "SetLocalTime", S.VAL(LONGINT, SetLocalTime));
+		Kernel.GetAdr(mod, "SetThreadContext", S.VAL(LONGINT, SetThreadContext));
+		Kernel.GetAdr(mod, "SetThreadPriority", S.VAL(LONGINT, SetThreadPriority));
+		Kernel.GetAdr(mod, "Sleep", S.VAL(LONGINT, Sleep));
+		Kernel.GetAdr(mod, "SuspendThread", S.VAL(LONGINT, SuspendThread));
+		Kernel.GetAdr(mod, "SystemTimeToFileTime", S.VAL(LONGINT, SystemTimeToFileTime));
+		Kernel.GetAdr(mod, "TerminateThread", S.VAL(LONGINT, TerminateThread));
+		Kernel.GetAdr(mod, "VirtualAlloc", S.VAL(LONGINT, VirtualAlloc));
+		Kernel.GetAdr(mod, "VirtualFree", S.VAL(LONGINT, VirtualFree));
+		Kernel.GetAdr(mod, "VirtualProtect", S.VAL(LONGINT, VirtualProtect));
+		Kernel.GetAdr(mod, "WaitForSingleObject", S.VAL(LONGINT, WaitForSingleObject));
+		Kernel.GetAdr(mod, "WriteFile", S.VAL(LONGINT, WriteFile));
+		Kernel.GetAdr(mod, "WritePrivateProfileStringA", S.VAL(LONGINT, WritePrivProfileString))
+	END InitAPI;
+
+BEGIN
+	InitAPI()
+END Kernel32.

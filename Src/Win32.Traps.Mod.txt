@@ -1,0 +1,316 @@
+﻿(* OBERON System 3, Release 2.2.
+
+Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
+e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon System 3 license contract.
+The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+or requested from the above mentioned address.
+
+Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
+in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE Traps; (* ejz,  *)
+	IMPORT S := SYSTEM, Kernel32, Registry, Console, Modules;
+
+	CONST
+		GuardPageViolation* = 080000001H;
+		BreakPoint* = 080000003H;
+		SingleStep* = 080000004H;
+		AccessViolation* = 0C0000005H;
+		IllegalInstruction* = 0C000001DH;
+		ArrayBoundsExceeded* = 0C000008CH;
+		FloatDenormalOperand* = 0C000008DH;
+		FloatDivideByZero* = 0C000008EH;
+		FloatInexactResult* = 0C000008FH;
+		FloatInvalidOperand* = 0C0000090H;
+		FloatOverflow* = 0C0000091H;
+		FloatStackCheck* = 0C0000092H;
+		FloatUndeflow* = 0C0000093H;
+		IntegerDivideByZero* = 0C0000094H;
+		IntegerOverflow* = 0C0000095H;
+		PrivilegedInstruction* = 0C0000096H;
+		StackOverflow* = 0C00000FDH;
+
+	TYPE
+		ExcpRecPtr* = LONGINT; (*POINTER TO ExcpRecord;*)
+		ContextPtr* = LONGINT; (*POINTER TO Context;*)
+		ExcpFrmPtr* = LONGINT; (*POINTER TO ExcpFrm;*)
+		ExcpFrm* = RECORD
+			link*: ExcpFrmPtr;
+			handler*: PROCEDURE (ExcpRec: ExcpRecPtr; EstFrame: ExcpFrmPtr; Context: ContextPtr; dispatch: LONGINT): LONGINT
+		END;
+		ExcpRecP* = POINTER TO ExcpRecord;
+		ContextP* = POINTER TO Context;
+		ExcpRecord* = RECORD
+			code*: LONGINT;
+			flags*: LONGINT;
+			excRec*: LONGINT;
+			addr*: LONGINT;
+			nofpar*: LONGINT;
+			info*: ARRAY 15 OF LONGINT
+		END;
+		Context* = RECORD
+			flags*: LONGINT;
+			debRegs*: ARRAY 6 OF LONGINT;
+			floatSaveArea*: ARRAY 112 OF CHAR;
+			SegGs*, SegFs*, SegEs*, SegDs*: LONGINT;
+			Edi*, Esi*, Ebx*, Edx*, Ecx*, Eax*: LONGINT;
+			Ebp*, Eip*, SegCs*, EFlags*, Esp*, SegSs*: LONGINT;
+		END;
+		TrapInfo* = RECORD
+			exc*: ExcpRecP; cont*: ContextP;
+			thread*: PTR;
+			stackBottom*: LONGINT
+		END;
+		TrapHandler* = PROCEDURE (VAR info: TrapInfo);
+
+	VAR
+		EventLoop*: PROCEDURE ;	(** Control returns here after a trap in the thread executing Oberon.Loop *)
+		trapHandler*: TrapHandler;	(** the Trap handler *)
+		hProc: LONGINT;
+		eob*, verbose: BOOLEAN;
+
+	PROCEDURE - InstExcp 64H, 8BH, 0DH, 0, 0, 0, 0, 89H, 8, 64H, 0A3H, 0, 0, 0, 0;
+		(* MOV ECX, FS:[0]; MOV [EAX, 0], ECX; MOV FS:[0], EAX *)
+	PROCEDURE InstallExcp*(VAR e: ExcpFrm);
+	BEGIN
+		S.PUTREG(0, S.ADR(e)); (* MOV EAX, ADR(e) *)
+		InstExcp
+	END InstallExcp;
+
+	PROCEDURE ReadBytes*(adr: LONGINT; VAR x: ARRAY OF S.BYTE; n: LONGINT);
+		VAR ret, len: LONGINT;
+	BEGIN
+		ret := Kernel32.ReadProcessMemory(hProc, adr, S.ADR(x), n, len);
+		WHILE len < n DO
+			x[len] := 0X; INC(len)
+		END;
+		eob := ret = 0
+	END ReadBytes;
+	
+	PROCEDURE ReadNum*(VAR pos: LONGINT; VAR i: LONGINT);
+		VAR n: LONGINT; s: SHORTINT; x: CHAR;
+	BEGIN
+		s := 0; n := 0; ReadBytes(pos, x, 1); INC(pos);
+		WHILE ORD(x) >= 128 DO
+			INC(n, ASH(ORD(x) - 128, s)); INC(s, 7);
+			ReadBytes(pos, x, 1); INC(pos)
+		END;
+		i := n + ASH(ORD(x) MOD 64 - ORD(x) DIV 64 * 64, s)
+	END ReadNum;
+	
+	PROCEDURE ReadString*(VAR pos: LONGINT; VAR s: ARRAY OF CHAR);
+		VAR i: LONGINT; ch: CHAR;
+	BEGIN i := 0;
+		REPEAT
+			ReadBytes(pos, ch, 1); s[i] := ch;
+			IF i + 1 < LEN(s) THEN INC(i) END;
+			INC(pos)
+		UNTIL ch = 0X;
+	END ReadString;
+
+	PROCEDURE FindProc*(pc: LONGINT; VAR mod: Modules.Module; VAR refpos, refend: LONGINT);
+		CONST ProcRefTag = 0F8X; VarTag = 1X; VarParTag = 3X;
+		VAR m: Modules.Module; codebase, codelen, pos, beg, offs: LONGINT; ch: CHAR;
+			name: ARRAY 32 OF CHAR;
+	BEGIN
+		mod := NIL; refpos := -1;
+		m := Modules.modList;
+		IF m.code # NIL THEN
+			codebase := S.ADR(m.code[0]); codelen := LEN(m.code^)
+		ELSE
+			codebase := 0; codelen := 0
+		END;
+		WHILE (m # NIL) & ((pc < codebase) OR ((codebase + codelen) < pc)) DO
+			m := m.link;
+			IF m # NIL THEN
+				IF m.code # NIL THEN
+					codebase := S.ADR(m.code[0]); codelen := LEN(m.code^)
+				ELSE
+					codebase := 0; codelen := 0
+				END
+			END
+		END;
+		IF m # NIL THEN
+			mod := m; pc := pc - codebase;
+			IF m.refs = NIL THEN RETURN END;
+			pos := S.ADR(m.refs[0]); refend := pos + LEN(mod.refs^);
+			ReadBytes(pos, ch, 1); INC(pos); beg := pos; refpos := -1;
+			WHILE (pos <= refend) & (ch = ProcRefTag) DO
+				refpos := beg; beg := pos;
+				ReadNum(pos, offs);
+				IF offs >= pc THEN RETURN END;
+				ReadString(pos, name);
+				ReadBytes(pos, ch, 1); INC(pos);
+				WHILE (ch = VarTag) OR (ch = VarParTag) DO
+					ReadBytes(pos, ch, 1); INC(pos);
+					ReadNum(pos, offs); ReadString(pos, name);
+					ReadBytes(pos, ch, 1); INC(pos)
+				END
+			END;
+			refpos := beg
+		END
+	END FindProc;
+
+	PROCEDURE Str(str: ARRAY OF CHAR);
+	BEGIN
+		Console.Str(str)
+	END Str;
+
+	PROCEDURE Hex(i: LONGINT);
+	BEGIN
+		Console.Hex(i); Console.Ch("H")
+	END Hex;
+
+	PROCEDURE Ln();
+	BEGIN
+		Console.Ln()
+	END Ln;
+
+	PROCEDURE Append(VAR to: ARRAY OF CHAR; this: ARRAY OF CHAR);
+		VAR i, j, l: LONGINT;
+	BEGIN
+		i := 0;
+		WHILE to[i] # 0X DO
+			INC(i)
+		END;
+		l := LEN(to)-1; j := 0;
+		WHILE (i < l) & (this[j] # 0X) DO
+			to[i] := this[j]; INC(i); INC(j)
+		END;
+		to[i] := 0X
+	END Append;
+
+	PROCEDURE TrapMsg*(excode, eax: LONGINT; VAR msg: ARRAY OF CHAR);
+		VAR arg: ARRAY 16 OF CHAR;
+	BEGIN
+		IF excode = GuardPageViolation THEN
+			COPY("guard page violation", msg)
+		ELSIF excode = BreakPoint THEN
+			Console.IntToStr(eax, arg);
+			COPY("breakpoint ", msg);
+			Append(msg, arg)
+		ELSIF excode = SingleStep THEN
+			COPY("single step", msg)
+		ELSIF excode = AccessViolation THEN
+			COPY("access violation", msg)
+		ELSIF excode = IllegalInstruction THEN
+			IF eax = 1 THEN
+				COPY("heap overflow", msg)
+			ELSIF eax = 15 THEN
+				COPY("invalid case in WITH statement", msg)
+			ELSIF eax = 16 THEN
+				COPY("invalid case in CASE statement", msg)
+			ELSIF eax = 17 THEN
+				COPY("function procedure without RETURN", msg)
+			ELSIF eax = 18 THEN
+				COPY("type guard check", msg)
+			ELSIF eax = 19 THEN
+				COPY("implicit type guard check in record assignment", msg)
+			ELSIF eax = 21 THEN
+				COPY("index out of range", msg)
+			ELSIF eax = 22 THEN
+				COPY("dimension trap", msg)
+			ELSIF eax = 24 THEN
+				COPY("abort from keyboard", msg)
+			ELSE
+				Console.IntToStr(eax, arg);
+				COPY("HALT / ASSERT failed ", msg);
+				Append(msg, arg)
+			END
+		ELSIF excode = ArrayBoundsExceeded THEN
+			COPY("index out of range", msg)
+		ELSIF excode = FloatDenormalOperand THEN
+			COPY("FPU: denormal operand", msg)
+		ELSIF excode = FloatDivideByZero THEN
+			COPY("FPU: divide by zero", msg)
+		ELSIF excode = FloatInexactResult THEN
+			COPY("FPU: inexact result", msg)
+		ELSIF excode = FloatInvalidOperand THEN
+			COPY("FPU: invalid operand", msg)
+		ELSIF excode = FloatOverflow THEN
+			COPY("FPU: overflow", msg)
+		ELSIF excode = FloatStackCheck THEN
+			COPY("FPU: stack check", msg)
+		ELSIF excode = FloatUndeflow THEN
+			COPY("FPU: undeflow", msg)
+		ELSIF excode = IntegerDivideByZero THEN
+			COPY("integer division by zero", msg)
+		ELSIF excode = IntegerOverflow THEN
+			COPY("integer overflow", msg)
+		ELSIF excode = PrivilegedInstruction THEN
+			COPY("privileged instruction", msg)
+		ELSIF excode = StackOverflow THEN
+			COPY("stack overflow", msg)
+		ELSE
+			Console.IntToStr(excode, arg);
+			COPY("exception ", msg);
+			Append(msg, arg)
+		END
+	END TrapMsg;
+
+	PROCEDURE TrapCon*(VAR p: TrapInfo);
+		VAR
+			pc, bp, sp, ref, refend, n, offs: LONGINT;
+			msg: ARRAY 64 OF CHAR;
+			name: ARRAY 32 OF CHAR;
+			mod: Modules.Module;
+	BEGIN
+		eob := FALSE; pc := p.exc.addr; bp := p.cont.Ebp; sp := p.cont.Esp;
+		IF pc = 0 THEN (* assume call of procedure variable with value NIL *)
+			ReadBytes(sp, pc, 4) (* get return address on top of stack *)
+		END;
+		Hex(S.VAL(LONGINT, p.thread)); Str(" - ");
+		TrapMsg(p.exc.code, p.cont.Eax, msg); Str(msg); Ln();
+		IF verbose THEN
+			Ln(); Str("Exception "); Hex(p.exc.code); Str(" at "); Hex(p.exc.addr); Ln();
+			Str("Register Dump"); Ln();
+			Str("Eax "); Hex(p.cont.Eax); Str("  Ebx "); Hex(p.cont.Ebx); Ln();
+			Str("Ecx "); Hex(p.cont.Ecx); Str("  Edx "); Hex(p.cont.Edx); Ln();
+			Str("Edi "); Hex(p.cont.Edi); Str("  Esi "); Hex(p.cont.Esi); Ln();
+			Str("Ebp "); Hex(p.cont.Ebp); Str("  Eip "); Hex(p.cont.Eip); Ln();
+			Str("Esp "); Hex(p.cont.Esp); Str("  EFlags "); Hex(p.cont.EFlags); Ln();
+			Str("SegCs "); Hex(p.cont.SegCs); Str("  SegDs "); Hex(p.cont.SegDs); Ln();
+			Str("SegEs "); Hex(p.cont.SegEs); Str("  SegFs "); Hex(p.cont.SegFs); Ln();
+			Str("SegGs "); Hex(p.cont.SegGs); Str("  SegSs "); Hex(p.cont.SegSs); Ln();
+			Ln()
+		END;
+		Str("PC = "); Hex(pc);
+		FindProc(pc, mod, ref, refend);
+		IF mod # NIL THEN Str(" ("); Hex(pc - S.ADR(mod.code[0])); Str(") ") END;
+		Ln(); Ln();
+		(* stack dump *)
+		n := 0;
+		WHILE (bp < p.stackBottom) & (n < 64) DO
+			IF mod # NIL THEN
+				Str(mod.name); Str(".");
+				ReadNum(ref, offs); ReadString(ref, name);
+				Str(name); 
+				Str("+"); Hex(pc - S.ADR(mod.code[0])); Ln()
+			ELSE
+				Str("mod not found "); Ln()
+			END;
+			ReadBytes(bp+4, pc, 4); (* pc of caller *)
+			ReadBytes(bp, bp, 4); (* bp of caller *)
+			INC(n);
+			FindProc(pc, mod, ref, refend)
+		END
+	END TrapCon;
+
+	PROCEDURE Init();
+		VAR str: ARRAY 8 OF CHAR;
+	BEGIN
+		EventLoop := NIL;
+		trapHandler := TrapCon; hProc := Kernel32.GetCurrentProcess();
+		Registry.Get("System", "Verbose", str);
+		verbose := CAP(str[0]) = "Y"
+	END Init;
+
+BEGIN
+	Init()
+END Traps.

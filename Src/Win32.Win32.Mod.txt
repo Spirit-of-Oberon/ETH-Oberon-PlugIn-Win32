@@ -1,0 +1,1033 @@
+﻿(* OBERON System 3, Release 2.2.
+
+Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
+e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon System 3 license contract.
+The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+or requested from the above mentioned address.
+
+Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
+in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE Win32; (* 2.5.94 jm bootstrap trap code + color handling *)
+
+(**
+Module Win32 provides the low-level interface to the Windows operating system. Some of its duties include
+window, font and color management. 
+*)
+(*
+	jm 12.9.95 - Added WndProc Upcall
+	ejz 6.10.95 - Improved InitInstance
+*)
+
+IMPORT Kernel, Kernel32, User32, S := SYSTEM, C := Console, Modules, Registry;
+
+CONST
+	ML = 2; MM = 1; MR = 0;
+	Bold* = 0; Italics* = 1; Medium* = 2;
+	kbBufSize = 32; msBufSize = 128;
+	SHIFT* = 0; CTRL* =  1; ALT* = 2;
+	PageUp* = 0A2X; PageDown* = 0A3X; End* = 0A9X; Home* = 0A8X;
+	Left* = 0C4X; Up* = 0C1X; Right* = 0C3X; Down* = 0C2X;
+	Insert* = 0A0X; Delete* = 0A1X; F1* = 0A4X;
+
+TYPE
+	ADDRESS = LONGINT;	HANDLE = LONGINT;	HWND = HANDLE;	HDC = HANDLE;	LPSZ = ADDRESS;
+
+	COLORREF* = LONGINT;
+
+	Pattern = LONGINT (* = PatternPtr *);
+	PatternPtr* = POINTER TO PatternDesc;
+	PatternDesc* = RECORD
+		x*, y*: LONGINT;	(* offset in bitmap *)
+		w*, h*: INTEGER;
+		bitmap*: HANDLE;
+		next: PatternPtr;
+	END;
+
+	MetricDesc* = RECORD
+		dx*, x*, y*, filler: INTEGER;
+		p*: PatternDesc;
+	END;
+
+	Font* = POINTER TO Bytes;
+	Bytes* = RECORD
+		metrics*: ARRAY 256 OF MetricDesc;
+		hfont*: LONGINT;	(* handle to GDI font on screen *)
+		family*: ARRAY 32 OF CHAR;
+		size*: LONGINT;
+		style*: SET;	(* Bold, Italics *)
+		oberon*: BOOLEAN; (* TRUE if font uses Oberon character codes *)
+	END;
+	
+	MouseState = RECORD
+		x, y: INTEGER; keys: SET
+	END;
+
+	WndProcList = POINTER TO WndProcListDesc;
+	WndProcListDesc = RECORD
+		wndProc: User32.WindowProc;
+		msg: LONGINT;
+		next: WndProcList
+	END;
+
+	Accel = POINTER TO AccelDesc;
+	AccelDesc = RECORD
+		state: SET;
+		key: LONGINT;
+		cmd: ARRAY 64 OF CHAR;
+		next: Accel
+	END;
+
+VAR
+	kbNofChars, kbIn, kbOut: INTEGER;
+	kbBuf: ARRAY kbBufSize OF CHAR;
+
+	msNofEntries, msIn, msOut: INTEGER;
+	msBuf: ARRAY msBufSize OF MouseState;
+	msLastX, msLastY: INTEGER; msLastKeys: SET;
+	emulateMM: BOOLEAN;
+	T: ARRAY 256 OF CHAR;
+	WinToOberon: ARRAY 256 OF CHAR;  (* ascii code translation Windows -> Oberon *)
+	OberonToWin-: ARRAY 256 OF CHAR;  (* ascii code translation Oberon -> Windows *)
+	ApplicationName, Title: ARRAY 32 OF CHAR;
+	hInstance, hPrevInst: HANDLE;
+	ShowTitlebar: BOOLEAN;
+	mod: LONGINT;
+
+	CurrentCursor*: LONGINT;
+
+	ShowMsg: PROCEDURE (msg: LONGINT);
+	HideMsg: PROCEDURE;
+
+	UpdateColors: PROCEDURE (hdc: LONGINT);
+	CreateSolidBrush-: PROCEDURE (colorref: COLORREF): HANDLE;
+	CreatePatternBrush: PROCEDURE (bitmap: LONGINT): HANDLE;
+	CreatePen: PROCEDURE (style, width: LONGINT; color: COLORREF): HANDLE;
+	SelectObject-: PROCEDURE (hdc: HDC; obj: HANDLE): HANDLE;
+	CreateRectRgn: PROCEDURE (left, top, right, bottom: LONGINT ): HANDLE;
+	DeleteObject-: PROCEDURE (obj: LONGINT);
+	GetDeviceCaps-: PROCEDURE (hdc, index: LONGINT): LONGINT;
+	CreateCompatibleDC-: PROCEDURE (hdc: HDC): HDC;
+	DeleteDC-: PROCEDURE (hdc: HDC);
+	CreateBitmap-: PROCEDURE (w, h: LONGINT; planes: LONGINT; bitsPerPixel: LONGINT; bits: ADDRESS): HANDLE;
+	CreateCompatibleBitmap-: PROCEDURE(hdc: LONGINT; w, h: LONGINT): HANDLE;
+	PatBlt-: PROCEDURE (hdc: HDC; x, y, w, h: LONGINT; rop: LONGINT): LONGINT;
+	BitBlt-: PROCEDURE (hdc: HDC; x, y, w, h: LONGINT; hdcSrc: HDC; xSrc, ySrc: LONGINT; rop: LONGINT);
+	TextOut-: PROCEDURE (hdc: HDC; xstart,  ystart: LONGINT; str: LPSZ; nofchar: LONGINT): LONGINT;
+	SetTextColor-: PROCEDURE (hdc: HDC; colorref: COLORREF);
+	SetTextAlign-: PROCEDURE (hdc: HDC; mode: LONGINT);
+	SetBkMode-: PROCEDURE (hdc: HDC; mode: LONGINT);
+	SetBkColor: PROCEDURE (hdc: HDC; col: COLORREF);
+	SetBrushOrgEx-: PROCEDURE (hdc: HDC; x, y: LONGINT; lpPrev: LONGINT);
+	GetStockObject-: PROCEDURE (objno: LONGINT): LONGINT;
+	RealizePalette: PROCEDURE (hdc: HDC): LONGINT;
+	CreatePalette: PROCEDURE (ptrLogPalette: LONGINT): LONGINT;
+	SetPaletteEntries: PROCEDURE (hpal: LONGINT; logIndex, nofEntries: LONGINT; ppe: LONGINT): LONGINT;
+	GetPaletteEntries: PROCEDURE (hpal: LONGINT; logIndex, nofEntries: LONGINT; ppe: LONGINT);
+	SelectPalette: PROCEDURE (hdc: HDC; hpal: LONGINT; forceBkgnd: LONGINT);
+	GdiSetBatchLimit: PROCEDURE (limit: LONGINT): LONGINT;
+	GdiFlush: PROCEDURE;
+	AnimatePalette: PROCEDURE (hpal, start, nofentries, ppe: LONGINT);
+	SetSystemPaletteUse: PROCEDURE (hdc, usage: LONGINT): LONGINT;
+	GetSystemPaletteEntries: PROCEDURE (hdc, iStartIndex, nEntries, lppe: LONGINT): LONGINT;
+	(** Upcall for messages not handled by the default Oberon Window handler. *)
+	wndProcs: WndProcList;
+	accels: Accel;
+
+	(* ------------------- Display Output ---------------------- *)
+
+CONST
+	BLACKNESS = 00000042H; WHITENESS = 00FF0062H;
+	replace = 0; paint = 1; (* modes *)
+	LineCacheSize = 256;
+
+	(** Background modes **)
+	transparent = 1; opaque = 2;
+
+VAR
+	OS-: RECORD
+				platform-: LONGINT;  (** 0 = Windows NT, 1 = Win32s on Windows 3.1 **)
+				major-, minor-: LONGINT;
+			END;
+	DispW-, DispH-: LONGINT;
+	TitlebarHeight: LONGINT;
+	FrameWidth: LONGINT;
+	Display-: LONGINT;	(** handle to Oberon window **)
+	hdcDisp-: LONGINT;	(** handle to device context for Oberon window **)
+
+	Black-, White-: COLORREF;
+	Backg-, Foreg: COLORREF;
+	BackgRop-, ForegRop-: LONGINT; (* ROP-codes for background and foreground *)
+
+	UpdateDisplay*: Modules.Command;
+
+	cc*: RECORD	(** character cache **)
+		pat*: Pattern;
+		font*: Font;
+		ch*: CHAR;
+		dx*, x*, y*: INTEGER;
+	END;
+
+	lc*: RECORD	(** line cache **)
+		len-: INTEGER;
+		cache: ARRAY LineCacheSize OF CHAR;
+		font: Font;
+		x0, y0, x, col, mode: INTEGER;
+	END;
+
+	dc*: RECORD	(** device context cache **)
+		hfont*: LONGINT;
+		textCol*: COLORREF;
+		brushCol*: COLORREF;	(** color of solid brush, or -1 *)
+		bkCol*: COLORREF;
+		bkMode*: INTEGER;	(** transparent, opaque **)
+		penCol*: COLORREF;	(** color of solid pen, width 0 **)
+		pat*: PatternPtr;	(** pattern of pattern brush, or NIL **)
+		x*, y*, w*, h*: LONGINT;	(** cached clipping rectangle in Oberon Display coordinates **)
+	END;
+
+	PatternList: PatternPtr;	(* list of all created paterns; prevents them from beeing collected *)
+
+	(* ------ color support -------- *)
+
+CONST
+	MaxPaletteSize = 256;
+	PCReserved = 1X;	(* flags in PaletteEntry *)
+
+TYPE
+	PaletteEntry = RECORD;
+		red, green, blue: CHAR; (* 0 .. 0FFH *)
+		flags: CHAR;
+	END;
+
+	Palette = RECORD
+		version: INTEGER;
+		size: INTEGER;
+		col: ARRAY MaxPaletteSize OF PaletteEntry;
+	END;
+
+VAR
+	Pal: Palette;
+	hPalette: LONGINT; (** handle to logical palette **)
+	Depth-: LONGINT;	(** screen depth **)
+	NumColors: LONGINT;	(* must be < MaxPaletteSize *)
+	PaletteAvailable: BOOLEAN;
+	
+	ColTrans*, RevColTrans*: ARRAY 256 OF INTEGER;
+	usesystemcolors: BOOLEAN;
+	
+	(* ------ printer support -------- *)
+
+TYPE
+	PRINTDLG* = RECORD
+		size*: LONGINT;	(* set to 66! *)
+		hwndOwner*: LONGINT;
+		hDevMode*: LONGINT;
+		hDevNames*: LONGINT;
+		hdc*: LONGINT;
+		flags*: SET;
+		fromPage*, toPage*: INTEGER;
+		minPage*, maxPage*: INTEGER; 
+		nofCopies*: INTEGER;
+		hInstance: LONGINT;	(* << caution: improper alignment from here to end ! *)
+		custData: LONGINT;
+		printHook, setupHook: LONGINT;
+		printTemplateName, setupTemplateName: LONGINT;
+		printTemplate, setupTemplate: LONGINT;
+	END;
+
+VAR
+	PD*: PRINTDLG;
+	PrintDlg-: PROCEDURE (lppd: LONGINT): BOOLEAN;
+
+VAR
+	kioskmode, verbose: BOOLEAN;
+	accelCmd*: ARRAY 64 OF CHAR;
+	defocus*: BOOLEAN;
+
+	(* ------ pattern ---------- *)
+
+PROCEDURE PatternTermHandler;
+	VAR p: PatternPtr;
+BEGIN
+	p := PatternList;
+	WHILE p # NIL DO
+		IF p.bitmap # Kernel32.NULL THEN DeleteObject(p.bitmap) END;
+		p := p.next;
+	END
+END PatternTermHandler;
+
+PROCEDURE InitTranslations;
+	VAR i, k, bit, val: INTEGER;
+		str: ARRAY 8 OF CHAR;
+BEGIN i := 0;
+	WHILE i < 256 DO k := i; bit := 0; val := 0;
+		WHILE bit < 8 DO val := val * 2;
+			IF ODD(k) THEN INC(val) END;
+			k := k DIV 2; INC(bit);
+		END;
+		T[i] := CHR(val); INC(i);
+	END;
+	(* ascii code translation *)
+	i := 0;
+	WHILE i < 256 DO WinToOberon[i] := CHR(i); OberonToWin[i] := CHR(i); INC(i) END;
+	WinToOberon[8] := CHR(127);
+	Registry.Get("System", "ESCKey", str);
+	IF (Registry.res # Registry.Done) OR (CAP(str[0]) # "E") THEN
+		WinToOberon[27] := 0A5X (* ESC -> Neutralise *)
+	END;
+	WinToOberon[196] := CHR(128); OberonToWin[128] := CHR(196);
+	WinToOberon[214] := CHR(129); OberonToWin[129] := CHR(214);
+	WinToOberon[220] := CHR(130); OberonToWin[130] := CHR(220);
+	WinToOberon[228] := CHR(131); OberonToWin[131] := CHR(228);
+	WinToOberon[246] := CHR(132); OberonToWin[132] := CHR(246);
+	WinToOberon[252] := CHR(133); OberonToWin[133] := CHR(252);
+	WinToOberon[226] := CHR(134); OberonToWin[134] := CHR(226);
+	WinToOberon[234] := CHR(135); OberonToWin[135] := CHR(234);
+	WinToOberon[238] := CHR(136); OberonToWin[136] := CHR(238);
+	WinToOberon[244] := CHR(137); OberonToWin[137] := CHR(244);
+	WinToOberon[251] := CHR(138); OberonToWin[138] := CHR(251);
+	WinToOberon[224] := CHR(139); OberonToWin[139] := CHR(224);
+	WinToOberon[232] := CHR(140); OberonToWin[140] := CHR(232);
+	WinToOberon[236] := CHR(141); OberonToWin[141] := CHR(236);
+	WinToOberon[242] := CHR(142); OberonToWin[142] := CHR(242);
+	WinToOberon[249] := CHR(143); OberonToWin[143] := CHR(249);
+	WinToOberon[233] := CHR(144); OberonToWin[144] := CHR(233);
+	WinToOberon[235] := CHR(145); OberonToWin[145] := CHR(235);
+	WinToOberon[239] := CHR(146); OberonToWin[146] := CHR(239);
+	WinToOberon[231] := CHR(147); OberonToWin[147] := CHR(231);
+	WinToOberon[225] := CHR(148); OberonToWin[148] := CHR(225);
+	WinToOberon[241] := CHR(149); OberonToWin[149] := CHR(241);
+	
+	WinToOberon[223] := CHR(150); OberonToWin[150] := CHR(223); (* jm doppel-s *)
+
+	Registry.Get("System", "Verbose", str);
+	verbose := CAP(str[0]) = "Y"
+END InitTranslations;
+
+PROCEDURE RotateBytes (VAR b: ARRAY OF S.BYTE);
+	VAR i: LONGINT;
+BEGIN
+	FOR i := 0 TO LEN(b)-1 DO b[i] := T[ORD(S.VAL(CHAR, b[i]))] END;
+END RotateBytes;
+
+PROCEDURE NewPattern* ((*VAR*) image: ARRAY OF SET; w, h: INTEGER; VAR pat: Pattern);
+	VAR p: PatternPtr; temp: SET;
+		i, n, p1, p2: LONGINT;
+		wdw: LONGINT;	(* width in double words *)
+BEGIN
+	NEW(p); p.x := 0; p.y := 0; p.w := w; p.h := h;
+	wdw := (w+31) DIV 32;
+	(* turn scanlines upside down *)
+	i := 0;
+	WHILE i < h DIV 2 DO (* swap scanlines i and h-i-1*)
+		p1 := i * wdw + 1; p2 := (h-i-1)* wdw + 1; n := 0;
+		WHILE n < wdw DO temp := image[p1]; image[p1] := image[p2]; image[p2] := temp; INC(p1); INC(p2); INC(n) END;
+		INC(i)
+	END;
+	RotateBytes(image);
+	p.bitmap := CreateBitmap(wdw * 32, h, 1, 1, S.ADR(image)+SIZE(SET));
+	p.next := PatternList; PatternList := p;
+	pat := S.VAL(Pattern, p);
+END NewPattern;
+
+	(* ------ color support -------- *)
+
+PROCEDURE PaletteIndex* (index: LONGINT): COLORREF;
+BEGIN RETURN S.VAL(COLORREF, S.VAL(SET, index) + S.VAL(SET, 01000000H))
+END PaletteIndex;
+
+PROCEDURE InitPalette;
+VAR i, j: INTEGER; res: LONGINT; used: ARRAY 256 OF BOOLEAN; s: ARRAY 64 OF CHAR; flag: CHAR;
+	
+	PROCEDURE SetColor(i, red, green, blue: INTEGER; mode: CHAR);
+	BEGIN
+		Pal.col[i].red := CHR(red); Pal.col[i].green := CHR(green); Pal.col[i].blue := CHR(blue); Pal.col[i].flags := mode
+	END SetColor;
+		
+BEGIN
+	Registry.Get("System", "UseSystemColors", s);
+	usesystemcolors := (Registry.res = Registry.Done) & (s[0] = "Y");
+	IF usesystemcolors & verbose THEN C.Str("Trying to use Windows SystemColors"); C.Ln END;
+
+	Pal.version := 0300H; Pal.size := SHORT(NumColors);
+	
+	res := GetSystemPaletteEntries(hdcDisp, 0, 256, S.ADR(Pal.col)); (* ensure it is a system palette *)
+	IF verbose THEN C.Str("GetSystemPaletteEntries reports "); C.Int(res); C.Str(" system colors"); C.Ln() END;
+	IF res = 256 THEN
+		FOR i := 0 TO 255 DO used[i] := FALSE END;
+		
+		ColTrans[0] := 255; (* white *)
+		ColTrans[1] := 249; (* red *)
+		ColTrans[2] := 250; (* green *)
+		ColTrans[3] := 252; (* blue *)
+		ColTrans[4] := 253; (* magenta *)
+		ColTrans[5] := 251; (* yellow *)
+		ColTrans[6] := 254; (* cyan *)
+		ColTrans[7] := 1; (* dark red *)
+		ColTrans[8] := 2; (* dark green *)
+		ColTrans[9] := 4; (* dark blue *)
+		ColTrans[10] := 9; (* sky blue *)
+		ColTrans[11] := 6; (* dark cyan *)
+		ColTrans[12] := 248; (* dark grey *)
+		ColTrans[13] := 247; (* medium grey *)
+		ColTrans[14] := 7; (* light grey *)
+		ColTrans[15] := 0; (* black *)
+		
+		(* next four colors are also mapped to the system palette *)
+		ColTrans[16] := 3;
+		ColTrans[17] := 5;
+		ColTrans[18] := 8;
+		ColTrans[19] := 246;
+		
+		FOR i := 0 TO 19 DO used[ColTrans[i]] := TRUE END;
+		j := 0;
+		FOR i := 20 TO 255 DO
+			WHILE used[j] DO INC(j) END;
+			ColTrans[i] := j; used[j] := TRUE
+		END;
+		FOR i := 0 TO 255 DO RevColTrans[ColTrans[i]] := i END;
+
+		i := 0;
+		IF usesystemcolors THEN flag := PCReserved ELSE flag := 0X END;
+		WHILE i < 10 DO Pal.col[i].flags := flag; INC(i) END;
+		WHILE i < 246 DO SetColor(i, 0, 0, 0, PCReserved); INC(i) END;
+		WHILE i < 256 DO Pal.col[i].flags := flag; INC(i) END;
+		
+		IF usesystemcolors THEN Pal.col[0].flags := 0X; Pal.col[255].flags := 0X END;
+		
+		Black := PaletteIndex(0); White := PaletteIndex(255);
+		Backg := PaletteIndex(255); Foreg := PaletteIndex(0);
+	ELSE (* use Window's color mapping, no identity palette *)
+		(* Important in color modes:
+		The first 16 colors are selected in such a way that they map to a color in the windows system palette. Changing the
+		color settings will cause less colors to be available for Oberon. Because the colors are mapped to the system
+		palette colors, XOR works correctly for the lower color values, and no palette changes are allowed.
+		The remaining four system colors are not used, meaning that oberon has 256 - 4= 252 colors available.
+		This also means that the grey scales are slightly darker than other Oberon versions.
+		*)
+		FOR i := 0 TO 255 DO ColTrans[i] := i; RevColTrans[i] := i END;
+		SetColor(0, 0FFH, 0FFH, 0FFH, 0X); (* white *)
+		SetColor(1, 255  , 0  , 0  , 0X); (* red *)
+		SetColor( 2, 0  , 255  , 0  , 0X);	(* green *)
+		SetColor(3, 0  ,  0  ,  255  , 0X);	(* blue*)
+		SetColor(4, 255  , 0  , 255  , 0X);	(* magenta *)
+		SetColor(5,  255  , 255  ,  0  , 0X); (* yellow *)
+		SetColor( 6, 0  ,  255  ,  255  , 0X);	 (*cyan *)
+		SetColor( 7, 128(*170*)  , 0  , 0  , 0X);	(* dark red *)
+		SetColor( 8, 0  , 128(*154*)  , 0  , 0X);	(* dark green *)
+		SetColor( 9, 0  , 0  , 128(*154*)  , 0X);	(* dark blue *)
+		SetColor(10, 0A6H, 0CAH,  0F0H, 0X); (* sky blue *)
+		SetColor(11, 0, 080H, 080H, 0X); (* dark cyan *)
+		SetColor(12, 80H (*138*)  , 80H (*138*)  , 80H (*138*)  , 0X); (* dark grey *)
+		SetColor(13, 0A0H (*190*)  , 0A0H (*190*)  , 0A0H (*190*)  , 0X); (* medium grey *)
+		SetColor(14, 0C0H (*223*)  , 0C0H (*223*)  , 0C0H (*223*)  , 0X); (* light grey *)
+		SetColor(15, 0, 0, 0, 0X); (* black *)
+		i := 16; WHILE i < NumColors DO SetColor(i, i, i, i, PCReserved); INC(i) END;
+		Black := PaletteIndex(15); White := PaletteIndex(0);
+		Backg := PaletteIndex(0); Foreg := PaletteIndex(15);
+		
+		usesystemcolors := FALSE
+	END;
+					
+	hPalette := CreatePalette(S.ADR(Pal));
+	BackgRop := WHITENESS; ForegRop := BLACKNESS;
+	IF usesystemcolors THEN
+		res := SetSystemPaletteUse(hdcDisp, 2)
+	END
+END InitPalette;
+
+PROCEDURE UpdatePalette* (index: LONGINT; red, green, blue: INTEGER);	(* does not yet work *)
+BEGIN
+	Pal.col[index].red := CHR(red); Pal.col[index].green := CHR(green); Pal.col[index].blue := CHR(blue);
+	Pal.col[index].flags := PCReserved;
+	AnimatePalette(hPalette, index, 1, S.ADR(Pal.col[index]));
+END UpdatePalette;
+
+PROCEDURE GetColor* (col: INTEGER; VAR red, green, blue: INTEGER);
+	VAR p: PaletteEntry;
+BEGIN
+	GetPaletteEntries(hPalette, col, 1, S.ADR(p));
+	red := ORD(p.red); green := ORD(p.green); blue := ORD(p.blue);
+END GetColor;
+
+PROCEDURE - RetVal(): LONGINT;
+PROCEDURE DeletePaletteAndDC;	(* installed as termination handler *)
+	VAR ret: LONGINT;
+BEGIN
+	SelectPalette(hdcDisp, GetStockObject(15 (*DEFAULT_PALETTE*)), 0);
+	hPalette := RetVal(); 
+	DeleteObject(hPalette); hPalette := Kernel32.NULL; ret := User32.ReleaseDC(Display, hdcDisp)
+END DeletePaletteAndDC;
+
+	(* --------------- device context cacheing ------------------ *)
+
+PROCEDURE InitDeviceContext;
+	CONST TABaseline = 24; TALeft = 0;
+	VAR br: HANDLE; n: LONGINT; s: ARRAY 4 OF CHAR;
+BEGIN
+	PaletteAvailable := ODD(GetDeviceCaps(hdcDisp, 38 (*RASTERCAPS*)) DIV 100H (*RC_PALETTE*));
+	IF TRUE (*PaletteAvailable*) THEN
+		n := GetDeviceCaps(hdcDisp, 104 (*SIZEPALETTE*));
+		InitPalette;
+		IF hPalette # Kernel32.NULL THEN SelectPalette(hdcDisp, hPalette, 0 (*FALSE*)) END;
+		n := RealizePalette(hdcDisp);
+	END;
+	SetTextAlign(hdcDisp, TABaseline + TALeft);
+	dc.hfont := Kernel32.NULL;
+	SetTextColor(hdcDisp, Foreg); dc.textCol := Foreg;
+	SetBkColor(hdcDisp, Backg); dc.bkCol := Backg;
+	SetBkMode(hdcDisp, opaque); dc.bkMode := opaque;
+	br := SelectObject(hdcDisp, CreateSolidBrush(Backg)); DeleteObject(br); dc.brushCol := Backg;
+	dc.penCol := -1;
+	Depth := GetDeviceCaps(hdcDisp, 12 (*BITSPIXEL*));
+	
+	Registry.Get("System", "Monochrome", s);
+	IF (Registry.res = Registry.Done) & (s[0] = "Y") THEN
+		Depth := 1;
+		IF verbose THEN C.Str("Switching to monochrome mode"); C.Ln() END
+	END
+END InitDeviceContext;
+
+PROCEDURE SetBackgCol* (col: COLORREF);
+BEGIN
+	IF dc.bkCol # col THEN SetBkColor(hdcDisp, col); dc.bkCol := col END;
+END SetBackgCol;
+
+PROCEDURE SetTextCol* (col: COLORREF);
+BEGIN
+	IF dc.textCol # col THEN SetTextColor(hdcDisp, col); dc.textCol := col END;
+END SetTextCol;
+
+PROCEDURE SetBrushColor* (col: COLORREF);
+	VAR br: HANDLE;
+BEGIN
+	IF dc.brushCol # col THEN
+		br := SelectObject(hdcDisp, CreateSolidBrush(col)); DeleteObject(br);
+		dc.brushCol := col; dc.pat := NIL
+	END;
+END SetBrushColor;
+
+PROCEDURE SetPatternBrush* (pat: PatternPtr);
+	VAR br: HANDLE;
+BEGIN
+	IF dc.pat # pat THEN
+		br := SelectObject(hdcDisp, CreatePatternBrush(pat.bitmap)); DeleteObject(br);
+		dc.pat := pat; dc.brushCol := -1;
+	END
+END SetPatternBrush;
+
+PROCEDURE FlushCache*;
+	VAR colref: LONGINT; dmmy: HANDLE;
+BEGIN
+	colref := PaletteIndex(lc.col);
+	IF dc.hfont # lc.font.hfont THEN
+		dmmy := SelectObject(hdcDisp, lc.font.hfont); dc.hfont := lc.font.hfont;
+	END;
+	IF dc.textCol # colref THEN SetTextColor(hdcDisp, colref); dc.textCol := colref END;
+	CASE lc.mode OF
+	| paint, replace: (* replace = paint *)
+		IF dc.bkMode # transparent THEN SetBkMode(hdcDisp, transparent); dc.bkMode := transparent END;
+		dmmy := TextOut(hdcDisp, lc.x0, DispH-lc.y0, S.ADR(lc.cache), lc.len)
+	ELSE (* invert not implemented *)
+	END;
+	lc.len := 0; GdiFlush
+END FlushCache;
+
+PROCEDURE SetClippingArea* (x, y, w, h: LONGINT); (** flushes line cache if area changes **)
+	VAR rgn: HANDLE; res: LONGINT;
+BEGIN
+	IF (dc.x # x) OR (dc.y # y) OR (dc.w # w) OR (dc.h # h) THEN
+		IF lc.len > 0 THEN FlushCache END;
+		IF w < 0 THEN w := 0 END; IF h < 0 THEN h := 0 END;
+		rgn := CreateRectRgn(x, DispH-y, x+w, DispH-(y+h));
+		res := SelectObject(hdcDisp, rgn);
+		DeleteObject(rgn);
+		dc.x := x; dc.y := y; dc.w := w; dc.h := h;
+	END;
+END SetClippingArea;
+
+PROCEDURE CacheCharacter* (x, y: INTEGER; col: INTEGER; mode: INTEGER);
+BEGIN
+	IF (cc.dx > 0) & (cc.ch # 9X) THEN (* << *)
+		IF lc.len = 0 THEN
+			lc.cache[0] := cc.ch; lc.len := 1; lc.font := cc.font; lc.col := col; lc.mode := mode;
+			lc.x0 := x - cc.x; lc.y0 := y - cc.y; lc.x := lc.x0 + cc.dx;
+		ELSIF  (lc.font # cc.font) OR ((x - cc.x) # lc.x) OR ((y - cc.y) # lc.y0) OR
+				(col # lc.col) OR (mode # lc.mode) OR (lc.len = LineCacheSize)
+		THEN
+			IF lc.len > 0 THEN FlushCache END;
+			lc.cache[0] := cc.ch; lc.len := 1; lc.font := cc.font; lc.col := col; lc.mode := mode;
+			lc.x0 := x - cc.x; lc.y0 := y - cc.y; lc.x := lc.x0 + cc.dx;
+		ELSE (* append *)
+			lc.cache[lc.len] := cc.ch; INC(lc.len); INC(lc.x, cc.dx)
+		END
+	END
+END CacheCharacter;
+
+	(* -------------- raster operatons ------------------ *)
+
+PROCEDURE SyncDisplay*; (** flushes line cache and GDI queue **)
+BEGIN
+	IF lc.len > 0 THEN FlushCache END;
+	GdiFlush;
+END SyncDisplay;
+
+	(* ------------------ Keyboard Input ----------------------- *)
+
+PROCEDURE ^ PollEventQueue;
+
+PROCEDURE Available* (): INTEGER;
+BEGIN
+	SyncDisplay; (*WaitMessage;*)
+	(*IF GetInputState() # 0 THEN*) PollEventQueue (*END*) ;
+	RETURN kbNofChars
+END Available;
+
+PROCEDURE PutChar* (ch: CHAR);
+BEGIN
+	IF (kbNofChars < kbBufSize) THEN kbBuf[kbIn] := ch; kbIn := (kbIn+1) MOD kbBufSize; INC(kbNofChars) END
+END PutChar;
+
+PROCEDURE GetChar* (VAR ch: CHAR);
+BEGIN
+	SyncDisplay; (*WaitMessage;*)
+	WHILE kbNofChars <= 0 DO PollEventQueue END;
+	DEC(kbNofChars); ch := kbBuf[kbOut]; kbOut := (kbOut+1) MOD kbBufSize
+END GetChar;
+
+	(* --------------------- Mouse Input ---------------------- *)
+
+PROCEDURE Mouse* (VAR keys: SET; VAR x, y: INTEGER);
+BEGIN
+	SyncDisplay; PollEventQueue;
+	IF msNofEntries <= 0 THEN keys := msLastKeys; x := msLastX; y := msLastY;
+	ELSE
+		keys := msBuf[msOut].keys; x := msBuf[msOut].x; y := msBuf[msOut].y;
+		msOut := (msOut + 1) MOD msBufSize; DEC(msNofEntries);
+	END;
+	IF kioskmode THEN
+		IF keys # {} THEN keys := {1} END
+	END
+END Mouse;
+
+	(* ------------------ Window Procedure -------------------- *)
+
+	PROCEDURE addAccel(vKey: LONGINT; state: SET; cmd: ARRAY OF CHAR);
+		VAR pAccel, accel: Accel;
+	BEGIN
+		pAccel := NIL; accel := accels;
+		WHILE (accel # NIL) & ~((accel.state = state) & (accel.key = vKey)) DO
+			pAccel := accel; accel := accel.next
+		END;
+		IF cmd = "" THEN
+			IF accel # NIL THEN
+				IF pAccel # NIL THEN
+					pAccel.next := accel.next
+				ELSE
+					accels := accel.next
+				END
+			END
+		ELSE
+			IF accel = NIL THEN
+				NEW(accel); accel.next := accels; accels := accel;
+				accel.key := vKey; accel.state := state
+			END;
+			COPY(cmd, accel.cmd)
+		END
+	END addAccel;
+
+	PROCEDURE AddAccel*(key: CHAR; state: SET; cmd: ARRAY OF CHAR);
+		VAR vKey: LONGINT;
+	BEGIN
+		CASE key OF
+			PageUp: vKey := User32.VKPageUp
+			|PageDown: vKey := User32.VKPageDown
+			|End: vKey := User32.VKEnd
+			|Home: vKey := User32.VKHome
+			|Left: vKey := User32.VKLeft
+			|Up: vKey := User32.VKUp
+			|Right: vKey := User32.VKRight
+			|Down: vKey := User32.VKDown
+			|Insert: vKey := User32.VKInsert
+			|Delete: vKey := User32.VKDelete
+		ELSE
+			vKey := ORD(OberonToWin[ORD(key)])
+		END;
+		addAccel(vKey, state, cmd)
+	END AddAccel;
+
+	PROCEDURE AddFAccel*(F: INTEGER; state: SET; cmd: ARRAY OF CHAR);
+	BEGIN
+		addAccel(70H+F-1, state, cmd)
+	END AddFAccel;
+
+	PROCEDURE KeyState*(VAR keys: SET);
+	BEGIN
+		keys := {};
+		IF User32.GetAsyncKeyState(User32.VKShift) < 0 THEN
+			INCL(keys, SHIFT)
+		END;
+		IF User32.GetAsyncKeyState(User32.VKCtrl) < 0 THEN
+			INCL(keys, CTRL)
+		END;
+		IF User32.GetAsyncKeyState(User32.VKAlt) < 0 THEN
+			INCL(keys, ALT)
+		END
+	END KeyState;
+
+PROCEDURE keyDown (virtCode: LONGINT): BOOLEAN;
+BEGIN RETURN User32.GetKeyState(virtCode) < 0
+END keyDown;
+
+PROCEDURE PollEventQueue;
+	VAR
+		ret, res: LONGINT;
+		pt: User32.Point;
+		msg: User32.Msg;
+		accel: Accel;
+		keys: SET;
+BEGIN
+	res := User32.PeekMessage(S.ADR(msg), Kernel32.NULL, 0, 0, User32.PMRemove);
+	WHILE res # 0 DO
+	IF (msg.msg = User32.WMKeyDown) OR (msg.msg = User32.WMKeyUp) THEN
+		IF msg.msg = User32.WMKeyDown THEN
+			KeyState(keys); accel := accels;
+			WHILE (accel # NIL) & ~((accel.state = keys) & (accel.key = msg.wParam)) DO
+				accel := accel.next
+			END
+		ELSE
+			accel := NIL
+		END;
+		IF accel # NIL THEN
+			COPY(accel.cmd, accelCmd)
+		ELSE
+		IF emulateMM & (msg.wParam = User32.VKCtrl) THEN (* CTRL = MM *)
+			IF (msg.msg = 100H) & (MM IN msLastKeys) THEN (* ignore repetition of CTRL *)
+			ELSE
+				IF msg.msg = 100H THEN
+					IF msLastKeys = {} THEN ret := User32.SetCapture(Display) END;
+					INCL(msLastKeys, MM)
+				ELSE
+					EXCL(msLastKeys, MM);
+					IF msLastKeys = {} THEN ret := User32.ReleaseCapture() END;
+				END;
+				pt := msg.point; ret := User32.ScreenToClient(Display, S.ADR(pt));
+				msLastX := SHORT(pt.x); msLastY := SHORT(DispH - pt.y);
+				IF msNofEntries < msBufSize THEN
+					msBuf[msIn].keys := msLastKeys; msBuf[msIn].x := msLastX; msBuf[msIn].y := msLastY;
+					msIn := (msIn + 1) MOD msBufSize; INC(msNofEntries)
+				END
+			END
+		ELSIF msg.msg = User32.WMKeyDown THEN
+			IF emulateMM & keyDown(User32.VKCtrl) (*CTRL*) THEN
+				(* CTRL key pressed in combination with some other key: insert virtual events to nullify MM *)
+				IF (msLastKeys # {}) & (msNofEntries < msBufSize-2) THEN
+					pt := msg.point; ret := User32.ScreenToClient(Display, S.ADR(pt));
+					msLastX := SHORT(pt.x); msLastY := SHORT(DispH - pt.y);
+					msLastKeys := {ML, MM, MR};
+					msBuf[msIn].keys := {ML, MM, MR}; msBuf[msIn].x := msLastX; msBuf[msIn].y := msLastY;
+					msIn := (msIn + 1) MOD msBufSize; INC(msNofEntries); msLastKeys := {};
+					msBuf[msIn].keys := {}; msBuf[msIn].x := msLastX; msBuf[msIn].y := msLastY;
+					msIn := (msIn + 1) MOD msBufSize; INC(msNofEntries)
+				END
+			END;
+			CASE msg.wParam OF
+				| 13H: (*PAUSE*) 
+					IF keyDown(10H (*SHIFT*)) THEN PutChar(0ADX) (*SHIFT-BREAK*)
+					ELSE PutChar(0ACX) (*BREAK*)
+					END
+				| 70H: (*F1*) PutChar(0A4X) (*SETUP*)
+				| 71H: (*F2*) PutChar(0A5X) (* Neutralise *)	
+				| 72H: (*F3*) PutChar(01BX) (* ESC *)
+				| 73H: (*F4*) PutChar(0A7X)
+				| 74H: (*F5*) PutChar(0F5X)
+				| 75H: (*F6*) PutChar(0F6X)
+				| 76H: (*F7*) PutChar(0F7X)
+				| 77H: (*F8*) kioskmode := ~kioskmode; User32.MessageBeep(-1)
+				| 78H: (*F9*) PutChar(0F9X) (* redraw screen *)
+				| 79H: (*F10*) PutChar(0FAX)
+				| 25H: (*LEFT ARROW*) PutChar(0C4X)
+				| 26H: (*UP ARROW*) PutChar(0C1X)
+				| 27H: (*RIGHT ARROW*) PutChar(0C3X)
+				| 28H: (*DOWN ARROW*) PutChar(0C2X)
+				| 23H: (*END*) PutChar(0A9X); (* << jm *)
+				| 24H: (*HOME*)  PutChar(0A8X); (* << jm *)
+				| 2DH: (*INSERT*) PutChar(0A0X);
+				| 2EH: (*DELETE*) PutChar(0A1X);
+				| 21H: (*PAGE-UP*) PutChar(0A2X);	(* << jm *)
+				| 22H: (*PAGE-DOWN*) PutChar(0A3X)  (* << jm *)
+				| 41H:  IF keyDown(User32.VKCtrl) THEN (* ä, Ä *)
+							IF keyDown(User32.VKShift) THEN PutChar(CHR(128)) ELSE PutChar(CHR(131)) END
+						END
+				| 4FH: IF keyDown(User32.VKCtrl) THEN (* ö, Ö *)
+							IF keyDown(User32.VKShift) THEN PutChar(CHR(129)) ELSE PutChar(CHR(132)) END
+						END
+				| 55H: IF keyDown(User32.VKCtrl) THEN (* ü, Ü *)
+							IF keyDown(User32.VKShift) THEN PutChar(CHR(130)) ELSE PutChar(CHR(133)) END
+						END
+				| 53H: IF keyDown(User32.VKCtrl) THEN (* double s *)
+							PutChar(CHR(150))
+						END;
+			ELSE
+			END
+		END
+		END
+	END;
+	res := User32.TranslateMessage(S.ADR(msg));
+	res := User32.DispatchMessage(S.ADR(msg));
+	res := User32.PeekMessage(S.ADR(msg), Kernel32.NULL, 0, 0, User32.PMRemove);
+	END;
+END PollEventQueue;
+
+PROCEDURE WndProc (window: HWND; msg: LONGINT; uParam, lParam: LONGINT): LONGINT;
+	VAR n, event, res, ret, EBX, ESI, EDI: LONGINT;
+		r: User32.Rect; rgn: LONGINT;
+		mminfo: User32.MinMaxInfo;
+		wndProc: WndProcList;
+BEGIN
+	S.GETREG(3, EBX); S.GETREG(6, ESI); S.GETREG(7, EDI); res := 0;
+	event := Kernel32.HiWord(uParam);
+	CASE msg OF
+	User32.WMGetMinMaxInfo:
+		IF ~ShowTitlebar THEN res := 0;
+			S.MOVE(lParam, S.ADR(mminfo), SIZE(User32.MinMaxInfo));
+			mminfo.maxPos.y := -(TitlebarHeight + FrameWidth);
+			mminfo.maxSize.y := DispH + TitlebarHeight + 2*FrameWidth;
+			mminfo.maxTrack.y := DispH + TitlebarHeight + 2*FrameWidth;
+			S.MOVE(S.ADR(mminfo), lParam, SIZE(User32.MinMaxInfo))
+		END;
+	| User32.WMChar: PutChar(WinToOberon[SHORT(uParam)])
+	| 201H .. 209H: (* all mouse downs and ups *)
+		IF msLastKeys = {} THEN ret := User32.SetCapture(Display) END;
+		msLastKeys := {};
+		IF ODD(uParam) THEN INCL(msLastKeys, ML) END;
+		IF ODD(uParam DIV 10H) THEN INCL(msLastKeys, MM); emulateMM := FALSE END;
+		IF emulateMM & ODD(uParam DIV 8H) THEN INCL(msLastKeys, MM) END;	(* control key down*)
+		IF ODD(uParam DIV 2) THEN INCL(msLastKeys, MR) END;
+		IF msLastKeys = {} THEN ret := User32.ReleaseCapture() END;
+		msLastX := SHORT(Kernel32.LoWord(lParam)); msLastY := SHORT(DispH - Kernel32.HiWord(lParam));
+		IF msNofEntries < msBufSize THEN
+			msBuf[msIn].keys := msLastKeys; msBuf[msIn].x := msLastX; msBuf[msIn].y := msLastY;
+			msIn := (msIn + 1) MOD msBufSize; INC(msNofEntries)
+		END
+	| User32.WMMouseMove:
+		msLastX := SHORT(Kernel32.LoWord(lParam)); msLastY := SHORT(DispH - Kernel32.HiWord(lParam));
+		ret := User32.SetCursor(CurrentCursor)
+	ELSE
+		IF msg = User32.WMQueryNewPalette THEN
+			SelectPalette(hdcDisp, hPalette, 0 (*FALSE*));
+			n := RealizePalette(hdcDisp);
+		ELSE
+			CASE msg OF
+			User32.WMClose: wndProc := wndProcs;
+								WHILE wndProc # NIL DO
+									res := wndProc.wndProc(window, msg, uParam, lParam);
+									wndProc := wndProc.next
+								END;
+								IF verbose THEN C.Str("WMClose: calling DestroyWindow(Display)"); C.Ln() END;
+								ret := User32.DestroyWindow(Display); res := 0
+			|User32.WMPaint:
+				IF UpdateDisplay # NIL THEN
+					rgn := User32.GetUpdateRect(Display, S.ADR(r), 0);
+					rgn := CreateRectRgn(r.left, r.top, r.right, r.bottom);
+					n := SelectObject(hdcDisp, rgn);
+					DeleteObject(rgn);
+					UpdateDisplay;
+					rgn := CreateRectRgn(0, DispH, DispW, 0);
+					n := SelectObject(hdcDisp, rgn);
+					DeleteObject(rgn);
+					dc.x := 0; dc.y := 0; dc.w := DispW; dc.h := DispH;
+				(*ELSE PutChar(FF)*) (* Avoid display flicker: do not insert formfeed at startup *)
+				END;
+				res := User32.ValidateRect(window, Kernel32.NULL);
+				res := 0
+			|User32.WMDestroy: IF verbose THEN C.Str("calling Kernel.Exit(0)"); C.Ln() END;
+												Kernel.Exit(0); res := 0
+			|User32.WMActivate, User32.WMSetFocus, User32.WMKillFocus: defocus := TRUE; res := 0
+			|User32.WMSetCursor:
+				ret := User32.SetCursor(CurrentCursor); res := 0
+			ELSE
+				wndProc := wndProcs;
+				WHILE (wndProc # NIL) & (wndProc.msg # msg) DO
+					wndProc := wndProc.next
+				END;
+				IF wndProc # NIL THEN
+					res := wndProc.wndProc(window, msg, uParam, lParam)
+				ELSE
+					res := User32.DefWindowProc(window, msg, uParam, lParam)
+				END
+			END
+		END
+	END;
+	S.PUTREG(3, EBX); S.PUTREG(6, ESI); S.PUTREG(7, EDI);
+	RETURN res;
+END WndProc;
+
+PROCEDURE RegisterWndProc*(msg: LONGINT; wndProc: User32.WindowProc);
+	VAR wProc: WndProcList;
+BEGIN
+	ASSERT(wndProc # NIL);
+	wProc := wndProcs;
+	WHILE (wProc # NIL) & (wProc.msg # msg) DO
+		wProc := wProc.next
+	END;
+	IF wProc = NIL THEN
+		NEW(wProc); wProc.msg := msg;
+		wProc.next := wndProcs; wndProcs := wProc
+	END;
+	wProc.wndProc := wndProc
+END RegisterWndProc;
+
+PROCEDURE UnRegisterWndProc*(wndProc: User32.WindowProc);
+	VAR pwProc, wProc: WndProcList;
+BEGIN
+	ASSERT(wndProc # NIL);
+	pwProc := NIL; wProc := wndProcs;
+	WHILE wProc # NIL DO
+		IF wProc.wndProc = wndProc THEN
+			IF pwProc # NIL THEN
+				pwProc.next := wProc.next
+			ELSE
+				wndProcs := wProc.next
+			END
+		ELSE
+			pwProc := wProc
+		END;
+		wProc := wProc.next
+	END
+END UnRegisterWndProc;
+
+PROCEDURE InitInstance;
+	VAR
+		wnd: HWND;
+		ret, style: LONGINT;
+		R: User32.Rect;
+BEGIN
+	style := Kernel32.LongOr(User32.WSVisible, User32.WSCaption); style := Kernel32.LongOr(style, User32.WSBorder);
+	style := Kernel32.LongOr(style, User32.WSSysMenu); style := Kernel32.LongOr(style, User32.WSMaximize);
+	style := Kernel32.LongOr(style, User32.WSMinimizeBox); style := Kernel32.LongOr(style, User32.WSMaximizeBox);
+	ShowTitlebar := ShowTitlebar OR (OS.major >= 4); HideMsg;
+	DispH := User32.GetSystemMetrics(User32.SMCYScreen); DispW := User32.GetSystemMetrics(User32.SMCXScreen);
+	TitlebarHeight := User32.GetSystemMetrics(User32.SMCYCaption)-User32.GetSystemMetrics(User32.SMCYBorder);
+	FrameWidth := 0 (*User32.GetSystemMetrics(User32.SMCYBorder)*);
+
+	wnd := User32.CreateWindowEx(0, S.ADR(ApplicationName), S.ADR(Title), style, User32.Default, User32.Default, User32.Default, User32.Default, Kernel32.NULL, Kernel32.NULL, hInstance, Kernel32.NULL);
+	Display := wnd; hdcDisp := User32.GetDC(Display); InitDeviceContext;
+
+	IF OS.major >= 4 THEN
+		ret := User32.GetClientRect(Display, S.ADR(R));
+		DispW := SHORT(R.right - R.left); DispH := SHORT(R.bottom - R.top)
+	ELSIF ShowTitlebar THEN DEC(DispH, TitlebarHeight)
+	END
+END InitInstance;
+
+PROCEDURE InitApplication;
+	VAR
+		wc: User32.WindowClass;
+		name: ARRAY 32 OF CHAR;
+		ret: LONGINT;
+BEGIN
+	wc.style := User32.OwnDC;
+	wc.wndProc := WndProc;
+	wc.clsExtra := 0; wc.wndExtra := 0;
+	wc.instance := hInstance;
+	name := "Oberon";
+	wc.icon := User32.LoadIcon(hInstance, S.ADR(name));
+	wc.cursor := User32.LoadCursor(hInstance, S.ADR(name));
+	wc.bgnd := CreateSolidBrush(PaletteIndex(12));
+	wc.menuName := Kernel32.NULL; wc.className := S.ADR(ApplicationName);
+	ret := User32.RegisterClass(S.ADR(wc));
+	CurrentCursor := wc.cursor
+END InitApplication;
+
+	(* ---------------------- general ------------------------- *)
+
+PROCEDURE Exit*(err: LONGINT);
+BEGIN
+	err := User32.SendMessage(Display, User32.WMClose, err, 0)
+END Exit;
+
+PROCEDURE Terminate;
+BEGIN PatternTermHandler; DeletePaletteAndDC
+END Terminate;
+
+BEGIN
+	mod := Kernel.LoadLibrary("GDI32");
+	Kernel.GetAdr(mod, "CreateSolidBrush", S.VAL(LONGINT, CreateSolidBrush));
+	Kernel.GetAdr(mod, "CreatePen", S.VAL(LONGINT, CreatePen));
+	Kernel.GetAdr(mod, "CreatePatternBrush", S.VAL(LONGINT, CreatePatternBrush));
+	Kernel.GetAdr(mod, "CreateRectRgn", S.VAL(LONGINT, CreateRectRgn));
+	Kernel.GetAdr(mod, "SelectObject", S.VAL(LONGINT, SelectObject));
+	Kernel.GetAdr(mod, "DeleteObject", S.VAL(LONGINT, DeleteObject));
+	Kernel.GetAdr(mod, "CreateBitmap", S.VAL(LONGINT, CreateBitmap));
+	Kernel.GetAdr(mod, "CreateCompatibleBitmap", S.VAL(LONGINT, CreateCompatibleBitmap));
+	Kernel.GetAdr(mod, "CreateCompatibleDC", S.VAL(LONGINT, CreateCompatibleDC));
+	Kernel.GetAdr(mod, "DeleteDC", S.VAL(LONGINT, DeleteDC));
+	Kernel.GetAdr(mod, "SetTextColor", S.VAL(LONGINT, SetTextColor));
+	Kernel.GetAdr(mod, "SetTextAlign", S.VAL(LONGINT, SetTextAlign));
+	Kernel.GetAdr(mod, "SetBkMode", S.VAL(LONGINT, SetBkMode));
+	Kernel.GetAdr(mod, "SetBkColor", S.VAL(LONGINT, SetBkColor));
+	Kernel.GetAdr(mod, "SetBrushOrgEx", S.VAL(LONGINT, SetBrushOrgEx));
+	Kernel.GetAdr(mod, "RealizePalette", S.VAL(LONGINT, RealizePalette));
+	Kernel.GetAdr(mod, "CreatePalette", S.VAL(LONGINT, CreatePalette));
+	Kernel.GetAdr(mod, "SetPaletteEntries", S.VAL(LONGINT, SetPaletteEntries));
+	Kernel.GetAdr(mod, "GetPaletteEntries", S.VAL(LONGINT, GetPaletteEntries));
+	Kernel.GetAdr(mod, "AnimatePalette", S.VAL(LONGINT, AnimatePalette));
+	Kernel.GetAdr(mod, "SelectPalette", S.VAL(LONGINT, SelectPalette));
+	Kernel.GetAdr(mod, "UpdateColors", S.VAL(LONGINT, UpdateColors));
+	Kernel.GetAdr(mod, "TextOutA", S.VAL(LONGINT, TextOut));
+	Kernel.GetAdr(mod, "PatBlt", S.VAL(LONGINT, PatBlt));
+	Kernel.GetAdr(mod, "BitBlt", S.VAL(LONGINT, BitBlt));
+	Kernel.GetAdr(mod, "GdiFlush", S.VAL(LONGINT, GdiFlush));
+	Kernel.GetAdr(mod, "GdiSetBatchLimit", S.VAL(LONGINT, GdiSetBatchLimit));
+	Kernel.GetAdr(mod, "GetStockObject", S.VAL(LONGINT, GetStockObject));
+	Kernel.GetAdr(mod, "GetDeviceCaps", S.VAL(LONGINT, GetDeviceCaps));
+	Kernel.GetAdr(mod, "SetSystemPaletteUse", S.VAL(LONGINT, SetSystemPaletteUse));
+	Kernel.GetAdr(mod, "GetSystemPaletteEntries", S.VAL(LONGINT, GetSystemPaletteEntries));
+
+	mod := Kernel.LoadLibrary("COMDLG32");
+	Kernel.GetAdr(mod, "PrintDlgA", S.VAL(LONGINT, PrintDlg));
+
+	Kernel.GetAdr(0, "hInstance", S.VAL(LONGINT, hInstance));
+	Kernel.GetAdr(0, "hPrevInstance", S.VAL(LONGINT, hPrevInst));
+	Kernel.GetAdr(0, "ShowTitlebar", mod); ShowTitlebar := mod # 0;
+	Kernel.GetAdr(0, "ShowMsg", S.VAL(LONGINT, ShowMsg));
+	Kernel.GetAdr(0, "HideMsg", S.VAL(LONGINT, HideMsg));
+	NumColors := 256; wndProcs := NIL;
+
+	ApplicationName := "Oberon(TM)"; Title := "Oberon System 3";
+	IF hPrevInst = Kernel32.NULL THEN InitApplication END;
+
+	mod := Kernel32.GetVersion();
+	IF mod > 0 THEN OS.platform := 0 ELSE OS.platform := 1 END;
+	OS.major := mod MOD 100H; OS.minor := (mod DIV 100H) MOD 100H;
+	UpdateDisplay := NIL;
+
+	kbNofChars := 0; kbIn := 0; kbOut := 0; (* keyboard buffer initialisation *)
+	msNofEntries := 0; msIn := 0; msOut := 0; (* mouse buffer initialisation *)
+	msLastX := 0; msLastY := 0; msLastKeys := {};
+	emulateMM := TRUE;
+	PatternList := NIL;
+	PD.size := 66; PD.hDevMode := Kernel32.NULL; PD.hDevNames := Kernel32.NULL;
+	hPalette := Kernel32.NULL;
+	InitTranslations; InitInstance;
+
+	Modules.InstallTermHandler(Terminate);
+	mod := GdiSetBatchLimit(255);
+	
+	defocus := FALSE; kioskmode := FALSE;
+	accels := NIL; accelCmd := ""
+END Win32.
+
+(** Remark:
+
+1. Programmers should be discouraged from using this module as it results in highly unportable code.
+
+*)

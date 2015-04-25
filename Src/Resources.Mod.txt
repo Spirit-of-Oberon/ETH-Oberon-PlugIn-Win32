@@ -1,0 +1,635 @@
+﻿(* OBERON System 3, Release 2.2.
+
+Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
+e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon System 3 license contract.
+The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+or requested from the above mentioned address.
+
+Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
+in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE Resources;
+
+(*
+	tk 15.12.95 - Portable ReadReal and ReadLReal
+*)
+
+IMPORT
+	Reals, Registry, Objects, FileDir, Files, Texts, Strings, Gadgets, Crypt, OPS := OOPS, OPM := OOPM, Compiler;
+
+CONST StrLen = 128;
+
+TYPE
+	Resource* = POINTER TO ResourceDesc;
+	ResourceDesc* = RECORD
+		next*: Resource;
+		name*: ARRAY StrLen OF CHAR;
+		version*: LONGINT;
+		F*: Files.File;
+		pos*, len*: LONGINT;
+	END;
+
+	Obj* = POINTER TO ObjDesc;
+	ObjDesc* = RECORD (Gadgets.ObjDesc)
+		res*: Resource;
+		signature*: Crypt.RegisterPtr;
+		key*: Crypt.Key;
+	END;
+
+	CONST
+		BufferSize = 4*1024;
+		WindowSize = 4096;
+		RawLookAheadSize = 16;
+		Unused = 0;
+		IndexBitCount = 12;
+		LengthBitCount = 4;
+		EndOfStream = 0;
+		BreakEven = 1;
+
+	TYPE
+		Node = RECORD
+			parent, smallerChild, largerChild: INTEGER
+		END;
+
+	VAR
+		Buffer: ARRAY BufferSize OF CHAR;
+		BufferPtr, CurBitNr, CurByte: LONGINT;
+		Tree: POINTER TO ARRAY WindowSize+1 OF Node;
+		Window: ARRAY WindowSize+RawLookAheadSize+1 OF CHAR;
+
+	VAR
+		ebuf: ARRAY 1024 OF CHAR;
+		epos, elen: INTEGER;
+		currentPosition: INTEGER;
+		reof, eob: BOOLEAN;
+		Input: Files.Rider;
+
+	(* ------------------ *)
+	CONST
+		(* numTyp *)
+		char = 1;
+		integer = 2;
+		real = 3;
+		longreal = 4;
+		eof = 64; (* <eof> *)
+		ident = 38; (* <ident> *)
+		number = 35; (* <number> *)
+		string = 37; (* <string> *)
+
+	TYPE
+		TNode = POINTER TO TNodeDesc;
+		TNodeDesc = RECORD
+			ident: OPS.Name; 
+		END;
+
+	VAR
+		theref: INTEGER;
+		identtable: POINTER TO ARRAY 2048 OF TNode;
+
+	(* ------------------ *)
+	CONST
+		SectionName = "Resources";
+
+	VAR
+		log*: Texts.Text;
+		outputDir: ARRAY 128 OF CHAR;
+		W: Texts.Writer;
+
+	PROCEDURE InputBit(VAR R: Files.Rider): LONGINT;
+		VAR h: LONGINT;
+	BEGIN
+		IF CurBitNr = 7 THEN
+			IF BufferPtr = BufferSize THEN
+				Files.ReadBytes(R, Buffer, BufferSize);
+				BufferPtr := 0
+			END;
+			CurByte := ORD(Buffer[BufferPtr]);
+			INC(BufferPtr)
+		END;
+		h := ASH(CurByte, -CurBitNr) MOD 2;
+		DEC(CurBitNr);
+		IF CurBitNr < 0 THEN CurBitNr := 7 END;
+		RETURN h
+	END InputBit;
+
+	PROCEDURE InputBits(VAR R: Files.Rider; count: LONGINT): LONGINT;
+		VAR i, h: LONGINT;
+	BEGIN
+		h := 0;
+		i := count-1;
+		WHILE i >= 0 DO
+			IF CurBitNr = 7 THEN
+				IF BufferPtr = BufferSize THEN
+					Files.ReadBytes(R, Buffer, BufferSize);
+					BufferPtr := 0
+				END;
+				CurByte := ORD(Buffer[BufferPtr]);
+				INC(BufferPtr)
+			END;
+			IF ASH(CurByte, -CurBitNr) MOD 2 = 1 THEN
+				h := h+ASH(1, i)
+			END;
+			DEC(CurBitNr);
+			IF CurBitNr < 0 THEN CurBitNr := 7 END;
+			DEC(i)
+		END;
+		RETURN h
+	END InputBits;
+
+	PROCEDURE InitW();
+		VAR i: INTEGER;
+	BEGIN reof := FALSE; eob := FALSE; currentPosition := 1;
+		BufferPtr := BufferSize;
+		CurBitNr := 7;
+		CurByte := 0;
+		epos := 0; elen := 0;
+		
+		i := 0;
+		WHILE i < WindowSize DO
+			Tree[i].parent := Unused;
+			Tree[i].smallerChild := Unused;
+			Tree[i].largerChild := Unused;
+			Window[i] := CHR(0);
+			INC(i)
+		END;
+		Tree[i].parent := Unused;
+		Tree[i].smallerChild := Unused;
+		Tree[i].largerChild := Unused;
+		WHILE i < WindowSize+RawLookAheadSize+1 DO
+			Window[i] := CHR(0);
+			INC(i)
+		END
+	END InitW;
+
+	PROCEDURE Read(VAR ch: CHAR);
+	VAR i, matchLength, matchPosition: INTEGER;
+	BEGIN
+		IF epos < elen THEN ch := ebuf[epos]; INC(epos)
+		ELSIF ~reof THEN
+			elen := 0;
+			WHILE ~reof & (elen < LEN(ebuf) DIV 2) DO
+				IF InputBit(Input) # 0 THEN
+					ch := CHR(InputBits(Input, 8));
+					ebuf[elen] := ch; INC(elen);
+					Window[currentPosition] := ch;
+					IF currentPosition < RawLookAheadSize+1 THEN
+						Window[currentPosition+WindowSize-1] := ch
+					END;
+					currentPosition := (currentPosition+1) MOD (WindowSize-1)
+				ELSE
+					matchPosition := SHORT(InputBits(Input, IndexBitCount));
+					IF matchPosition = EndOfStream THEN reof := TRUE
+					ELSE
+						matchLength := SHORT(InputBits(Input, LengthBitCount));
+						INC(matchLength, BreakEven);
+						i := 0;
+						WHILE i <= matchLength DO
+							ch := Window[matchPosition+i];
+							ebuf[elen] := ch; INC(elen);
+							Window[currentPosition] := ch;
+							IF currentPosition < RawLookAheadSize+1 THEN
+								Window[currentPosition+WindowSize-1] := ch;
+							END;
+							currentPosition := (currentPosition+1) MOD (WindowSize-1);
+							INC(i)
+						END
+					END
+				END
+			END;
+			IF elen > 0 THEN ch := ebuf[0]; epos := 1 ELSE eob := TRUE END
+		ELSE eob := TRUE
+		END
+	END Read;
+	
+	(* --------------------------------------------------------- *)
+
+	PROCEDURE ReadNum(VAR i: LONGINT);
+		VAR n: LONGINT; s: INTEGER; x: CHAR;
+	BEGIN
+		s := 0; n := 0; Read(x);
+		WHILE ORD(x) >= 128 DO
+			INC(n, ASH(ORD(x)-128, s));
+			INC(s, 7);
+			Read(x)
+		END;
+		i := n+ASH(ORD(x) MOD 64 - ORD(x) DIV 64 * 64, s)
+	END ReadNum;
+
+	PROCEDURE ReadReal(VAR x: REAL);
+		VAR l: LONGINT;
+	BEGIN
+		ReadNum(l); x := Reals.Real(l)
+	END ReadReal;
+
+	PROCEDURE ReadLReal(VAR y: LONGREAL);
+		VAR h, l: LONGINT;
+	BEGIN
+		ReadNum(h); ReadNum(l);
+		Reals.IntL(y, h, l)
+	END ReadLReal;
+
+	PROCEDURE ReadString(VAR str: ARRAY OF CHAR);
+	BEGIN
+		OPS.intval := -1;
+		REPEAT
+			INC(OPS.intval); Read(str[OPS.intval])
+		UNTIL str[OPS.intval] = 0X;
+		INC(OPS.intval)
+	END ReadString;
+
+	(* --------------------------------------------------------- *)
+
+	PROCEDURE get(VAR sym: SHORTINT);
+	VAR x: LONGINT; ch: CHAR;
+	BEGIN
+		IF eob THEN sym := eof
+		ELSE
+			ReadNum(x);
+			sym := SHORT(SHORT(x));
+			IF x > eof THEN
+				sym := ident;
+				IF x = theref THEN (* new ident *)
+					ReadString(OPS.name);
+					NEW(identtable[x - eof]); COPY(OPS.name, identtable[x - eof].ident);
+					INC(theref)
+				ELSE (* old ident *)
+					COPY(identtable[x - eof].ident, OPS.name);
+				END
+			ELSIF x = number THEN
+				ReadNum(x); OPS.numtyp := SHORT(x);
+				CASE x OF
+					char: Read(ch); OPS.intval := ORD(ch)
+					|integer: ReadNum(OPS.intval)
+					|real: ReadReal(OPS.realval)
+					|longreal: ReadLReal(OPS.lrlval)
+				END
+			ELSIF x = string THEN
+				ReadString(OPS.str);
+				IF OPS.intval = 2 THEN
+					sym := number;
+					OPS.numtyp := char;
+					OPS.intval := ORD(OPS.str[0])
+				END
+			END;
+		END
+	END get;
+
+	(* ------------------ *)
+PROCEDURE GetExt(name: ARRAY OF CHAR; VAR base, ext: ARRAY OF CHAR);
+VAR i, j, k, l: INTEGER;
+BEGIN 
+	j := -1; i := 0;
+	WHILE (name[i] # 0X) DO
+		base[i] := name[i];
+		IF name[i] = "." THEN j := i END;
+		INC(i)
+	END;
+	ext[0] := 0X;
+	IF j # -1 THEN (* get extension *)
+		base[j] := 0X; k := j + 1; l := 0;
+		WHILE name[k] # 0X DO ext[l] := name[k]; INC(l); INC(k) END;
+		ext[l] := 0X;
+	END;
+END GetExt;
+
+PROCEDURE AppendString(s, ext: ARRAY OF CHAR; VAR res: ARRAY OF CHAR);
+VAR i, j: INTEGER;
+BEGIN COPY(s, res);
+	i := 0; WHILE res[i] # 0X DO INC(i) END;
+	j := 0; WHILE ext[j] # 0X DO res[i] := ext[j]; INC(i); INC(j) END;
+	res[i] := 0X;
+END AppendString;
+
+PROCEDURE CopyData(F: Files.File; pos, len: LONGINT; VAR R: Files.Rider);
+VAR r: Files.Rider; ch: CHAR;
+BEGIN
+	Files.Set(r, F, pos);
+	WHILE len > 0 DO Files.Read(r, ch); Files.Write(R, ch); DEC(len) END
+END CopyData;
+
+PROCEDURE Compile(obj: Obj; r: Resource);
+VAR T: Texts.Text; R: Texts.Reader; error: BOOLEAN; buf: Texts.Buffer;
+	s: ARRAY 64 OF CHAR;
+BEGIN
+	Texts.WriteString(W, " compiling");
+	Files.Set(Input, r.F, r.pos); InitW(); theref := eof + 1;
+	OPS.Get := get;
+	NEW(T); Texts.Open(T, ""); Texts.OpenReader(R, T, 0); (* dummy *)
+	Compiler.Module(R, "sgP", MAX(LONGINT), T, error);
+	IF error THEN
+		NEW(buf); Texts.OpenBuf(buf); Texts.Save(T, 0, T.len, W.buf);
+	ELSE
+		Texts.WriteString(W, " ok");
+		Strings.IntToStr(r.version, s);
+		Registry.Set(SectionName, r.name, s);
+	END;
+	OPS.Get := NIL
+END Compile;
+
+PROCEDURE Unpack(obj: Obj; r: Resource; compressed: BOOLEAN);
+VAR ch: CHAR; i: LONGINT; F: Files.File; R: Files.Rider; name: ARRAY 128 OF CHAR;
+	s: ARRAY 64 OF CHAR;
+BEGIN
+	Texts.WriteString(W, " unpacking ");
+	AppendString(outputDir, r.name, name);
+	F := Files.New(name);
+	IF F # NIL THEN
+		Files.Set(R, F, 0); Files.Set(Input, r.F, r.pos); 
+		IF compressed THEN
+			InitW();
+			Read(ch); i := 0;
+			WHILE ~eob DO
+				Files.Write(R, ch);
+				INC(i);
+				Read(ch)
+			END;
+		ELSE
+			i := 0; WHILE i < r.len DO
+				Files.Read(Input, ch); Files.Write(R, ch);
+				INC(i)
+			END
+		END;
+		Files.Register(F);
+		Texts.WriteInt(W, i, 0); Texts.WriteString(W, " bytes");
+		Strings.IntToStr(r.version, s);
+		Registry.Set(SectionName, r.name, s);
+	ELSE Texts.WriteString(W, " can't-create")
+	END
+END Unpack;
+
+PROCEDURE NewVersion(name: ARRAY OF CHAR; version: LONGINT): BOOLEAN;
+VAR val: ARRAY StrLen OF CHAR; old: LONGINT;
+BEGIN
+	Registry.Get(SectionName, name, val);
+	IF Registry.res = Registry.Done THEN (* entry exists *)
+		Strings.StrToInt(val, old);
+		IF (version > old) THEN Texts.WriteString(W, "  new")
+		ELSE Texts.WriteString(W, " already-avail")
+		END;
+		RETURN version > old
+	ELSE (* no entry exists *)
+		Texts.WriteString(W, "  new");
+		RETURN TRUE
+	END
+END NewVersion;
+
+PROCEDURE Avail(name, base, ext: ARRAY OF CHAR): BOOLEAN;
+VAR s: ARRAY 128 OF CHAR; F: Files.File;
+BEGIN
+	IF ext = "Mod" THEN
+		AppendString(base, ".Obj", s);
+		F := Files.Old(s);
+		IF F = NIL THEN Texts.WriteString(W, " mod-missing") END;
+		RETURN F # NIL
+	ELSE
+		F := Files.Old(name);
+		IF F = NIL THEN Texts.WriteString(W, " file-missing") END;
+		RETURN F # NIL
+	END
+END Avail;
+
+PROCEDURE VerifySignature(obj: Obj): BOOLEAN;
+VAR digest: Crypt.CipherKey; r: Resource; R: Crypt.Keyring; K: Crypt.Key; res, yes, no: INTEGER; C: Crypt.Certificate;
+
+	PROCEDURE Digest(F: Files.File; beg, end: LONGINT);
+	VAR R: Files.Rider; ch: CHAR;
+	BEGIN
+		Files.Set(R, F, beg);
+		WHILE beg < end DO
+			Files.Read(R, ch);
+			Crypt.MD5Write(ch);
+			INC(beg)
+		END;
+	END Digest;
+
+BEGIN
+	ASSERT(obj.key # NIL);
+	ASSERT(obj.signature # NIL);
+	R := Crypt.OpenKeyring("Access.Ring");
+	IF R # NIL THEN
+		Crypt.MD5Init;
+		r := obj.res;
+		WHILE r # NIL DO
+			Crypt.MD5WriteString(r.name);
+			Crypt.MD5WriteLInt(r.version);
+			Digest(r.F, r.pos, r.pos + r.len);
+			r := r.next
+		END;
+		Crypt.MD5Close(digest);
+		
+		Crypt.FindKey(R, obj.key.name, K);
+		
+		IF (K # NIL) & (K.size = obj.key.size) & (K.time = obj.key.time) & (K.date = obj.key.date) & ~K.private THEN
+			Crypt.RSAVerifySignature(K, digest, obj.signature, res);
+			IF res = 0 THEN
+				Texts.WriteString(W, "  Signature ok"); Texts.WriteLn(W);
+				RETURN TRUE
+			ELSE Texts.WriteString(W, "  False signature"); Texts.WriteLn(W)
+			END
+		ELSE (* use public key of signature file *)
+			Crypt.RSAVerifySignature(obj.key, digest, obj.signature, res);
+			IF res = 0 THEN (* ok *)
+				C := obj.key.certificates;
+				IF C = NIL THEN
+					Texts.WriteString(W, "  User key not found/no key certificates"); Texts.WriteLn(W)
+				ELSE
+					Crypt.MD5Init; Crypt.MD5WriteKey(obj.key); Crypt.MD5Close(digest);
+					yes := 0; no := 0;
+					WHILE C # NIL DO
+						Crypt.FindKey(R, C.authority, K);
+						IF K # NIL THEN
+							Crypt.RSAVerifySignature(K, digest, C.signature, res);
+							IF res = 0 THEN INC(yes) ELSE INC(no); END;
+						END;
+						C := C.next
+					END;
+					IF no > 0 THEN
+						Texts.WriteString(W, "  False signature (according to CA)"); Texts.WriteLn(W)
+					ELSIF yes > 0 THEN
+						Texts.WriteString(W, "  Signature ok (according to CA)"); Texts.WriteLn(W);
+						RETURN TRUE
+					END
+				END
+			ELSE
+				Texts.WriteString(W, "  False signature?"); Texts.WriteLn(W)
+			END;
+		END
+	ELSE
+		Texts.WriteString(W, "  Access ring not found"); Texts.WriteLn(W)
+	END;
+	RETURN FALSE
+END VerifySignature;
+
+PROCEDURE Prepare(obj: Obj; dlink: Objects.Object);
+VAR r: Resource; base, ext: ARRAY 64 OF CHAR;
+	old: ARRAY 128 OF CHAR; x: INTEGER;
+BEGIN
+	Texts.WriteString(W, "Resources"); Texts.WriteLn(W);
+
+	(* security *)
+	IF obj.key # NIL THEN
+		Texts.WriteString(W, "  Document signed by ");
+		Texts.Write(W, 22X); Texts.WriteString(W, obj.key.name); Texts.Write(W, 22X); Texts.WriteLn(W);
+		IF ~VerifySignature(obj) THEN
+			Texts.WriteString(W, "  Access denied"); Texts.WriteLn(W);
+			Texts.Append(log, W.buf);
+			RETURN
+		END
+	ELSE
+		Texts.WriteString(W, "  No signature; no files unpacked"); Texts.WriteLn(W);
+		Texts.Append(log, W.buf);
+		RETURN
+	END;
+	
+	(* output path *)
+	COPY(OPM.outputPath, old);
+	Registry.Get(SectionName, "OutputDir", outputDir);
+	IF Registry.res = Registry.Done THEN
+		IF outputDir # "" THEN
+			x := 0; WHILE outputDir[x] # 0X DO INC(x) END;
+			IF (x > 0) & (outputDir[x-1] # FileDir.PathChar) THEN
+				outputDir[x] := FileDir.PathChar; INC(x); outputDir[x] := 0X
+			END
+		ELSE outputDir[0] := 0X
+		END
+	ELSE outputDir[0] := 0X
+	END;
+	COPY(outputDir, OPM.outputPath);
+
+	Texts.WriteString(W, "  Output Directory: ");
+	Texts.Write(W, 22X); Texts.WriteString(W, outputDir); Texts.Write(W, 22X); Texts.WriteLn(W);
+
+	r := obj.res;
+	WHILE r # NIL DO
+		Texts.WriteString(W, "  "); Texts.WriteString(W, r.name);
+		Texts.WriteString(W, " ver="); Texts.WriteInt(W, r.version, 0);
+		Texts.WriteString(W, " pos="); Texts.WriteInt(W, r.pos, 0);
+		Texts.WriteString(W, " len="); Texts.WriteInt(W, r.len, 0);
+		GetExt(r.name, base, ext);
+		IF ~Avail(r.name, base, ext) OR NewVersion(r.name, r.version) THEN
+			GetExt(r.name, base, ext);
+			IF ext = "Mod" THEN Compile(obj, r)
+			ELSIF ext = "Obj" THEN Unpack(obj, r, FALSE)
+			ELSE Unpack(obj, r, TRUE)
+			END
+		END;
+		Texts.WriteLn(W);
+		r := r.next
+	END;
+	COPY(old, OPM.outputPath);
+	Texts.Append(log, W.buf);
+END Prepare;
+
+PROCEDURE Store(obj: Obj; VAR M: Objects.FileMsg);
+VAR r: Resource;
+BEGIN
+	Files.WriteInt(M.R, 8888);
+	Crypt.WriteRegister(M.R, obj.signature);
+	Crypt.WriteKey(M.R, obj.key);
+	r := obj.res;
+	WHILE r # NIL DO
+		Files.WriteString(M.R, r.name);
+		Files.WriteLInt(M.R, r.version);
+		Files.WriteLInt(M.R, Files.Pos(M.R) + 8);
+		Files.WriteLInt(M.R, r.len);
+		CopyData(r.F, r.pos, r.len, M.R);
+		r := r.next
+	END;
+	Files.WriteString(M.R, "")
+END Store;
+
+PROCEDURE Load(obj: Obj; VAR M: Objects.FileMsg);
+VAR lr, r: Resource; s: ARRAY StrLen OF CHAR; x: INTEGER;
+BEGIN
+	Files.ReadInt(M.R, x); ASSERT(x = 8888);
+	Crypt.ReadRegister(M.R, obj.signature);
+	NEW(obj.key); Crypt.ReadKey(M.R, obj.key);
+	Files.ReadString(M.R, s);
+	lr := NIL;
+	WHILE s # "" DO
+		NEW(r); COPY(s, r.name);
+		Files.ReadLInt(M.R, r.version);
+		Files.ReadLInt(M.R, r.pos);
+		Files.ReadLInt(M.R, r.len);
+		r.F := Files.Base(M.R);
+		Files.Set(M.R, r.F, Files.Pos(M.R) + r.len);
+		IF lr = NIL THEN obj.res := r
+		ELSE lr.next := r
+		END;
+		lr := r;
+		Files.ReadString(M.R, s)
+	END
+END Load;
+
+PROCEDURE Handler*(obj: Objects.Object; VAR M: Objects.ObjMsg);
+VAR obj0: Obj;
+BEGIN
+	WITH obj: Obj DO
+		IF M IS Objects.AttrMsg THEN
+			WITH M: Objects.AttrMsg DO
+				IF M.id = Objects.get THEN
+					IF M.name = "Gen" THEN M.class := Objects.String; COPY("Resources.New", M.s); M.res := 0
+					ELSE Gadgets.objecthandle(obj, M)
+					END
+				ELSIF M.id = Objects.set THEN
+					Gadgets.objecthandle(obj, M)
+				ELSIF M.id = Objects.enum THEN
+					 Gadgets.objecthandle(obj, M)
+				END
+			END
+		ELSIF M IS Objects.CopyMsg THEN
+			WITH M: Objects.CopyMsg DO
+				IF M.stamp = obj.stamp THEN M.obj := obj.dlink	(* copy msg arrives again *)
+				ELSE (* first time copy message arrives *)
+					NEW(obj0); obj.stamp := M.stamp; obj.dlink := obj0;
+					obj0.res := obj.res; obj0.key := obj.key; obj0.signature := obj0.signature;
+					obj0.handle := obj.handle; 
+					M.obj := obj0
+				END
+			END
+		ELSIF M IS Objects.FileMsg THEN
+			WITH M: Objects.FileMsg DO
+				IF M.id = Objects.store THEN
+					Store(obj, M);
+					Gadgets.objecthandle(obj, M)
+				ELSIF M.id = Objects.load THEN
+					Load(obj, M);
+					Gadgets.objecthandle(obj, M)
+				END
+			END
+		ELSIF M IS Gadgets.CmdMsg THEN (* executed when the document is opened *)
+			WITH M: Gadgets.CmdMsg DO
+				IF M.cmd = "PREPARE" THEN
+					Prepare(obj, M.dlink)
+				ELSE Gadgets.objecthandle(obj, M)
+				END
+			END
+		ELSE Gadgets.objecthandle(obj, M)
+		END
+	END
+END Handler;
+
+PROCEDURE Init*(obj: Obj);
+BEGIN obj.handle := Handler
+END Init;
+
+PROCEDURE New*;
+VAR obj: Obj;
+BEGIN
+	NEW(obj); Init(obj);  Objects.NewObj := obj;
+END New;
+
+BEGIN Texts.OpenWriter(W); NEW(Tree); NEW(identtable); outputDir := ""; NEW(log); Texts.Open(log, "")
+END Resources.
+
+System.State iOPM
+
+System.Free Linker Resources ~
+
+ASCIITab.Text

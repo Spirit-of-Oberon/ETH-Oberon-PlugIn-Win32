@@ -1,0 +1,785 @@
+﻿(* OBERON System 3, Release 2.2.
+
+Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
+e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon System 3 license contract.
+The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+or requested from the above mentioned address.
+
+Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
+in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE TCP;	(** TCP Connections for Oberon for Windows -- MH 15.4.94 / 1.6.94 / JM 7.3.94 *)
+
+	(* jm 18.2.95 - added one entry cache to HostByName
+		7.3.95 - added TCP ready flag
+	*)
+	
+IMPORT SYSTEM, Registry, Win32, Kernel, Modules, Input;
+
+CONST
+	Done* = 0; NotDone* = 1; Timeout* = 2; LocalPortInUse* = 3;
+	AnyAdr* = 0; AnyPort* = 0;
+
+	ConnTabSize = 64;
+
+	PFInet = 2; SockStream = 1; IPProtoTCP = 6;
+	InvalidSocket = -1; SocketError = -1;
+	ADDRINUSE = 10048; TIMEDOUT = 10060; INTR = 10004;
+	SysNotReady = 10091; VerNotSupported = 10092; EInval = 10022;
+	WMUser = 0400H; WMConnect = WMUser+123;
+	FDRead = 01H; FDWrite = 02H; FDAccept = 08H; FDConnect = 010H; FDClose = 020H;
+	WOULDBLOCK = 10035;
+
+TYPE
+	Connection* = POINTER TO ConnectionDesc;
+	ConnectionDesc* = RECORD
+		id-: LONGINT;
+		winsock, wParam: LONGINT;
+		state-: INTEGER; (* 0: connected, 1: closed, 2: waiting for connect, 3: error *)
+		async*, read*: BOOLEAN
+	END;
+
+	Listener* = POINTER TO ListenerDesc;
+	ListenerDesc = RECORD
+		winsock: LONGINT;
+	END;
+
+	IpAdr* = LONGINT;
+
+	WSAData = RECORD	(* WSADATA *)
+		wVersion, wHighVersion: INTEGER;
+		szDescription: ARRAY 257 OF CHAR;
+		szSystemStatus: ARRAY 129 OF CHAR;
+		iMaxSockets, iMaxUdpDg: INTEGER;
+		filler: LONGINT;
+	END;
+	SockAddr = RECORD	(* struct sockaddr_in *)
+		family: INTEGER;
+		port: INTEGER;
+		internetAddr: LONGINT;
+		zero: ARRAY 8 OF CHAR;
+	END;
+	HookProcedure = PROCEDURE(): LONGINT;
+
+VAR
+	res*: INTEGER;
+	DefaultTimeout: LONGINT;
+	
+	WSAStartup: PROCEDURE (versionRequired: LONGINT; lpWSAData: LONGINT): LONGINT;
+	WSACleanup: PROCEDURE;
+	WSAGetLastError: PROCEDURE (): LONGINT;
+	WSASetBlockingHook: PROCEDURE (proc: HookProcedure): HookProcedure;
+	WSAUnhookBlockingHook: PROCEDURE;
+	WSACancelBlockingCall: PROCEDURE();
+	WSAAsyncSelect: PROCEDURE (socket, hwnd, msg, event: LONGINT): LONGINT;
+	inetaddr: PROCEDURE (str: LONGINT): LONGINT;
+	gethostbyname: PROCEDURE (name: LONGINT): LONGINT;
+	socket: PROCEDURE (af, type, protocol: LONGINT): LONGINT;
+	connect: PROCEDURE (socket, name, namelen: LONGINT): LONGINT;
+	bind: PROCEDURE (socket, name, namelen: LONGINT): LONGINT;
+	listen: PROCEDURE (socket, backlog: LONGINT): LONGINT;
+	accept: PROCEDURE (socket, addr, addrlen: LONGINT): LONGINT;
+	recv: PROCEDURE (socket, bufaddr, buflen, flags: LONGINT): LONGINT;
+	send: PROCEDURE (socket, bufaddr, buflen, flags: LONGINT): LONGINT;
+	ioctlsocket: PROCEDURE (socket, cmd, argptr: LONGINT): LONGINT;
+	select: PROCEDURE (dummy, read, write, except, timeout: LONGINT): LONGINT;
+	closesocket: PROCEDURE (s: LONGINT): LONGINT;
+	htons*: PROCEDURE (x: INTEGER): INTEGER;
+	htonl*: PROCEDURE (x: LONGINT): LONGINT;
+	ntohs*: PROCEDURE (x: INTEGER): INTEGER;
+	ntohl*: PROCEDURE (x: LONGINT): LONGINT;
+	gethostname: PROCEDURE (adr, len: LONGINT): LONGINT;
+	getpeername: PROCEDURE (socket, sockaddr, lenadr: LONGINT): LONGINT;
+	OldHook: HookProcedure;
+	TimeOut: LONGINT;
+
+	ConnTab: ARRAY ConnTabSize OF LONGINT; (* weak pointers to connections *)
+
+	lasthost: ARRAY 64 OF CHAR; lastadr: IpAdr;
+	
+	TCPReady: BOOLEAN;
+	noAvail: LONGINT;
+
+PROCEDURE FreeConnTabEntry(): INTEGER;
+	(* returns i: 0 <= i < ConnTabSize with ConnTab[i] = 0, or -1 *)
+	VAR i: INTEGER;
+BEGIN i := 0;
+	WHILE i < ConnTabSize DO
+		IF ConnTab[i] = 0 THEN RETURN i END;
+		INC(i);
+	END;
+	Kernel.GC; i := 0;
+	WHILE i < ConnTabSize DO
+		IF ConnTab[i] = 0 THEN RETURN i END;
+		INC(i);
+	END;
+	RETURN -1	
+END FreeConnTabEntry;
+
+PROCEDURE ThisConn (id: LONGINT): INTEGER;
+	VAR i: INTEGER; C: Connection;
+BEGIN
+	WHILE i < ConnTabSize DO
+		IF ConnTab[i] # 0 THEN C := SYSTEM.VAL(Connection, ConnTab[i]);
+			IF C.id = id THEN RETURN i END
+		END;
+		INC(i);
+	END;
+	RETURN -1;
+END ThisConn;
+
+PROCEDURE TimeoutHook (): LONGINT;
+	VAR res, EBX, ESI, EDI: LONGINT;
+BEGIN
+	SYSTEM.GETREG(3, EBX); SYSTEM.GETREG(6, ESI); SYSTEM.GETREG(7, EDI);
+	IF Input.Time() > TimeOut THEN WSACancelBlockingCall();
+	ELSIF OldHook # NIL THEN res := OldHook()
+	ELSE res :=  0 (* false *)
+	END;
+	SYSTEM.PUTREG(3, EBX); SYSTEM.PUTREG(6, ESI); SYSTEM.PUTREG(7, EDI);
+	RETURN res;
+END TimeoutHook;
+
+PROCEDURE Close* (L: Listener);
+	VAR x: LONGINT;
+BEGIN
+	IF TCPReady THEN
+		x := closesocket(L.winsock); L.winsock := InvalidSocket
+	ELSE
+		res := NotDone
+	END
+END Close;
+
+PROCEDURE ListenerFinalizer (L: PTR);
+	VAR x: LONGINT;
+BEGIN
+	WITH L: Listener DO x := closesocket(L.winsock); L.winsock := InvalidSocket ELSE END
+END ListenerFinalizer;
+
+PROCEDURE Listen* (L: Listener; lport: INTEGER; radr: IpAdr; rport: INTEGER; VAR res: INTEGER);
+	VAR x: LONGINT; sadr: SockAddr;
+BEGIN
+	IF ~TCPReady THEN res := NotDone; RETURN END;
+	
+	L.winsock := socket(PFInet, SockStream, IPProtoTCP);
+	IF L.winsock = InvalidSocket THEN res := NotDone;
+	ELSE
+		ASSERT(lport # AnyPort);
+		(* assign a local port number *)
+		sadr.family := PFInet; sadr.port := htons(lport); sadr.internetAddr := AnyAdr;
+		x := bind(L.winsock, SYSTEM.ADR(sadr), SIZE(SockAddr));
+		IF x # 0 THEN
+			IF WSAGetLastError() = ADDRINUSE THEN res := LocalPortInUse ELSE res := NotDone END;
+			x := closesocket(L.winsock); RETURN
+		END;
+		x := listen(L.winsock, 5);
+		IF x # 0 THEN x := closesocket(L.winsock); res := NotDone; RETURN END;
+	END;
+	Kernel.RegisterObject(L, ListenerFinalizer, FALSE);
+	res := Done;
+END Listen;
+
+PROCEDURE Requested* (L: Listener): BOOLEAN;
+	TYPE SocketSet = RECORD n: LONGINT; s: ARRAY 64 OF LONGINT END;
+		Timeout = RECORD sec, usec: LONGINT END;
+	VAR set: SocketSet; timeout: Timeout; x: LONGINT;
+BEGIN
+	IF TCPReady THEN
+		timeout.sec := 0; timeout.usec := 0;
+		set.n := 1; set.s[0] := L.winsock;
+		x := select(0, SYSTEM.ADR(set), 0, 0, SYSTEM.ADR(timeout));
+		IF x = SocketError THEN HALT(66)
+		ELSE RETURN x > 0
+		END
+	ELSE
+		res := NotDone; RETURN FALSE
+	END
+END Requested;
+
+	PROCEDURE LowWord(l: LONGINT): INTEGER;
+		VAR i: INTEGER;
+	BEGIN
+		l := l MOD (256*256);
+		SYSTEM.MOVE(SYSTEM.ADR(l), SYSTEM.ADR(i), 2);
+		RETURN i
+	END LowWord;
+
+	PROCEDURE HiWord(l: LONGINT): INTEGER;
+		VAR i: INTEGER;
+	BEGIN
+		l := ASH(l, -16);
+		SYSTEM.MOVE(SYSTEM.ADR(l), SYSTEM.ADR(i), 2);
+		RETURN i
+	END HiWord;
+
+	PROCEDURE *WndProc(hwnd, msg, wParam, lParam: LONGINT): LONGINT;
+		VAR
+			C: Connection;
+			i: LONGINT;
+			err, event: INTEGER;
+	BEGIN
+		IF msg = WMConnect THEN
+			err := HiWord(lParam); event := LowWord(lParam);
+			C := NIL; i := 0;
+			WHILE (i < ConnTabSize) & (C = NIL) DO
+				IF ConnTab[i] # 0 THEN
+					C := SYSTEM.VAL(Connection, ConnTab[i]);
+					IF C.wParam # wParam THEN
+						C := NIL
+					END
+				END;
+				INC(i);
+			END;
+			IF C # NIL THEN
+				CASE event OF
+					FDConnect: IF err = 0 THEN
+											C.state := 0
+										ELSE
+											C.state := 3;
+											i := closesocket(C.winsock); C.winsock := InvalidSocket;
+											i := ThisConn(C.id); IF i >= 0 THEN ConnTab[i] := 0 END
+										END
+					|FDRead: C.read := TRUE
+					|FDClose: C.state := 1
+				ELSE
+				END
+			END
+		END;
+		RETURN 0
+	END WndProc;
+
+PROCEDURE Disconnect* (C: Connection);
+	VAR x: LONGINT; i: INTEGER;
+BEGIN
+	IF TCPReady & (C.winsock # InvalidSocket) THEN
+		IF C.async THEN x := WSAAsyncSelect(C.winsock, Win32.Display, WMConnect, FDClose) END; (* jm *)
+		x := closesocket(C.winsock); C.winsock := InvalidSocket; C.state := 1;
+		i := ThisConn(C.id); ASSERT(i >= 0);
+		ConnTab[i] := 0
+	ELSE
+		res := NotDone
+	END
+END Disconnect;
+
+PROCEDURE ConnectionFinalizer (C: PTR);
+	VAR x: LONGINT; i: INTEGER;
+BEGIN
+	WITH C: Connection DO
+		IF C.winsock # InvalidSocket THEN
+			x := closesocket(C.winsock); C.winsock := InvalidSocket;
+			i := ThisConn(C.id);
+			IF i >= 0 THEN ConnTab[i] := 0 END
+		END
+	ELSE
+	END
+END ConnectionFinalizer;
+
+PROCEDURE Accept* (L: Listener; C: Connection; VAR res: INTEGER);
+	VAR x: LONGINT; i: INTEGER;
+BEGIN
+	IF TCPReady THEN
+		C.winsock := accept(L.winsock, 0, 0);
+		IF C.winsock = SocketError THEN res := NotDone;
+		ELSE i := FreeConnTabEntry();
+			IF i < 0 THEN x := closesocket(C.winsock); C.winsock := InvalidSocket; res := NotDone;
+			ELSE C.id := Input.Time();
+				ConnTab[i] := SYSTEM.VAL(LONGINT, C); Kernel.RegisterObject(C, ConnectionFinalizer, FALSE);
+				res := Done;
+				C.state := 0; C.read := FALSE; C.wParam := C.winsock; C.async := FALSE
+			END
+		END
+	ELSE
+		res := NotDone
+	END
+END Accept;
+
+PROCEDURE Connect* (C: Connection; lport: INTEGER; Adr: IpAdr; rport: INTEGER; timeout: LONGINT; async: BOOLEAN; VAR res: INTEGER);
+	(* timeout = 0 => default timeout *)
+	VAR sadr: SockAddr; x, e: LONGINT; i: INTEGER;
+BEGIN
+	C.async := async; C.state := 3; C.read := FALSE; C.wParam := InvalidSocket;
+	IF ~TCPReady THEN res := NotDone; RETURN END;
+	res := Done;
+	C.winsock := socket(PFInet, SockStream, IPProtoTCP);
+	IF C.winsock = InvalidSocket THEN res := NotDone
+	ELSE
+		IF lport # AnyPort THEN (* assign a local port number *)
+			sadr.family := PFInet; sadr.port := htons(lport); sadr.internetAddr := AnyAdr;
+			x := bind(C.winsock, SYSTEM.ADR(sadr), SIZE(SockAddr));
+			IF x # 0 THEN
+				x := WSAGetLastError();
+				IF x =  ADDRINUSE THEN res := LocalPortInUse ELSE res := NotDone END;
+				x := closesocket(C.winsock); C.winsock := InvalidSocket;
+				RETURN
+			END
+		END;
+		sadr.family := PFInet; sadr.port := htons(rport); sadr.internetAddr := Adr;
+		IF ~C.async THEN
+			IF timeout <= 0 THEN timeout := DefaultTimeout END;
+			TimeOut := Input.Time() + timeout;
+			OldHook := WSASetBlockingHook(TimeoutHook);
+			x := connect(C.winsock, SYSTEM.ADR(sadr), SIZE(SockAddr));
+			IF x # 0 THEN e := WSAGetLastError() END;
+			WSAUnhookBlockingHook;
+			C.state := 0
+		ELSE
+			x := WSAAsyncSelect(C.winsock, Win32.Display, WMConnect, FDConnect+FDClose+FDRead);
+			IF x # 0 THEN
+				e := WSAGetLastError()
+			ELSE
+				x := connect(C.winsock, SYSTEM.ADR(sadr), SIZE(SockAddr));
+				IF x # 0 THEN
+					e := WSAGetLastError()
+				END;
+				IF (x = 0) OR (e = WOULDBLOCK) THEN
+					x := WSAAsyncSelect(C.winsock, Win32.Display, WMConnect, FDConnect+FDClose+FDRead);
+					IF x # 0 THEN
+						e := WSAGetLastError()
+					END;
+					C.state := 2
+				END
+			END
+		END;
+		IF x # 0 THEN
+			IF (e = TIMEDOUT) OR (e = INTR) THEN res := Timeout ELSE res := NotDone END;
+			x := closesocket(C.winsock); C.winsock := InvalidSocket;
+			C.state := 3;
+			RETURN
+		ELSE
+			C.wParam := C.winsock
+		END;
+		i := FreeConnTabEntry();
+		IF i < 0 THEN x := closesocket(C.winsock); C.winsock := InvalidSocket; res := NotDone; RETURN;
+		ELSE C.id := Input.Time(); ConnTab[i] := SYSTEM.VAL(LONGINT, C)
+		END;
+		Kernel.RegisterObject(C, ConnectionFinalizer, FALSE);
+	END
+END Connect;
+
+PROCEDURE HostByName* (hostname: ARRAY OF CHAR; VAR adr: IpAdr; VAR res: INTEGER);
+	(** res Done, NotDone, or Timeout  **)
+	TYPE hostent = POINTER TO RECORD (* struct hostent *)
+			name, aliases: LONGINT;
+			addrtype, length: INTEGER;
+			adr: LONGINT; (*POINTER TO POINTER TO LONGINT*)
+		END;
+	VAR host: hostent; e: LONGINT;
+BEGIN
+	IF ~TCPReady THEN res := NotDone; RETURN END;
+	IF hostname = lasthost THEN adr := lastadr; res := 0
+	ELSE
+		TimeOut := Input.Time() + DefaultTimeout;
+		OldHook := WSASetBlockingHook(TimeoutHook);
+		host := SYSTEM.VAL(hostent, gethostbyname(SYSTEM.ADR(hostname)));
+		IF host # NIL THEN WSAUnhookBlockingHook;
+			SYSTEM.GET(host.adr, adr); SYSTEM.GET(adr, adr); res := Done;
+		ELSE e := WSAGetLastError();
+			WSAUnhookBlockingHook;
+			IF (e = TIMEDOUT) OR (e = INTR) THEN res := Timeout ELSE res := NotDone END;
+			adr := 0;
+		END;
+		COPY(hostname, lasthost); lastadr := adr
+	END
+END HostByName;
+
+PROCEDURE HostByNumber* (number: ARRAY OF CHAR; VAR adr: IpAdr; VAR res: INTEGER);
+BEGIN
+	IF ~TCPReady THEN res := NotDone; RETURN END;
+	adr := inetaddr(SYSTEM.ADR(number));
+	IF adr # 0 THEN res := Done ELSE res := NotDone END;
+END HostByNumber;
+
+PROCEDURE GetHostName*(VAR s: ARRAY OF CHAR; VAR res: INTEGER);
+VAR r: LONGINT;
+BEGIN
+	IF ~TCPReady THEN res := NotDone; RETURN END;
+	r := gethostname(SYSTEM.ADR(s), LEN(s));
+	res := SHORT(r);
+END GetHostName;
+
+PROCEDURE GetPeerName*(C: Connection; VAR adr: IpAdr; VAR port, res: INTEGER);
+VAR saddr: SockAddr; r, len: LONGINT;
+BEGIN
+	IF TCPReady THEN
+		ASSERT(C # NIL); len := SIZE(SockAddr);
+		r := getpeername(C.winsock, SYSTEM.ADR(saddr), SYSTEM.ADR(len));
+		IF r = 0 THEN adr := saddr.internetAddr; port := saddr.port; res := Done; ELSE res := NotDone END
+	ELSE
+		res := NotDone
+	END
+END GetPeerName;
+
+PROCEDURE HostByAddr*(adr: IpAdr; VAR name: ARRAY OF CHAR; res: INTEGER);
+BEGIN res := NotDone
+END HostByAddr;
+
+PROCEDURE ThisConnection* (id: LONGINT): Connection;
+	VAR i: INTEGER;
+BEGIN
+	IF TCPReady THEN
+		i := ThisConn(id);
+		IF i >= 0 THEN RETURN SYSTEM.VAL(Connection, ConnTab[i]) END
+	ELSE
+		res := NotDone
+	END;
+	RETURN NIL
+END ThisConnection;
+
+PROCEDURE Connected* (C: Connection): BOOLEAN;	(* can write to C *)
+	CONST MsgPeek = 2;
+	TYPE SocketSet = RECORD n: LONGINT; s: ARRAY 64 OF LONGINT END;
+		Timeout = RECORD sec, usec: LONGINT END;
+	VAR set: SocketSet; timeout: Timeout; x: LONGINT; ch: CHAR;
+BEGIN
+	IF TCPReady THEN
+		timeout.sec := 0; timeout.usec := 0;
+		set.n := 1; set.s[0] := C.winsock;
+		x := select(0, SYSTEM.ADR(set), 0, 0, SYSTEM.ADR(timeout));
+		IF x = SocketError THEN (* HALT(99) *) RETURN FALSE
+		ELSE
+			IF x = 1 THEN RETURN recv(C.winsock, SYSTEM.ADR(ch), 1, MsgPeek) = 1;
+			ELSE RETURN TRUE
+			END
+		END
+	ELSE
+		res := NotDone; RETURN FALSE
+	END
+END Connected;
+
+PROCEDURE Available* (C: Connection): LONGINT;	(* number of bytes that can be read without blocking *)
+	CONST FIONREAD = 4004667FH;
+	VAR x, avail: LONGINT;
+BEGIN
+	IF TCPReady THEN
+		res := Done;
+		IF C.async THEN
+			INC(noAvail);
+			IF (noAvail MOD 20) = 0 THEN
+				x := Win32.Available()
+			END;
+			IF C.read THEN
+				x := ioctlsocket(C.winsock, FIONREAD, SYSTEM.ADR(avail));
+				RETURN avail
+			ELSE
+				RETURN 0
+			END
+		ELSE
+			x := ioctlsocket(C.winsock, FIONREAD, SYSTEM.ADR(avail));
+			RETURN avail
+		END
+	ELSE
+		res := NotDone; RETURN 0
+	END
+END Available;
+
+PROCEDURE AvailToSend* (C: Connection): LONGINT;
+	TYPE SocketSet = RECORD n: LONGINT; s: ARRAY 64 OF LONGINT END;
+		Timeout = RECORD sec, usec: LONGINT END;
+	VAR set: SocketSet; timeout: Timeout; x: LONGINT;		
+BEGIN
+	IF TCPReady THEN
+		timeout.sec := 0; timeout.usec := 0;
+		set.n := 1; set.s[0] := C.winsock;
+		x := select(0, 0, SYSTEM.ADR(set), 0, SYSTEM.ADR(timeout));
+		IF (x # 1) THEN
+			RETURN 0
+		ELSE
+			RETURN MAX(LONGINT)
+		END
+	ELSE
+		res := NotDone; RETURN 0
+	END
+END AvailToSend;
+
+	(* --------------------- read procedures --------------- *)
+	(* all Read* procedures are blocking, trap if connection is not alive *)
+
+PROCEDURE Read* (C: Connection; VAR x: SYSTEM.BYTE);
+	VAR n: LONGINT;
+BEGIN
+	IF TCPReady THEN
+		C.read := FALSE;
+		n := recv(C.winsock, SYSTEM.ADR(x), 1, 0);
+		IF n < 1 THEN res := NotDone ELSE res := Done END
+	ELSE
+		res := NotDone
+	END
+END Read;
+
+PROCEDURE ReadBytes* (C: Connection; VAR x: ARRAY OF SYSTEM.BYTE; beg, len: LONGINT);
+	(** receive bytes x[beg] .. x[beg+len];  Precodition: (beg >= 0) AND (beg+len <= LEN(x)) **)
+	VAR n: LONGINT;
+BEGIN
+	IF TCPReady THEN
+		C.read := FALSE;
+		ASSERT((beg >= 0) & (LEN(x) >= beg+len));
+		WHILE len > 0 DO
+			n := recv(C.winsock, SYSTEM.ADR(x) + beg, len, 0);
+			IF n < 1 THEN res := NotDone; RETURN END;
+			DEC(len, n); INC(beg, n)
+		END;
+		res := Done
+	ELSE
+		res := NotDone
+	END
+END ReadBytes;
+
+PROCEDURE ReadInt* (C: Connection; VAR x: INTEGER);
+	VAR n: LONGINT; nx: INTEGER;
+BEGIN
+	IF TCPReady THEN
+		C.read := FALSE; n := recv(C.winsock, SYSTEM.ADR(nx), 2, 0);
+		IF n < 1 THEN res := NotDone ELSE res := Done END;
+		x := ntohs(nx)
+	ELSE
+		res := NotDone
+	END
+END  ReadInt;
+
+PROCEDURE ReadLInt* (C: Connection; VAR x: LONGINT);
+	VAR nx, n: LONGINT;
+BEGIN
+	IF TCPReady THEN
+		C.read := FALSE; n := recv(C.winsock, SYSTEM.ADR(nx), 4, 0);
+		IF n < 1 THEN res := NotDone ELSE res := Done END;
+		x := ntohl(nx)
+	ELSE
+		res := NotDone
+	END
+END ReadLInt;
+
+PROCEDURE ReadReal* (C: Connection; VAR r: REAL);
+	VAR n: LONGINT;
+BEGIN
+	IF TCPReady THEN
+		C.read := FALSE; n := recv(C.winsock, SYSTEM.ADR(r), 4, 0);
+		IF n < 1 THEN res := NotDone ELSE res := Done END
+	ELSE
+		res := NotDone
+	END
+END ReadReal;
+
+PROCEDURE ReadLReal* (C: Connection; VAR r: LONGREAL);
+	VAR n: LONGINT;
+BEGIN
+	IF TCPReady THEN
+		C.read := FALSE; n := recv(C.winsock, SYSTEM.ADR(r), 8, 0);
+		IF n < 1 THEN res := NotDone ELSE res := Done END
+	ELSE
+		res := NotDone
+	END
+END ReadLReal;
+
+PROCEDURE ReadSet* (C: Connection; VAR s: SET);
+	VAR n: LONGINT;
+BEGIN
+	IF TCPReady THEN
+		C.read := FALSE; n := recv(C.winsock, SYSTEM.ADR(s), 4, 0);
+		IF n < 1 THEN res := NotDone ELSE res := Done END
+	ELSE
+		res := NotDone
+	END
+END ReadSet;
+
+PROCEDURE ReadString* (C: Connection; VAR s: ARRAY OF CHAR);
+	VAR n: LONGINT; i: INTEGER; ch: CHAR;
+BEGIN
+	IF TCPReady THEN
+		C.read := FALSE; i := 0;
+		REPEAT
+			n := recv(C.winsock, SYSTEM.ADR(ch), 1, 0);
+			IF n < 1 THEN res := NotDone; RETURN END;
+			s[i] := ch; INC(i)
+		UNTIL ch = 0X;
+		res := Done
+	ELSE
+		res := NotDone
+	END
+END ReadString;
+
+PROCEDURE ReadBool* (C: Connection; VAR b: BOOLEAN);
+	VAR n: LONGINT;
+BEGIN
+	IF TCPReady THEN
+		C.read := FALSE; n := recv(C.winsock, SYSTEM.ADR(b), 1, 0);
+		IF n < 1 THEN res := NotDone ELSE res := Done END
+	ELSE
+		res := NotDone
+	END
+END ReadBool;
+
+	(* --------------------- write procedures --------------- *)
+	(* Blocking, no trap if connection is not alive *)
+
+PROCEDURE Write* (C: Connection; x: SYSTEM.BYTE);
+	VAR n: LONGINT;
+BEGIN
+	IF TCPReady THEN
+		n := send(C.winsock, SYSTEM.ADR(x), 1, 0);
+		IF n < 1 THEN res := NotDone ELSE res := Done END
+	ELSE
+		res := NotDone
+	END
+END Write;
+
+PROCEDURE WriteBytes* (C: Connection; VAR x: ARRAY OF SYSTEM.BYTE; beg, len: LONGINT);
+	(** send bytes x[beg] .. x[beg+len];  Precodition: (beg >= 0) AND (beg+len <= LEN(x)) **)
+	VAR n: LONGINT;
+BEGIN
+	IF TCPReady THEN
+		ASSERT((beg >= 0) & (LEN(x) >= beg + len));
+		WHILE len > 0 DO
+			n := send(C.winsock, SYSTEM.ADR(x)+beg, len, 0);
+			IF n < 1 THEN
+				 res := NotDone; RETURN
+			END;
+			DEC(len, n); INC(beg, n)
+		END;
+		res := Done
+	ELSE
+		res := NotDone
+	END
+END WriteBytes;
+
+PROCEDURE WriteInt* (C: Connection; x: INTEGER);
+	VAR nx: INTEGER; n: LONGINT;
+BEGIN
+	IF TCPReady THEN
+		nx := htons(x); n := send(C.winsock, SYSTEM.ADR(nx), 2, 0);
+		IF n < 1 THEN res := NotDone ELSE res := Done END
+	ELSE
+		res := NotDone
+	END
+END WriteInt;
+
+PROCEDURE WriteLInt* (C: Connection; x: LONGINT);
+	VAR nx, n: LONGINT;
+BEGIN
+	IF TCPReady THEN
+		nx := htonl(x); n := send(C.winsock, SYSTEM.ADR(nx), 4, 0);
+		IF n < 1 THEN res := NotDone ELSE res := Done END
+	ELSE
+		res := NotDone
+	END
+END WriteLInt;
+
+PROCEDURE WriteReal* (C: Connection; r: REAL);
+	VAR n: LONGINT;
+BEGIN
+	IF TCPReady THEN
+		n := send(C.winsock, SYSTEM.ADR(r), 4, 0);
+		IF n < 1 THEN res := NotDone ELSE res := Done END
+	ELSE
+		res := NotDone
+	END
+END WriteReal;
+
+PROCEDURE WriteLReal* (C: Connection; r: LONGREAL);
+	VAR n: LONGINT;
+BEGIN
+	IF TCPReady THEN
+		n := send(C.winsock, SYSTEM.ADR(r), 8, 0);
+		IF n < 1 THEN res := NotDone ELSE res := Done END
+	ELSE
+		res := NotDone
+	END
+END WriteLReal;
+
+PROCEDURE WriteSet* (C: Connection; s: SET);
+	VAR n: LONGINT;
+BEGIN
+	IF TCPReady THEN
+		n := send(C.winsock, SYSTEM.ADR(s), 4, 0);
+		IF n < 1 THEN res := NotDone ELSE res := Done END
+	ELSE
+		res := NotDone
+	END
+END WriteSet;
+
+PROCEDURE WriteString* (C: Connection; s: ARRAY OF CHAR);
+	VAR n, len: LONGINT;
+BEGIN
+	IF TCPReady THEN
+		len := 0; WHILE s[len] # 0X DO INC(len) END;
+		n := send(C.winsock, SYSTEM.ADR(s), len+1, 0);
+		IF n < 1 THEN res := NotDone ELSE res := Done END
+	ELSE
+		res := NotDone
+	END
+END WriteString;
+
+PROCEDURE WriteBool* (C: Connection; b: BOOLEAN);
+	VAR n: LONGINT;
+BEGIN
+	IF TCPReady THEN
+		n := send(C.winsock, SYSTEM.ADR(b), 1, 0);
+		IF n < 1 THEN res := NotDone ELSE res := Done END
+	ELSE
+		res := NotDone
+	END
+END WriteBool;
+
+	(* ----------- initialization and finalization ------------- *)
+
+PROCEDURE Terminate;
+BEGIN WSACleanup();
+	Win32.UnRegisterWndProc(WndProc)
+END Terminate;
+
+PROCEDURE Init;
+	VAR mod, res: LONGINT; data: WSAData; i: INTEGER;
+	s: ARRAY 64 OF CHAR;
+BEGIN
+	TCPReady := FALSE;
+	mod := Kernel.LoadLibrary("WSOCK32");
+	IF mod # 0 THEN
+		Kernel.GetAdr(mod, "WSAStartup", SYSTEM.VAL(LONGINT, WSAStartup));
+		Kernel.GetAdr(mod, "WSACleanup", SYSTEM.VAL(LONGINT, WSACleanup));
+		Kernel.GetAdr(mod, "WSAGetLastError", SYSTEM.VAL(LONGINT, WSAGetLastError));
+		Kernel.GetAdr(mod, "WSASetBlockingHook", SYSTEM.VAL(LONGINT, WSASetBlockingHook));
+		Kernel.GetAdr(mod, "WSAUnhookBlockingHook", SYSTEM.VAL(LONGINT, WSAUnhookBlockingHook));
+		Kernel.GetAdr(mod, "WSACancelBlockingCall", SYSTEM.VAL(LONGINT, WSACancelBlockingCall));
+		Kernel.GetAdr(mod, "WSAAsyncSelect", SYSTEM.VAL(LONGINT, WSAAsyncSelect));
+		Kernel.GetAdr(mod, "inet_addr", SYSTEM.VAL(LONGINT, inetaddr));
+		Kernel.GetAdr(mod, "gethostbyname", SYSTEM.VAL(LONGINT, gethostbyname));
+		Kernel.GetAdr(mod, "socket", SYSTEM.VAL(LONGINT, socket));
+		Kernel.GetAdr(mod, "connect", SYSTEM.VAL(LONGINT, connect));
+		Kernel.GetAdr(mod, "bind", SYSTEM.VAL(LONGINT, bind));
+		Kernel.GetAdr(mod, "listen", SYSTEM.VAL(LONGINT, listen));
+		Kernel.GetAdr(mod, "accept", SYSTEM.VAL(LONGINT, accept));
+		Kernel.GetAdr(mod, "select", SYSTEM.VAL(LONGINT, select));
+		Kernel.GetAdr(mod, "recv", SYSTEM.VAL(LONGINT, recv));
+		Kernel.GetAdr(mod, "send", SYSTEM.VAL(LONGINT, send));
+		Kernel.GetAdr(mod, "ioctlsocket", SYSTEM.VAL(LONGINT, ioctlsocket));
+		Kernel.GetAdr(mod, "closesocket", SYSTEM.VAL(LONGINT, closesocket));
+		Kernel.GetAdr(mod, "htons", SYSTEM.VAL(LONGINT, htons));
+		Kernel.GetAdr(mod, "htonl", SYSTEM.VAL(LONGINT, htonl));
+		Kernel.GetAdr(mod, "ntohs", SYSTEM.VAL(LONGINT, ntohs));
+		Kernel.GetAdr(mod, "ntohl", SYSTEM.VAL(LONGINT, ntohl));
+		Kernel.GetAdr(mod, "gethostname", SYSTEM.VAL(LONGINT, gethostname));
+		Kernel.GetAdr(mod, "getpeername", SYSTEM.VAL(LONGINT, getpeername));
+
+		IF WSAStartup # NIL THEN
+			res := WSAStartup(101H, SYSTEM.ADR(data));
+			IF res = 0 THEN
+				Modules.InstallTermHandler(Terminate);
+				TCPReady := TRUE
+			END;
+			FOR i := 0 TO ConnTabSize - 1 DO ConnTab[i] := 0 END
+		END
+	END
+END Init;
+
+BEGIN
+	Init(); noAvail := 0;
+	IF TCPReady THEN
+		Win32.RegisterWndProc(WMConnect, WndProc)
+	END;
+	DefaultTimeout := 5 * Input.TimeUnit; (* 5 sec *)
+END TCP.

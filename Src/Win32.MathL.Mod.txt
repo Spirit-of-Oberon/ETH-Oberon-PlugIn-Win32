@@ -1,0 +1,68 @@
+﻿(* OBERON System 3, Release 2.2.
+
+Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
+e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon System 3 license contract.
+The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+or requested from the above mentioned address.
+
+Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
+in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE MathL;	(* MH 30.8.93; uses C library calls *)
+
+(**Commonly needed Math for LONGREALs.
+*)
+
+IMPORT S := SYSTEM, Kernel;
+
+CONST
+	e* = 2.7182818284590452354D0;
+	pi* = 3.14159265358979323846D0;
+
+VAR
+	sqrt0: PROCEDURE (x: LONGREAL): LONGREAL;
+	exp0: PROCEDURE (x: LONGREAL): LONGREAL;
+	ln0: PROCEDURE (x: LONGREAL): LONGREAL;
+	sin0: PROCEDURE (x: LONGREAL): LONGREAL;
+	cos0: PROCEDURE (x: LONGREAL): LONGREAL;
+	arctan0: PROCEDURE (x: LONGREAL): LONGREAL;
+
+PROCEDURE sqrt* (x: LONGREAL): LONGREAL;
+BEGIN RETURN sqrt0(x)
+END sqrt;
+
+PROCEDURE exp* (x: LONGREAL): LONGREAL;
+BEGIN RETURN exp0(x)
+END exp;
+
+PROCEDURE ln* (x: LONGREAL): LONGREAL;
+BEGIN RETURN ln0(x)
+END ln;
+
+PROCEDURE sin* (x: LONGREAL): LONGREAL;
+BEGIN RETURN sin0(x)
+END sin;
+
+PROCEDURE cos* (x: LONGREAL): LONGREAL;
+BEGIN RETURN cos0(x)
+END cos;
+
+PROCEDURE arctan* (x: LONGREAL): LONGREAL;
+BEGIN RETURN arctan0(x)
+END arctan;
+
+
+BEGIN
+	Kernel.GetAdr(0, "sqrt", S.VAL(LONGINT, sqrt0));
+	Kernel.GetAdr(0, "exp", S.VAL(LONGINT, exp0));
+	Kernel.GetAdr(0, "ln", S.VAL(LONGINT, ln0));
+	Kernel.GetAdr(0, "sin", S.VAL(LONGINT, sin0));
+	Kernel.GetAdr(0, "cos", S.VAL(LONGINT, cos0));
+	Kernel.GetAdr(0, "arctan", S.VAL(LONGINT, arctan0));
+END MathL.

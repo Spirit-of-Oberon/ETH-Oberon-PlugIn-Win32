@@ -1,0 +1,373 @@
+﻿(* OBERON System 3, Release 2.2.
+
+Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
+e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon System 3 license contract.
+The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+or requested from the above mentioned address.
+
+Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
+in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE Installer; (* ejz,  *)
+	IMPORT Registry, FileDir, Files, Strings, Texts, Oberon, Compress, Display3, Documents, Desktops, OOPM, Compiler, Watson;
+
+	CONST
+		Default* = "Install.Script";
+		Temp = "Installer.Temp";
+		NoPaths = 7;
+		CurPath = NoPaths-1;
+
+	VAR
+		W: Texts.Writer;
+		paths: ARRAY NoPaths OF RECORD name: ARRAY 32 OF CHAR;
+				path: FileDir.FileName
+			END;
+
+	PROCEDURE GetText(arc, name: ARRAY OF CHAR): Texts.Text;
+		VAR
+			F: Files.File;
+			R: Files.Rider;
+			T: Texts.Text;
+			len: LONGINT;
+			res: INTEGER;
+			ch: CHAR;
+	BEGIN
+		F := Files.New(""); Files.Set(R, F, 0);
+		Compress.ExtractFile(arc, name, R, res);
+		IF res = Compress.Done THEN
+			NEW(T); Texts.Open(T, "");
+			Files.Set(R, F, 0); Files.Read(R, ch);
+			WHILE ~R.eof & (ch # Texts.TextBlockId) DO
+				Files.Read(R, ch)
+			END;
+			IF ch = Texts.TextBlockId THEN
+				Texts.Load(T, F, Files.Pos(R), len);
+				RETURN T
+			END
+		END;
+		RETURN NIL
+	END GetText;
+
+	PROCEDURE NextLine(T: Texts.Text; pos: LONGINT): LONGINT;
+		VAR
+			R: Texts.Reader;
+			ch: CHAR;
+	BEGIN
+		IF pos < T.len THEN 
+			Texts.OpenReader(R, T, pos); Texts.Read(R, ch);
+			WHILE ~R.eot & (ch # Strings.CR) DO Texts.Read(R, ch) END;
+			IF ~R.eot THEN
+				RETURN Texts.Pos(R)
+			END
+		END;
+		RETURN -1
+	END NextLine;
+
+	PROCEDURE install*(archive, script: ARRAY OF CHAR);
+		VAR
+			S: Texts.Scanner;
+			F: Files.File;
+			R: Files.Rider;
+			Script, T: Texts.Text;
+			r: Texts.Reader;
+			arc, arg1, arg2, out, temp: FileDir.FileName;
+			D: Documents.Document;
+			cmd: ARRAY 32 OF CHAR;
+			beg, len, i: LONGINT;
+			res: INTEGER;
+			col: SHORTINT;
+			done: BOOLEAN;
+	BEGIN
+		FileDir.GetWorkingDirectory(paths[CurPath].path); COPY(OOPM.outputPath, out);
+		F := Files.Old(archive);
+		IF F # NIL THEN
+			Files.GetName(F, arc)
+		ELSE
+			COPY(archive, arc)
+		END;
+		Texts.WriteString(W, arc);
+		COPY(paths[CurPath].path, temp); Strings.AppendCh(temp, FileDir.PathChar);
+		Strings.Append(temp, Temp);
+		Script := GetText(arc, script);
+		IF Script # NIL THEN
+			Texts.WriteString(W, " installing"); Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf);
+			Texts.OpenScanner(S, Script, 0);
+			Texts.Scan(S); done := TRUE;
+			WHILE done & (S.class = Texts.Name) DO
+				Strings.Upper(S.s, cmd);
+				Texts.Scan(S); done := FALSE; res := 0;
+				IF (cmd = "DEST") & (S.class IN {Texts.Name, Texts.String}) THEN
+					Texts.WriteString(W, "change directory to ");
+					Strings.Upper(S.s, cmd);
+					i := 0;
+					WHILE (i < NoPaths) & (paths[i].name # cmd) DO
+						INC(i)
+					END;
+					IF i < NoPaths THEN
+						COPY(paths[i].path, arg1)
+					ELSE
+						COPY(S.s, arg1)
+					END;
+					Texts.WriteString(W, arg1);
+					FileDir.ChangeDirectory(arg1, done);
+					Texts.Scan(S)
+				ELSIF (cmd = "COPY") & (S.class IN {Texts.Name, Texts.String}) THEN
+					Texts.WriteString(W, "copy file ");
+					COPY(S.s, arg1); COPY(arg1, arg2);
+					Texts.Scan(S); res := 0;
+					IF (S.class = Texts.Char) & (S.c = "=") THEN
+						Texts.Scan(S); res := 1;
+						IF (S.class = Texts.Char) & (S.c = ">") THEN
+							Texts.Scan(S);
+							IF S.class IN {Texts.Name, Texts.String} THEN
+								COPY(S.s, arg2); Texts.Scan(S); res := 0
+							END
+						END
+					END;
+					IF res = 0 THEN
+						Texts.WriteString(W, arg1); Texts.WriteString(W, " => "); Texts.WriteString(W, arg2);
+						F := Files.Old(arg2);
+						IF F # NIL THEN
+							COPY(arg2, temp); Strings.Append(temp, ".Bak");
+							Texts.WriteString(W, " ("); Texts.WriteString(W, temp); Texts.Write(W, ")");
+							Files.Rename(arg2, temp, res)
+						END;
+						F := Files.New(arg2);
+						IF F # NIL THEN
+							Files.Register(F); Files.Set(R, F, 0);
+							Compress.ExtractFile(arc, arg1, R, res);
+							Files.Close(F); done := res = Compress.Done
+						END
+					END
+				ELSIF (cmd = "SHOW") & (S.class IN {Texts.Name, Texts.String}) THEN
+					Texts.WriteString(W, "show "); Texts.WriteString(W, S.s);
+					COPY(temp, arg1); Strings.AppendCh(arg1, ".");
+					Strings.GetSuffix(S.s, arg2); Strings.Append(arg1, arg2);
+					F := Files.New(arg1); Files.Register(F); Files.Set(R, F, 0);
+					Compress.ExtractFile(arc, S.s, R, res);
+					IF res = Compress.Done THEN
+						D := Documents.Open(arg1);
+						IF (D # NIL) & (D.dsc # NIL) THEN
+							COPY(S.s, D.name);
+							Desktops.ShowDoc(D);
+							done := TRUE
+						END
+					END;
+					Texts.Scan(S)
+				ELSIF (cmd = "CALL") & (S.class IN {Texts.Name, Texts.String}) THEN
+					Texts.WriteString(W, "call "); Texts.WriteString(W, S.s);
+					i := Texts.Pos(S) - 1; 
+					Oberon.Par.text := Script; Oberon.Par.pos := i;
+					Oberon.Call(S.s, Oberon.Par, FALSE, res);
+					i := NextLine(Script, i);
+					IF i > 0 THEN
+						Texts.OpenScanner(S, Script, i); Texts.Scan(S)
+					ELSE
+						S.class :=Texts.Inval
+					END;
+					done := res = 0
+				ELSIF (cmd = "MSG") & (S.class IN {Texts.Name, Texts.String}) THEN
+					col := W.col; Texts.SetColor(W, SHORT(Display3.red));
+					Texts.WriteString(W, S.s);
+					Texts.SetColor(W, col); Texts.Scan(S);
+					res := MAX(INTEGER); done := TRUE
+				ELSIF cmd = "COMPILE" THEN
+					Texts.WriteString(W, "compiling ");
+					FileDir.GetWorkingDirectory(OOPM.outputPath);
+					IF (S.class = Texts.Char) & (S.c = Oberon.OptionChar) THEN
+						Texts.Scan(S); COPY(S.s, arg1); Texts.Scan(S)
+					ELSE
+						arg1 := ""
+					END;
+					IF S.class IN {Texts.Name, Texts.String} THEN
+						Texts.WriteString(W, S.s); Texts.Append(Oberon.Log, W.buf);
+						T := GetText(arc, S.s); Texts.Scan(S);
+						IF T # NIL THEN
+							Texts.OpenReader(r, T, 0);
+							Compiler.Module(r, arg1, 0, Oberon.Log, done);
+							done := ~done
+						END
+					END
+				ELSIF (cmd = "DEF") & (S.class IN {Texts.Name, Texts.String}) THEN
+					Texts.WriteString(W, "make def "); Texts.WriteString(W, S.s);
+					COPY(temp, arg1); Strings.AppendCh(arg1, ".");
+					Strings.GetSuffix(S.s, arg2); Strings.Append(arg1, arg2);
+					F := Files.New(arg1); Files.Register(F); Files.Set(R, F, 0);
+					Compress.ExtractFile(arc, S.s, R, res);
+					IF res = Compress.Done THEN
+						IF arg2 # "Def" THEN
+							Texts.Append(Oberon.Log, W.buf);
+							NEW(T); Texts.Open(T, "");
+							Watson.MakeDef(arg1, T);
+							Files.Delete(arg1, res); res := -1;
+							IF T.len > 0 THEN
+								COPY(S.s, arg1); Strings.ChangeSuffix(arg1, "Def");
+								F := Files.New(""); Files.Set(R, F, 0);
+								Texts.Store(T, F, 0, len); res := 0
+							END
+						ELSE
+							COPY(S.s, arg1); Files.Set(R, F, 0); res := 0
+						END;
+						IF res = 0 THEN
+							F := Files.Old("Definitions.Arc");
+							IF F # NIL THEN
+								Files.GetName(F, arg2)
+							ELSE
+								arg2 := "Definitions.Arc"
+							END;
+							Compress.DeleteFile(arg2, arg1, res);
+							Compress.AddFile(arg2, arg1, R, Files.Length(F), res);
+							done := res = Compress.Done
+						END
+					END;
+					Texts.Scan(S)
+				ELSIF (cmd = "SET") & (S.class IN {Texts.Name, Texts.String}) THEN
+					Texts.WriteString(W, "set ");
+					i := 0;
+					WHILE (S.s[i] # 0X) & (S.s[i] # ".") DO
+						INC(i)
+					END;
+					IF S.s[i] = "." THEN
+						S.s[i] := 0X; COPY(S.s, arg1);
+						Texts.WriteString(W, arg1);
+						beg := 0; INC(i);
+						WHILE S.s[i] # 0X DO
+							arg2[beg] := S.s[i]; INC(beg); INC(i)
+						END;
+						arg2[beg] := 0X;
+						Texts.Write(W, "."); Texts.WriteString(W, arg2);
+						Texts.Scan(S);
+						IF (S.class = Texts.Char) & (S.c =":") THEN
+							Texts.Scan(S);
+							IF (S.class = Texts.Char) & (S.c ="=") THEN
+								Texts.Scan(S);
+								IF S.class IN {Texts.Name, Texts.String} THEN
+									Texts.WriteString(W, " := ");
+									Registry.Set(arg1, arg2, S.s);
+									Texts.WriteString(W, S.s);
+									done := Registry.res = Registry.Done;
+									Texts.Scan(S)
+								END
+							END
+						END
+					END
+				ELSE
+					Texts.WriteString(W, cmd); cmd := ""; Texts.WriteString(W, " unknown command")
+				END;
+				IF cmd # "" THEN
+					IF res < MAX(INTEGER) THEN
+						IF done THEN
+							Texts.WriteString(W, " ok")
+						ELSE
+							Texts.WriteString(W, " failed")
+						END
+					END				
+				END;
+				Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
+			END;
+			Texts.WriteString(W, arc);
+			IF ~done THEN
+				Texts.WriteString(W, " installation failed")
+			ELSE
+				Texts.WriteString(W, " installed")
+			END;
+			COPY(out, OOPM.outputPath); FileDir.ChangeDirectory(paths[CurPath].path, done);
+			ASSERT(done)
+		ELSE
+			Texts.WriteString(W, " not an valid package")
+		END;
+		Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
+	END install;
+
+(** Installer.Install Archive [ Script ] ~ *)
+	PROCEDURE Install*;
+		VAR
+			S: Texts.Scanner;
+			T: Texts.Text;
+			arc: FileDir.FileName;
+			beg, end, time: LONGINT;
+	BEGIN
+		Texts.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos); Texts.Scan(S);
+		IF (S.class = Texts.Char) & (S.c = "^") THEN
+			T := NIL; time := -1;
+			Oberon.GetSelection(T, beg, end, time);
+			IF (T # NIL) & (time > 0) THEN
+				Texts.OpenScanner(S, T, beg); Texts.Scan(S)
+			END
+		END;
+		IF S.class IN {Texts.Name, Texts.String} THEN
+			COPY(S.s, arc); Texts.Scan(S);
+			IF S.class IN {Texts.Name, Texts.String} THEN
+				install(arc, S.s)
+			ELSE
+				install(arc, Default)
+			END
+		END
+	END Install;
+
+	PROCEDURE *PathEnumerator(path: ARRAY OF CHAR);
+		VAR
+			i, j: LONGINT;
+			name: FileDir.FileName;
+	BEGIN
+		i := 0; j := -1;
+		WHILE path[i] # 0X DO
+			IF path[i] = FileDir.PathChar THEN
+				j := i
+			END;
+			INC(i)
+		END;
+		INC(j); i := 0;
+		WHILE path[j] # 0X DO
+			name[i] := Strings.UpperCh(path[j]);
+			INC(i); INC(j)
+		END;
+		name[i] := 0X;
+		i := 0;
+		WHILE (i < NoPaths) & (paths[i].name # name) DO
+			INC(i)
+		END;
+		IF (i < NoPaths) & (paths[i].path = "") THEN
+			COPY(path, paths[i].path)
+		END
+	END PathEnumerator;
+
+	PROCEDURE Init();
+		VAR i: LONGINT;
+	BEGIN
+		paths[0].name := "SYSTEM";
+		paths[1].name := "OBJ";
+		paths[2].name := "SRC";
+		paths[3].name := "APPS";
+		paths[4].name := "DOCU";
+		paths[5].name := "RESOURCE";
+		paths[CurPath].name := "CUR";
+		FOR i := 0 TO NoPaths-1 DO
+			Registry.Get("Installer", paths[i].name, paths[i].path);
+			IF Registry.res # Registry.Done THEN
+				COPY("", paths[i].path)
+			END
+		END;
+		FileDir.EnumerateSearchPaths(PathEnumerator)
+	END Init;
+
+BEGIN
+	Texts.OpenWriter(W);
+	Init()
+END Installer.
+
+commands
+- COMPILE: compile
+- COPY: copy files (with rename =>)
+- DEST: set dir to work, apps, docu, obj, src
+- SHOW: display document
+- MSG: display a msg in the log
+- DEF: add a definition
+- SET: set a registry entry
+- CALL: call a command

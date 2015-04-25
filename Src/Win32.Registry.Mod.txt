@@ -1,0 +1,171 @@
+﻿(* OBERON System 3, Release 2.2.
+
+Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
+e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon System 3 license contract.
+The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+or requested from the above mentioned address.
+
+Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
+in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE Registry; (* MH 27.1.93 *)
+
+(**The registry provides a consistent interface for programs to store configuration data. The data is organized in a two-level hierarchy. The first level is called "section", the second level is called "key". The registry serves to associate a value with a (section, key) pair. The Registry is mostly of use to modules low in the module hierarchy, and its extensive use is discouraged.
+	The registry data is kept in the file "oberon.ini". The registry file can be edited directly with a ASCII text editor. The module System exports commands (Set and Get) to influence the registry directly from Oberon. The registry file has the format:
+
+	[section]
+	Key1=Value1;
+	Key2=Value;
+	
+	[Section2]
+	Key1=Value;
+	...
+	
+*)
+
+(*
+	22.2.96 ejz - settable SystemInfo section
+*)
+
+	IMPORT S := SYSTEM, Kernel, Kernel32;
+
+	CONST
+		Done* = 0; RegistryNotFound* = 1; NotFound* = 2;
+
+	TYPE
+		EntryHandler* = PROCEDURE (key, value: ARRAY OF CHAR);
+		SysSect = POINTER TO SysSectDesc;
+		SysSectDesc = RECORD
+			key: ARRAY 32 OF CHAR;
+			value: ARRAY 64 OF CHAR;
+			next: SysSect
+		END;
+
+	VAR
+		Inifile: ARRAY 128 OF CHAR;
+		sysSects: SysSect;
+		res-: INTEGER;
+
+	(** Associates a value with a (section, key) pair. *)
+	PROCEDURE Set*(section, key, value: ARRAY OF CHAR);
+		VAR val: LONGINT; psys, sys: SysSect;
+	BEGIN
+		res := Done;
+		IF section = "SystemInfo" THEN
+			psys := NIL; sys := sysSects;
+			WHILE (sys # NIL) & (sys.key # key) DO
+				psys := sys; sys := sys.next
+			END;
+			IF sys = NIL THEN
+				NEW(sys); COPY(key, sys.key);
+				IF psys # NIL THEN
+					sys.next := psys.next; psys.next := sys
+				ELSE
+					sys.next := NIL; sysSects := sys
+				END
+			END;
+			COPY(value, sys.value)
+		ELSIF Inifile # "" THEN
+			IF value = "" THEN val := Kernel32.NULL ELSE val := S.ADR(value) END;
+			IF Kernel32.WritePrivProfileString(S.ADR(section), S.ADR(key), val, S.ADR(Inifile)) = Kernel32.False THEN
+				res := NotFound
+			END
+		ELSE
+			res := RegistryNotFound
+		END
+	END Set;
+
+	(** Retrieves the value associated to a (section, key) pair. *)
+	PROCEDURE Get*(section, key: ARRAY OF CHAR; VAR value: ARRAY OF CHAR);
+		VAR
+			sys: SysSect;
+			r, len: LONGINT;
+			default: ARRAY 8 OF CHAR;
+	BEGIN
+		res := Done;
+		IF section = "SystemInfo" THEN
+			IF key = "OS" THEN COPY("Windows", value)
+			ELSIF key = "Processor" THEN COPY("Intel", value)
+			ELSE
+				sys := sysSects;
+				WHILE (sys # NIL) & (sys.key # key) DO
+					sys := sys.next
+				END;
+				IF sys # NIL THEN
+					COPY(sys.value, value)
+				ELSE		
+					COPY("", value); res := RegistryNotFound
+				END
+			END
+		ELSIF Inifile # "" THEN
+			len := LEN(value); default := "@#$%";
+			r := Kernel32.GetPrivProfileString(S.ADR(section), S.ADR(key), S.ADR(default), S.ADR(value), len, S.ADR(Inifile));
+			IF value = default THEN res := NotFound END
+		ELSE
+			res := RegistryNotFound
+		END
+	END Get;
+
+	(** Enumerates all keys and their values in a section. *)
+	PROCEDURE Enumerate* (section: ARRAY OF CHAR; handler: EntryHandler);
+		CONST
+			bufLen = 1024;
+		VAR
+			buf: ARRAY bufLen OF CHAR; default: ARRAY 8 OF CHAR;
+			key, value: ARRAY 64 OF CHAR;
+			r: LONGINT;
+			sys: SysSect;
+			i, j: INTEGER;
+	BEGIN
+		res := Done; default := "@#$%";
+		IF section = "SystemInfo" THEN
+			sys := sysSects;
+			WHILE sys # NIL DO
+				handler(sys.key, sys.value); sys := sys.next
+			END
+		ELSIF Inifile # "" THEN
+			r := Kernel32.GetPrivProfileString(S.ADR(section), Kernel32.NULL, S.ADR(default), S.ADR(buf), bufLen, S.ADR(Inifile));
+			IF buf # default THEN i := 0;
+				WHILE buf[i] # 0X DO j := 0;
+					WHILE buf[i] # 0X DO key[j] := buf[i]; INC(i); INC(j) END;
+					key[j] := 0X; INC(i);
+					Get(section, key, value);
+					IF res = Done THEN handler(key, value) END;
+				END
+			ELSE res := NotFound
+			END
+		ELSE
+			res := RegistryNotFound
+		END
+	END Enumerate;
+
+	PROCEDURE Init();
+		VAR InifilePtr: POINTER TO RECORD name: ARRAY 128 OF CHAR END;
+	BEGIN
+		Kernel.GetAdr(0, "Inifile", S.VAL(LONGINT, InifilePtr)); COPY(InifilePtr.name, Inifile);
+		sysSects := NIL; res := Done;
+		Set("SystemInfo", "OS", "Windows");
+		Set("SystemInfo", "Processor", "Intel")
+	END Init;
+
+BEGIN
+	Init()
+END Registry.
+
+(**
+Remarks:
+
+1. A "hidden" section called [SystemInfo] returns the following details depending on the host operating system:
+
+	Key	Value on Windows	Value on MacOS
+	------------------------------------------------------------
+	OS	Windows	MacOS
+	Processor	Intel	MC680x0 or PowerPC
+
+*)

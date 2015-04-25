@@ -1,0 +1,141 @@
+﻿(* OBERON System 3, Release 2.2.
+
+Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
+e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon System 3 license contract.
+The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+or requested from the above mentioned address.
+
+Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
+in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE cAP; (* jm 13.3.95 *)
+
+IMPORT Kernel32;
+
+CONST NameLen = 32; StackSize = 128;
+	
+TYPE
+	Proc* = RECORD
+		name*: ARRAY NameLen OF CHAR;
+		nocalls*: LONGINT;
+		time*: LONGINT;
+	END;
+	
+	Module* = POINTER TO ModuleDesc;
+	ModuleDesc* = RECORD
+		next*: Module;
+		name*: ARRAY NameLen OF CHAR;
+		noprocs*: INTEGER;
+		p*: POINTER TO ARRAY OF Proc;
+	END;
+	
+	Stack* = POINTER TO StackDesc;
+	StackDesc* = RECORD
+		next*: Stack;
+		mod*: ARRAY StackSize OF Module;
+		proc*: ARRAY StackSize OF INTEGER;
+	END;
+	Timer = ARRAY 2 OF LONGINT;
+	
+VAR
+	mods*: Module;
+	stack*, stackgc: Stack;
+	stackcount*: INTEGER;
+	
+	curmod: Module; curproc: INTEGER;
+	timer: Timer;
+
+PROCEDURE Push(mod: Module; proc: INTEGER);
+VAR s: Stack;
+BEGIN
+	INC(stackcount);
+	IF stackcount MOD StackSize = 0 THEN (* full *)
+		IF stackgc # NIL THEN s := stackgc; stackgc := stackgc.next ELSE NEW(s) END;
+		s.next := stack; stack := s
+	END;
+	stack.mod[stackcount] := mod; stack.proc[stackcount] := proc
+END Push;
+
+PROCEDURE Pop(VAR mod: Module; VAR proc: INTEGER);
+VAR s: Stack;
+BEGIN
+	IF stackcount >= 0 THEN
+		s := stack;
+		mod := s.mod[stackcount MOD StackSize]; proc := s.proc[stackcount MOD StackSize];
+		IF stackcount MOD StackSize = 0 THEN	(* finished this one *)
+			stack := stack.next;
+			s.next := stackgc; stackgc := s;
+		END;
+		DEC(stackcount)
+	ELSE mod := NIL
+	END
+END Pop;
+
+PROCEDURE Start;
+VAR r: LONGINT;
+BEGIN
+	r := Kernel32.QueryPerformanceCounter(timer[0]);
+END Start;
+
+PROCEDURE Stop(VAR elapsed: LONGINT);
+VAR t: Timer; r: LONGINT;
+BEGIN
+	r := Kernel32.QueryPerformanceCounter(t[0]);
+	IF t[1] = timer[1] THEN (* no wrap around *)
+		elapsed := t[0] - timer[0]
+	ELSE (* wrap around *)
+		elapsed := MAX(LONGINT) - timer[0] + t[0]
+	END;
+END Stop;
+
+PROCEDURE B*(m: Module; proc: INTEGER);
+VAR elapsed: LONGINT;
+BEGIN
+	Stop(elapsed);
+	IF curmod # NIL THEN
+		Push(curmod, curproc);
+		INC(curmod.p[curproc].time, elapsed)
+	END;
+	curmod := m; curproc := proc;
+	INC(m.p[proc].nocalls);
+	Start;
+END B;
+
+PROCEDURE E*(m: Module; proc: INTEGER);
+VAR elapsed: LONGINT;
+BEGIN
+	Stop(elapsed);
+	ASSERT(curmod # NIL, 100);
+	INC(curmod.p[curproc].time, elapsed);
+	Pop(curmod, curproc);
+	Start;
+END E;
+
+PROCEDURE Mod*(VAR m: Module; name: ARRAY OF CHAR; noprocs: INTEGER);
+BEGIN
+	m := mods;
+	WHILE (m # NIL) & (m.name # name) DO m := m.next END;
+	IF m = NIL THEN
+		NEW(m);
+		m.next := mods; mods := m
+	END;
+	COPY(name, m.name);
+	m.noprocs := noprocs;
+	NEW(m.p, noprocs);
+END Mod;
+
+PROCEDURE R*(m: Module; procno: INTEGER; name: ARRAY OF CHAR);
+BEGIN
+	COPY(name, m.p[procno].name);
+	m.p[procno].nocalls := 0
+END R;
+
+BEGIN
+	curmod := NIL; curproc := 0; stackcount := -1
+END cAP.

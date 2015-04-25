@@ -1,0 +1,170 @@
+﻿(* OBERON System 3, Release 2.2.
+
+Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
+e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon System 3 license contract.
+The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+or requested from the above mentioned address.
+
+Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
+in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE Console;
+
+(**Routines to write debug output to the console. These routines are quite low-level and are typically used by modules of the Oberon core for debugging. 
+*)
+
+IMPORT SYSTEM, Kernel, Kernel32, Registry;
+
+	VAR
+		OutputString*: PROCEDURE (VAR str: ARRAY OF CHAR); (** Method used to write text to the Console. *)
+		console: LONGINT;
+		file: BOOLEAN;
+
+	PROCEDURE IntToStr*(i: LONGINT; VAR s: ARRAY OF CHAR);
+		VAR k, j, x0: LONGINT; a: ARRAY 10 OF CHAR;
+	BEGIN k := 0;
+	 IF i < 0 THEN
+	      IF i = MIN(LONGINT) THEN COPY(" -2147483648", s); RETURN
+	      ELSE x0 := -i
+	      END
+	    ELSE x0 := i
+	    END;	
+	    REPEAT
+	      a[k] := CHR(x0 MOD 10 + 30H); x0 := x0 DIV 10; INC(k)
+	    UNTIL x0 = 0;
+	    j := 0;
+	    IF i < 0 THEN s[j] := "-"; INC(j); END;
+	    REPEAT DEC(k); s[j] := a[k]; INC(j); UNTIL k = 0;
+	    s[j] := 0X;
+	END IntToStr;
+
+	PROCEDURE Str*(s: ARRAY OF CHAR);
+	BEGIN
+		IF OutputString # NIL THEN
+			OutputString(s)
+		END
+	END Str;
+
+	PROCEDURE Ln*;
+		VAR
+			s: ARRAY 4 OF CHAR;
+			ret: LONGINT;
+	BEGIN
+		IF OutputString # NIL THEN
+			s[0] := 0AX; s[1] := 0X;
+			OutputString(s);
+			IF file THEN
+				ret := Kernel32.FlushFileBuffers(console)
+			END
+		END
+	END Ln;
+
+	PROCEDURE Ch*(ch: CHAR);
+		VAR s: ARRAY 4 OF CHAR;
+	BEGIN
+		IF OutputString # NIL THEN
+			s[0] := ch; s[1] := 0X; OutputString(s)
+		END
+	END Ch;
+
+	PROCEDURE Int*(x: LONGINT);
+		VAR s: ARRAY 32 OF CHAR;
+	BEGIN
+		IF OutputString # NIL THEN
+			IntToStr(x, s); OutputString(s)
+		END
+	END Int;
+
+	PROCEDURE Hex*(x: LONGINT);
+		VAR
+			i, y: LONGINT;
+			a: ARRAY 16 OF CHAR;
+	BEGIN
+		a[8] := 0X; i := 7;
+	    REPEAT y := x MOD 10H;
+	      IF y < 10 THEN a[i] := CHR(y + 30H) ELSE a[i] := CHR(y + 37H) END;
+	      x := x DIV 10H; DEC(i)
+	    UNTIL i < 0;
+		Str(a)
+	END Hex;
+
+	PROCEDURE *OutputDebString(VAR str: ARRAY OF CHAR);
+	BEGIN
+		Kernel32.OutputDebugString(SYSTEM.ADR(str))
+	END OutputDebString;
+
+	PROCEDURE *OutputFileString(VAR str: ARRAY OF CHAR);
+		VAR n, ret: LONGINT;
+	BEGIN
+		n := 0;
+		WHILE str[n] # 0X DO
+			INC(n)
+		END;
+		ret := Kernel32.WriteFile(console, SYSTEM.ADR(str), n, n, Kernel32.NULL)
+	END OutputFileString;
+
+	PROCEDURE Init;
+		VAR
+			res: ARRAY 64 OF CHAR;
+			ret, i: LONGINT;
+			rect: Kernel32.SmallRect;
+	BEGIN
+		OutputString := NIL;
+		Registry.Get("System", "Console", res);
+		IF Registry.res # Registry.Done THEN
+			Registry.Get("System", "Debug", res)
+		END;
+		IF Registry.res = Registry.Done THEN
+			IF (CAP(res[0]) = "Y") OR (CAP(res[0]) = "D") THEN (* debugger *)
+				OutputString := OutputDebString
+			ELSIF (CAP(res[0]) = "W") OR (CAP(res[0]) = "C") THEN (* console window *)
+				res := "Oberon System 3 - Console";
+				ret := Kernel32.AllocConsole();
+				ret := Kernel32.SetConsoleTitle(SYSTEM.ADR(res));
+				console := Kernel32.GetStdHandle(Kernel32.STDOutput);
+				ret := Kernel32.SetConsoleScreenBufferSize(console, Kernel32.MakeLong(80, 1024));
+				rect.top := 0; rect. left := 0; rect.bottom := 24; rect.right := 79;
+				ret := Kernel32.SetConsoleWindowInfo(console, -1, SYSTEM.ADR(rect));
+				OutputString := OutputFileString; file := FALSE
+			ELSIF CAP(res[0]) = "F" THEN (* log file *)
+				res := "Oberon.Log";
+				console := Kernel32.CreateFile(SYSTEM.ADR(res), Kernel32.GenericWrite, Kernel32.FileShareRead, Kernel32.NULL, Kernel32.CreateAlways, Kernel32.FileAttributeNormal, Kernel32.NULL);
+				i := 1;
+				WHILE (i <= 9) & (console = Kernel32.InvalidHandleValue) DO
+					res[10] := CHR(i+ORD("0")); res[11] := 0X; 
+					console := Kernel32.CreateFile(SYSTEM.ADR(res), Kernel32.GenericWrite, Kernel32.FileShareRead, Kernel32.NULL, Kernel32.CreateAlways, Kernel32.FileAttributeNormal, Kernel32.NULL);
+					INC(i)
+				END;
+				IF console # Kernel32.InvalidHandleValue THEN
+					OutputString := OutputFileString; file := TRUE
+				ELSE
+					OutputString := OutputDebString
+				END
+			END;
+			Str("Console.Init"); Ln();
+			Str("Kernel.modules "); Hex(SYSTEM.ADR(Kernel.modules)); Ln()
+		END
+	END Init;
+
+BEGIN
+	Init()
+END Console.
+
+(**
+Remark:
+
+This module requires Console to be set in the System section of the Registry before output will be written.
+
+1. Console=Debug
+	The console is the AUX port when running Microsoft Windows (implemented with the Windows 
+	system call OutputDebugString).
+
+2. Console=Console
+	The console ouput is written to a console window.
+*)

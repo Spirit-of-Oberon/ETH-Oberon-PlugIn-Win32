@@ -1,0 +1,775 @@
+﻿(* OBERON System 3, Release 2.2.
+
+Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
+e-mail: oberon@inf.ethz.ch.
+
+This module may be used under the conditions of the general Oberon System 3 license contract.
+The full text can be downloaded from
+
+	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+
+or requested from the above mentioned address.
+
+Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
+in any way that disagrees with style or content of the system and (b) requested to provide all conversions
+of the source code to another platform with the name OBERON. *)
+
+MODULE DOSBackup; (* jm 4.1.95, ejz 8.6.95 *)
+
+(*
+	I do not accept any responsibility for backups lost using this backup utility.
+	You are using this at your own risk.
+	jm
+*)
+(* changes:
+	- fixed namemapping; i was not initialized
+	- "deleting" statt "deleteing"
+	- added checking if diskette space is available. Note that should the file already
+	exist on the diskette, it is deleted first before the size on the diskette
+	is requested. In this case you might lose the old file (but you already have a new
+	one, so it should not matter!)
+	2.5.95 - added support for files not in the translation table
+		- dropped support for V4 and switched to text gadgets
+	8.6.95 - added compress feature (ejz)
+	13.12.95 - added SetPath (ejz)
+	22.2.96 - made portable between Windows 3.1 /Windows 95
+	11.6.96 - show prefixed files in directory (eos)
+*)
+
+IMPORT SYSTEM, Registry, Kernel32, Files, Texts, Display, Documents, TextGadgets, TextDocs, Desktops, Oberon, FileDir;
+	
+CONST
+	MapFile = "TRANS.TBL";
+	CompressTag = 022FFH;
+	Bits = 14;
+	MaxCode = 16383;
+	TableSize = 19661;
+	EndOfStream = 256;
+	BumpCode = 257;
+	FlushCode = 258;
+	FirstCode = 259;
+	Unused = -1;
+	BufferSize = 4*1024;
+
+TYPE
+	Map = POINTER TO MapDesc;
+	MapDesc = RECORD
+		next: Map;
+		oberon: ARRAY 64 OF CHAR;
+		dos: ARRAY 13 OF CHAR;
+		orphan: BOOLEAN;
+	END;
+	
+VAR
+	(*drive: ARRAY 5 OF CHAR;*)
+	path: ARRAY 256 OF CHAR;
+	W: Texts.Writer;
+	tmpMap: Map;
+	Dict: POINTER TO ARRAY TableSize OF RECORD
+		codeValue, parentCode: INTEGER;
+		character: CHAR
+	END;
+	DecodeStack: POINTER TO ARRAY TableSize OF CHAR;
+	nextCode, currentCodeBits, nextBumpCode: INTEGER;
+	Buffer: ARRAY BufferSize OF CHAR;
+	BufferPtr, CurBitNr: LONGINT;
+	CurByte: LONGINT;
+	HFP: CHAR;
+
+(* LZW14V Compression *)
+	PROCEDURE FlushBits(VAR R: Files.Rider);
+	BEGIN
+		IF CurBitNr # 7 THEN
+			Buffer[BufferPtr] := CHR(CurByte);
+			INC(BufferPtr)
+		END;
+		IF BufferPtr > 0 THEN
+			Files.WriteBytes(R, Buffer, BufferPtr)
+		END
+	END FlushBits;
+
+	PROCEDURE InputBits(VAR R: Files.Rider; count: INTEGER): INTEGER;
+		VAR i, h: INTEGER;
+	BEGIN
+		h := 0;
+		i := count-1;
+		WHILE i >= 0 DO
+			IF CurBitNr = 7 THEN
+				IF BufferPtr = BufferSize THEN
+					Files.ReadBytes(R, Buffer, BufferSize);
+					IF (R.eof) & (R.res >= BufferSize) THEN
+						RETURN EndOfStream
+					END;
+					BufferPtr := 0
+				END;
+				CurByte := ORD(Buffer[BufferPtr]);
+				INC(BufferPtr)
+			END;
+			IF ASH(CurByte, -CurBitNr) MOD 2 = 1 THEN
+				h := h+SHORT(ASH(1, i))
+			END;
+			DEC(CurBitNr);
+			IF CurBitNr < 0 THEN CurBitNr := 7 END;
+			DEC(i)
+		END;
+		RETURN h
+	END InputBits;
+
+	PROCEDURE OutputBits(VAR R: Files.Rider; bits, count: INTEGER);
+		VAR i, h: INTEGER;
+	BEGIN
+		h := bits;
+		i := count-1;
+		WHILE i >= 0 DO
+			IF ASH(h, -i) MOD 2 = 1 THEN
+				CurByte := CurByte+ASH(1, CurBitNr)
+			END;
+			DEC(CurBitNr);
+			IF CurBitNr < 0 THEN
+				Buffer[BufferPtr] := CHR(CurByte);
+				INC(BufferPtr);
+				IF BufferPtr = BufferSize THEN
+					Files.WriteBytes(R, Buffer, BufferSize);
+					BufferPtr := 0
+				END;
+				CurBitNr := 7;
+				CurByte := 0
+			END;
+			DEC(i)
+		END
+	END OutputBits;
+
+	PROCEDURE InitializeDictionary();
+		VAR i: INTEGER;
+	BEGIN
+		FOR i := 0 TO TableSize-1 DO
+			Dict[i].codeValue := Unused
+		END;
+		nextCode := FirstCode;
+		currentCodeBits := 9;
+		nextBumpCode := 511
+	END InitializeDictionary;
+
+	PROCEDURE FindChildNode(ParentCode, ChildCharacter: INTEGER): INTEGER;
+		VAR
+			index, offset: INTEGER;
+			a, b: SET;
+	BEGIN
+		a := SYSTEM.VAL(SET, SYSTEM.LSH(ChildCharacter, Bits-8));
+		b := SYSTEM.VAL(SET, ParentCode);
+		index := SYSTEM.VAL(INTEGER, (a+b)-(a*b));
+		IF index = 0 THEN
+			offset := 1
+		ELSE
+			offset := TableSize - index
+		END;
+		LOOP
+			IF Dict[index].codeValue = Unused THEN
+				RETURN index
+			END;
+			IF (Dict[index].parentCode = ParentCode) & (Dict[index].character = CHR(ChildCharacter)) THEN
+				RETURN index
+			END;
+			IF index >= offset THEN
+				DEC(index, offset)
+			ELSE
+				INC(index, TableSize-offset)
+			END
+		END
+	END FindChildNode;
+
+	PROCEDURE DecodeString(count, code: INTEGER): INTEGER;
+	BEGIN
+		WHILE code > 256 DO
+			DecodeStack[count] := Dict[code].character;
+			INC(count);
+			code := Dict[code].parentCode
+		END;
+		DecodeStack[count] := CHR(code);
+		INC(count);
+		RETURN count
+	END DecodeString;
+
+	PROCEDURE Compress(VAR Input, Output: Files.Rider);
+		VAR
+			character, stringCode, index: INTEGER;
+			ch: CHAR;
+	BEGIN
+		BufferPtr := 0;
+		CurBitNr := 7;
+		CurByte := 0;
+		InitializeDictionary();
+		Files.Read(Input, ch);
+		IF Input.eof THEN
+			stringCode := EndOfStream
+		ELSE
+			stringCode := ORD(ch)
+		END;
+		Files.Read(Input, ch);
+		WHILE ~Input.eof DO
+			character := ORD(ch);
+			index := FindChildNode(stringCode, character);
+			IF Dict[index].codeValue # -1 THEN
+				stringCode := Dict[index].codeValue
+			ELSE
+				Dict[index].codeValue := nextCode;
+				INC(nextCode);
+				Dict[index].parentCode := stringCode;
+				Dict[index].character := ch;
+				OutputBits(Output, stringCode, currentCodeBits);
+				stringCode := character;
+				IF nextCode > MaxCode THEN
+					OutputBits(Output, FlushCode, currentCodeBits);
+					InitializeDictionary
+				ELSIF nextCode > nextBumpCode THEN
+					OutputBits(Output, BumpCode, currentCodeBits);
+					INC(currentCodeBits);
+					nextBumpCode := SHORT(ASH(nextBumpCode, 1));
+					IF ~ODD(nextBumpCode) THEN
+						INC(nextBumpCode)
+					END
+				ELSE
+				END
+			END;
+			Files.Read(Input, ch)
+		END;
+		OutputBits(Output, stringCode, currentCodeBits);
+		OutputBits(Output, EndOfStream, currentCodeBits);
+		FlushBits(Output)
+	END Compress;
+
+	PROCEDURE Expand(VAR Input, Output: Files.Rider);
+		VAR newCode, oldCode, character, count: INTEGER;
+	BEGIN
+		BufferPtr := BufferSize;
+		CurBitNr := 7;
+		CurByte := 0;
+		LOOP
+			InitializeDictionary();
+			oldCode := InputBits(Input, currentCodeBits);
+			IF oldCode = EndOfStream THEN
+				RETURN
+			END;
+			character := oldCode;
+			Files.Write(Output, CHR(oldCode));
+			LOOP
+				newCode := InputBits(Input, currentCodeBits);
+				IF newCode = EndOfStream THEN
+					RETURN
+				END;
+				IF newCode = FlushCode THEN
+					EXIT
+				END;
+				IF newCode = BumpCode THEN
+					INC(currentCodeBits)
+				ELSE
+					IF newCode >= nextCode THEN
+						DecodeStack[0] := CHR(character);
+						count := DecodeString(1, oldCode)
+					ELSE
+						count := DecodeString(0, newCode)
+					END;
+					character := ORD(DecodeStack[count-1]);
+					WHILE count > 0 DO
+						DEC(count);
+						Files.Write(Output, DecodeStack[count])
+					END;
+					Dict[nextCode].parentCode := oldCode;
+					Dict[nextCode].character := CHR(character);
+					INC(nextCode);
+					oldCode := newCode
+				END
+			END
+		END
+	END Expand;
+
+(* Copied from Oberon for Windows V4, mh *)
+
+PROCEDURE Cap (ch: CHAR): CHAR;
+BEGIN
+	IF ("a" <= ch) & (ch <= "z") THEN RETURN CAP(ch) ELSE RETURN ch END;
+END Cap;
+
+PROCEDURE MapName(VAR name, hostname: ARRAY OF CHAR);
+	VAR i, j, k, dot: INTEGER;
+BEGIN
+	(* search for the last dot in oberon file name *)
+	dot := 0; i := 0;
+	WHILE name[i] # 0X DO
+		IF name[i] = "." THEN dot := i END;
+		INC(i)
+	END;
+	IF dot = 0 THEN dot := i END;
+	(* copy at most eight 'non-dot' characters, until last dot in oberon name *)
+	i := 0; j := 0;
+	WHILE (j < 8) & (i < dot) DO
+		IF name[i] # "." THEN hostname[j] := Cap(name[i]); INC(j) END;
+		INC(i)
+	END;
+	(* copy at most three characters after last dot in oberon name *)
+	IF name[dot] # 0X THEN
+		hostname[j] := "."; INC(j);
+		i := dot+1; k := 0;
+		WHILE (k < 3) & (name[i] # 0X) DO
+			IF name[i] # "." THEN hostname[j] := Cap(name[i]); INC(j); INC(k) END;
+			INC(i)
+		END;
+	END;
+	hostname[j] := 0X;
+END MapName;
+
+PROCEDURE NextMapping (this: ARRAY OF CHAR; VAR next: ARRAY OF CHAR);
+	VAR i: INTEGER; ch: CHAR;
+BEGIN i := 0;
+	COPY(this, next);
+	WHILE next[i] # 0X DO INC(i) END;
+	WHILE i > 0 DO DEC(i);
+		ch := Cap(next[i]);
+		IF ("A" <= ch) & (ch < "Z") OR ("0" <= ch) & ( ch < "9") THEN
+			next[i] := CHR(ORD(next[i])+1);
+			RETURN
+		END
+	END;
+	HALT(99); (* no next hash value possible *)
+END NextMapping;
+	
+(* end of mh code *)
+
+PROCEDURE Available(size: LONGINT): BOOLEAN;
+VAR
+	ret, SectorsPerCluster, BytesPerSector, FreeClusters, Clusters, reqClusters: LONGINT;
+	drv: ARRAY 5 OF CHAR;
+BEGIN
+	COPY(path, drv); drv[3] := 0X;
+	ret := Kernel32.GetDiskFreeSpace(SYSTEM.ADR(drv), SectorsPerCluster, BytesPerSector, FreeClusters, Clusters);
+	IF ret # Kernel32.False THEN
+		reqClusters := size DIV (SectorsPerCluster*BytesPerSector);
+		IF (size MOD (SectorsPerCluster*BytesPerSector)) # 0 THEN
+			INC(reqClusters)
+		END;
+		RETURN reqClusters <= FreeClusters
+	ELSE HALT(99)
+	END;
+	RETURN FALSE
+END Available;
+
+PROCEDURE AddDrive(VAR pathf: ARRAY OF CHAR; filename: ARRAY OF CHAR);
+VAR i, j: INTEGER;
+BEGIN COPY(path, pathf);
+	i := 0; 
+	j := 0; WHILE pathf[j] # 0X DO INC(j) END;
+	WHILE filename[i] # 0X DO
+		pathf[j] := filename[i];
+		INC(i); INC(j);
+	END;
+	pathf[j] := 0X
+END AddDrive;
+
+PROCEDURE Enumerator(path, dosName: ARRAY OF CHAR; time, date, size: LONGINT; isdir: BOOLEAN);
+VAR p, q: Map; i: INTEGER; name: ARRAY 64 OF CHAR;
+BEGIN
+	IF ~isdir THEN
+		
+		COPY(dosName, name);
+		IF dosName[0] = HFP THEN
+			i := 1;
+			WHILE dosName[i] # 0X DO
+				dosName[i-1] := dosName[i];
+				INC(i)
+			END;
+			dosName[i-1] := 0X
+		END;
+		
+		IF dosName = MapFile THEN RETURN END;
+
+		q := NIL; p := tmpMap;
+		WHILE (p # NIL) & (p.dos # dosName) DO q := p; p := p.next END;
+		IF p = NIL THEN (* not in file trans table *)
+			NEW(p); COPY((*dosName*)name, p.oberon); COPY(dosName, p.dos);
+			p.orphan := TRUE;
+			IF q = NIL THEN tmpMap := p ELSE q.next := p END
+		END (*else already in table *)
+	END
+END Enumerator;
+
+PROCEDURE ReadMap(VAR m: Map);
+VAR map: ARRAY 256 OF CHAR;  dos, oberon: ARRAY 64 OF CHAR; F: Files.File; R: Files.Rider; p, q: Map;
+	i: INTEGER;
+BEGIN tmpMap := NIL;
+	m := NIL; q:= NIL;
+	AddDrive(map, MapFile);
+	F := Files.Old(map);
+	IF F # NIL THEN
+		Files.Set(R, F, 0);
+		Files.ReadString(R, dos);
+		WHILE dos # "" DO
+			Files.ReadString(R, oberon);
+			NEW(p); COPY(dos, p.dos); COPY(oberon, p.oberon); p.orphan := FALSE;
+			IF m = NIL THEN m := p;
+			ELSE q.next := p
+			END;
+			q := p;
+			Files.ReadString(R, dos);
+		END;
+		Files.Close(F)
+	END;
+	COPY(path, map);
+	i := 0;
+	WHILE map[i] # 0X DO INC(i) END;
+	IF (i > 0) & (map[i - 1] = HFP) THEN
+		map[i - 1] := 0X
+	END;
+	tmpMap := m;
+	FileDir.EnumerateFiles(map, "*", FALSE, Enumerator);
+	m := tmpMap
+END ReadMap;
+
+PROCEDURE WriteMap(m: Map);
+VAR map: ARRAY 256 OF CHAR; F: Files.File; R: Files.Rider; p: Map;
+BEGIN
+	AddDrive(map, MapFile);
+	F := Files.Old(map);
+	IF F = NIL THEN F := Files.New(map) END;
+	Files.Set(R, F, 0);
+	p := m;
+	WHILE p # NIL DO
+		IF ~p.orphan THEN Files.WriteString(R, p.dos); Files.WriteString(R, p.oberon) END;
+		p := p.next
+	END;
+	Files.WriteString(R, "");
+	Files.Register(F);
+	Files.Close(F)
+END WriteMap;
+	
+PROCEDURE OpenText(title: ARRAY OF CHAR; T: Texts.Text; systemtrack: BOOLEAN);
+VAR D: Documents.Document; f: TextGadgets.Frame;
+BEGIN
+	NEW(D); TextDocs.InitDoc(D); (* make document wrapper *)
+			
+	NEW(f); TextGadgets.Init(f, T, FALSE);	(* create content *)
+	Documents.Init(D, f); (* and merge together *)
+	COPY(title, D.name);
+	IF systemtrack THEN D.W := Display.Width DIV 8 * 3 - 20 ELSE D.W := Display.Width DIV 8 * 3 + 20 END;
+	Desktops.ShowDoc(D)
+END OpenText;
+
+PROCEDURE Directory*;
+VAR
+	T: Texts.Text;
+	m, p: Map;
+	s: ARRAY 256 OF CHAR;
+	i: INTEGER;
+BEGIN
+	NEW(T); Texts.Open(T, "");
+	ReadMap(m);
+	p := m;
+	WHILE p # NIL DO
+		Texts.WriteString(W, p.oberon); Texts.WriteLn(W);
+		p := p.next
+	END;
+	Texts.Append(T, W.buf);
+	COPY(path, s);
+	i := 0; WHILE s[i] # 0X DO
+		INC(i)
+	END; s[i-1] := "*";
+	OpenText(s, T, TRUE)
+END Directory;
+
+PROCEDURE WriteFile (VAR m: Map; VAR name: ARRAY OF CHAR; VAR count: INTEGER; compress: BOOLEAN);
+VAR F, f: Files.File; R, r: Files.Rider; path: ARRAY 256 OF CHAR; p, q: Map; ch: CHAR; size: LONGINT;
+	res, i, k: INTEGER;
+BEGIN
+	INC(count);
+	IF count = 1 THEN
+		Texts.WriteString(W, "DOSBackup.WriteFiles"); Texts.WriteLn(W);
+	END;
+	Texts.WriteString(W, name); Texts.WriteString(W, " writing"); Texts.Append(Oberon.Log, W.buf);
+	F := Files.Old(name);
+	IF F # NIL THEN
+		i := 0; k := -1;
+		WHILE (name[i] # 0X) DO
+			IF name[i] = FileDir.PathChar THEN k := i+1 END;
+			INC(i)
+		END;
+		IF k # -1 THEN (* cut off path *)
+			i := 0;
+			WHILE name[k] # 0X DO
+				name[i] := name[k];
+				INC(k); INC(i)
+			END;
+			name[i] := 0X
+		END;
+		
+		p := m; q := NIL;
+		WHILE (p # NIL) & (p.oberon # name) DO q := p; p := p.next END;
+		IF p = NIL THEN (* file does not exist *)
+			NEW(p); p.orphan := FALSE;
+			IF q = NIL THEN m := p ELSE q.next := p END;
+			COPY(name, p.oberon);
+			MapName(name, p.dos);
+			(* Collision resolution *)
+			AddDrive(path, p.dos); f := Files.Old(path);
+			WHILE f # NIL DO (* name colision *)
+				NextMapping(p.dos, p.dos);
+				AddDrive(path, p.dos); f := Files.Old(path);
+			END;
+			f := Files.New(path);
+		ELSE AddDrive(path, p.dos);
+			Files.Delete(path, res);
+			f := Files.New(path);
+		END;
+		IF ~Available(Files.Length(F)) THEN
+			Texts.WriteString(W, " no space");
+			Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf);
+			RETURN
+		END;
+
+		Files.Set(R, F, 0); Files.Set(r, f, 0);
+		IF ~compress THEN
+			Files.Read(R, ch); size := 0;
+			WHILE ~R.eof DO
+				Files.Write(r, ch); INC(size);
+				Files.Read(R, ch);
+			END
+		ELSE
+			Files.WriteInt(r, CompressTag);
+			Compress(R, r);
+			size := Files.Length(f)
+		END;
+		Files.Close(F); Files.Close(f); Files.Register(f);
+		Texts.WriteInt(W, size, 8);
+		IF compress THEN
+			Texts.WriteInt(W, ENTIER(0.5+100.0*size/Files.Length(F)), 4);
+			Texts.Write(W, "%")
+		END;
+		Texts.WriteString(W, " ["); Texts.WriteString(W, p.dos); Texts.Write(W, "]");
+	ELSE Texts.WriteString(W, " not found")
+	END;
+	Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
+END WriteFile;
+
+PROCEDURE ReadFile (VAR m: Map; VAR name: ARRAY OF CHAR; VAR count: INTEGER);
+VAR F, f: Files.File; R, r: Files.Rider; path: ARRAY 256 OF CHAR; p: Map; ch: CHAR; size: LONGINT;
+tag: INTEGER;
+BEGIN
+	INC(count);
+	IF count = 1 THEN
+		Texts.WriteString(W, "DOSBackup.ReadFiles"); Texts.WriteLn(W);
+	END;
+	Texts.WriteString(W, name); Texts.WriteString(W, " reading"); Texts.Append(Oberon.Log, W.buf);
+	p := m;
+	WHILE (p # NIL) & (p.oberon # name) DO p := p.next END;
+	IF p = NIL THEN Texts.WriteString(W, " not found")
+	ELSE
+		AddDrive(path, p.dos);
+		F := Files.Old(path);
+		IF F # NIL THEN
+			f := Files.New(name);
+			Files.Set(R, F, 0); Files.Set(r, f, 0);
+			Files.ReadInt(R, tag);
+			IF tag = CompressTag THEN
+				IF Dict = NIL THEN
+					NEW(Dict);
+					NEW(DecodeStack)
+				END;
+				Expand(R, r);
+				size := Files.Length(f)
+			ELSE
+				Files.Set(R, F, 0);
+				Files.Read(R, ch); size := 0;
+				WHILE ~R.eof DO
+					Files.Write(r, ch); INC(size);
+					Files.Read(R, ch);
+				END
+			END;
+			
+			Files.Close(F); Files.Close(f); Files.Register(f);
+			Texts.WriteInt(W, size, 8);
+			Texts.WriteString(W, " ["); Texts.WriteString(W, p.dos); Texts.Write(W, "]")
+		ELSE Texts.WriteString(W, " in TRANS.TBL but deleted from diskette")
+		END;
+	END;
+	Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
+END ReadFile;
+
+PROCEDURE DeleteFile (VAR m: Map; VAR name: ARRAY OF CHAR; VAR count: INTEGER);
+VAR F: Files.File; path: ARRAY 256 OF CHAR; p, q: Map; res: INTEGER;
+BEGIN
+	INC(count);
+	IF count = 1 THEN
+		Texts.WriteString(W, "DOSBackup.DeleteFiles"); Texts.WriteLn(W);
+	END;
+	Texts.WriteString(W, name); Texts.WriteString(W, " deleting"); Texts.Append(Oberon.Log, W.buf);
+	p := m; q:= NIL;
+	WHILE (p # NIL) & (p.oberon # name) DO q := p; p := p.next END;
+	IF p = NIL THEN Texts.WriteString(W, " not found")
+	ELSE
+		AddDrive(path, p.dos);
+		F := Files.Old(path);
+		IF F # NIL THEN
+			Files.Delete(path, res);
+			Texts.WriteString(W, " ["); Texts.WriteString(W, p.dos); Texts.Write(W, "]");
+			IF q = NIL THEN m := p.next
+			ELSE q.next := p.next
+			END;
+		ELSE Texts.WriteString(W, "   in TRANS.TBL but missing from diskette")
+		END;
+	END;
+	Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
+END DeleteFile;
+
+PROCEDURE WriteFiles*;
+VAR m: Map; par: Oberon.ParList; S: Texts.Scanner; T: Texts.Text;
+	beg, end, time: LONGINT; count: INTEGER;
+	compress: BOOLEAN;
+BEGIN count := 0;
+	ReadMap(m);
+	par := Oberon.Par;
+	Texts.OpenScanner(S, par.text, par.pos); Texts.Scan(S);
+	IF (S.class = Texts.Char) & (S.c = "%") THEN
+		compress := TRUE;
+		NEW(Dict);
+		NEW(DecodeStack);
+		Texts.Scan(S)
+	ELSE
+		compress := FALSE
+	END;
+	WHILE S.class IN {Texts.Name, Texts.String} DO WriteFile(m, S.s, count, compress); Texts.Scan(S) END;
+	IF (S.class = Texts.Char) & (S.c = "^") THEN Oberon.GetSelection(T, beg, end, time);
+		IF time >= 0 THEN Texts.OpenScanner(S, T, beg); Texts.Scan(S);
+			IF S.class = Texts.Name THEN WriteFile(m, S.s, count, compress) END
+		END
+	END;
+	WriteMap(m);
+	Dict := NIL;
+	DecodeStack := NIL;
+	Oberon.Collect;
+END WriteFiles;
+
+PROCEDURE ReadFiles*;
+VAR m: Map; par: Oberon.ParList; S: Texts.Scanner; T: Texts.Text;
+	beg, end, time: LONGINT; count: INTEGER;
+BEGIN count := 0;
+	ReadMap(m);
+	par := Oberon.Par;
+	Texts.OpenScanner(S, par.text, par.pos); Texts.Scan(S);
+	WHILE S.class IN {Texts.Name, Texts.String} DO ReadFile(m, S.s, count); Texts.Scan(S) END;
+		IF (S.class = Texts.Char) & (S.c = "^") THEN Oberon.GetSelection(T, beg, end, time);
+		IF time >= 0 THEN Texts.OpenScanner(S, T, beg); Texts.Scan(S);
+			IF S.class = Texts.Name THEN ReadFile(m, S.s, count) END
+		END
+	END;
+	Dict := NIL;
+	DecodeStack := NIL;
+	Oberon.Collect;
+END ReadFiles;
+
+PROCEDURE ReadAll*;
+VAR m, p: Map; count: INTEGER;
+BEGIN count := 1;
+	Texts.WriteString(W, "DOSBackup.ReadAll"); Texts.WriteLn(W);
+	Texts.Append(Oberon.Log, W.buf);
+	ReadMap(m);
+	p := m;
+	WHILE p # NIL DO
+		ReadFile(m, p.oberon, count);
+		p := p.next
+	END;
+	Oberon.Collect;
+END ReadAll;
+
+PROCEDURE Init*;
+VAR m, p: Map; path: ARRAY 64 OF CHAR; res, count: INTEGER;
+BEGIN count := 1;
+	Texts.WriteString(W, "DOSBackup.Init"); Texts.WriteLn(W);
+	Texts.Append(Oberon.Log, W.buf);
+	ReadMap(m);
+	p := m;
+	WHILE p # NIL DO
+		DeleteFile(m, p.oberon, count);
+		p := p.next
+	END;
+	AddDrive(path, MapFile);
+	Files.Delete(path, res);
+	Oberon.Collect;
+END Init;
+
+PROCEDURE DeleteFiles*;
+VAR m: Map; par: Oberon.ParList; S: Texts.Scanner; T: Texts.Text;
+	beg, end, time: LONGINT; count: INTEGER;
+BEGIN count := 0;
+	ReadMap(m);
+	par := Oberon.Par;
+	Texts.OpenScanner(S, par.text, par.pos); Texts.Scan(S);
+	WHILE S.class IN {Texts.Name, Texts.String} DO DeleteFile(m, S.s, count); Texts.Scan(S) END;
+		IF (S.class = Texts.Char) & (S.c = "^") THEN Oberon.GetSelection(T, beg, end, time);
+		IF time >= 0 THEN Texts.OpenScanner(S, T, beg); Texts.Scan(S);
+			IF S.class = Texts.Name THEN DeleteFile(m, S.s, count) END
+		END
+	END;
+	WriteMap(m);
+	Oberon.Collect;
+END DeleteFiles;
+
+PROCEDURE GetHFP;
+	VAR res: ARRAY 4 OF CHAR;
+BEGIN
+	Registry.Get("SystemInfo", "HostFilenamePrefix", res);
+	IF Registry.res = Registry.Done THEN
+		HFP := res[0]
+	END
+END GetHFP;
+
+PROCEDURE App(VAR s: ARRAY OF CHAR);
+VAR i: INTEGER; (*res: ARRAY 4 OF CHAR;*)
+BEGIN
+	(*
+	Registry.Get("SystemInfo", "HostFilenamePrefix", res);
+	IF (Registry.res = Registry.Done) & (res[0] # 0X) THEN
+	*)
+	IF HFP # 0X THEN
+		i := 0;
+		WHILE s[i] # 0X DO INC(i) END;
+		s[i] := (*res[0]*)HFP; INC(i); s[i] := 0X
+	END
+END App;
+
+PROCEDURE SetPath*;
+	VAR
+		S: Texts.Scanner;
+		i: INTEGER;
+BEGIN
+	Texts.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos);
+	Texts.Scan(S);
+	IF S.class IN {Texts.Name, Texts.String} THEN
+		COPY(S.s, path);
+		i := 0;
+		WHILE path[i] # 0X DO
+			INC(i)
+		END;
+		IF path[i-1] # "/" THEN
+			path[i] := "/"; INC(i)
+		END;
+		path[i] := 0X;
+		App(path)
+	END
+END SetPath;
+
+BEGIN
+	path := "A:/";
+	GetHFP;
+	App(path); Texts.OpenWriter(W)
+END DOSBackup.
+
+DOSBackup.Directory
+
+DOSBackup.WriteFiles % ^
+DOSBackup.WriteFiles ^
+DOSBackup.ReadFiles ^
+DOSBackup.DeleteFiles ^
+
+DOSBackup.ReadAll
+
+DOSBackup.Init
+
+DOSBackup.SetPath
