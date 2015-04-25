@@ -1,4 +1,5 @@
-﻿(* Copyright (c) 1994 - 2000 Emil J. Zeller *)
+﻿(* ETH Oberon, Copyright 2001 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE Books; (** portable *)	(* ejz  *)
 	IMPORT Books0, Panels, Objects, Documents, Gadgets, Display, Display3, TextGadgets, TextGadgets0, BasicGadgets,

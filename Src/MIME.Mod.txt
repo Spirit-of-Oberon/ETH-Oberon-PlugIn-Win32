@@ -1,4 +1,5 @@
-﻿(* Copyright (c) 1994 - 2000 Emil J. Zeller *)
+﻿(* ETH Oberon, Copyright 2001 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE MIME; (** portable *)	(* ejz  *)
 	IMPORT Streams, TextStreams, Files, FileDir, Dates, Strings, Fonts, Texts, Display, Display3,
@@ -93,7 +94,7 @@ MODULE MIME; (** portable *)	(* ejz  *)
 					INC(bufLen, 1024); NEW(buf, bufLen);
 					COPY(h.fields^, buf^); h.fields := buf
 				END;
-IF (ch = ":") & ~field THEN
+				IF ((ch = ":") OR (ch = "+")) & ~field THEN	(* "+OK xxx octets" workaround *)
 					end := FALSE; field := ~white; anyField := anyField OR field
 				ELSIF ch <= " " THEN
 					ch := " "; white := TRUE
@@ -465,7 +466,7 @@ END
 			INC(pos)
 		END;
 		i := 0;
-		WHILE (pos < len) & (h.fields[pos] > " ") DO
+		WHILE (i < 15) & (pos < len) & (h.fields[pos] > " ") DO
 			mo[i] := h.fields[pos]; INC(i); INC(pos)
 		END;
 		mo[i] := 0X; month := StrToMonth(mo);

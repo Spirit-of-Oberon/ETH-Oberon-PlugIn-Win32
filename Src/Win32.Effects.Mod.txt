@@ -1,7 +1,5 @@
-﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+﻿(* ETH Oberon, Copyright 2001 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
 Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
-
-(* Windows specific parts: Copyright (c) 1994 - 2000 Emil J. Zeller *)
 
 MODULE Effects; (** portable, except where noted / source: Win32.Plug.Effects.Mod *)	(** jm 18.1.95, ejz  *)
 
@@ -82,7 +80,7 @@ BEGIN
 	IF Y < 0 THEN INC(H, Y); Y := 0 END;
 	IF X+W-1 >= Display.Width THEN W := Display.Width-X END;
 	IF Y+H-1 >= Display.Height THEN H := Display.Height-Y END;
-	IF W < 0 THEN W := 0 END; IF H < 0 THEN H := 0 END;
+	IF (W <= 0) OR (H <= 0) THEN RETURN END;
 	(* save area *)
 	IF (A.W < W) OR (A.H < H) THEN A.B := Bitmaps.New(W, H) END;
 	A.X := X; A.Y := Y; A.W := W; A.H := H; A.cur := Display.cur;

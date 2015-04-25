@@ -1,4 +1,4 @@
-﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+﻿(* ETH Oberon, Copyright 2001 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
 Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE AsciiCoder; (** portable *)	(* Wolfgang Weck 14 Dec 93, compression due to Stefan Ludwig/ jm modified for System 3 *)
@@ -112,7 +112,8 @@ MODULE AsciiCoder; (** portable *)	(* Wolfgang Weck 14 Dec 93, compression due t
 	BEGIN NEW(names); last := names; Texts.OpenScanner(s, t, beg); pos := beg; Texts.Scan(s);
 		WHILE (pos < end) & ((s.class = Texts.String) OR (s.class = Texts.Name)) DO NEW(n); last.next := n; last := n;
 			COPY(s.s, n.name);
-			pos := Texts.Pos(s); Texts.Scan(s)
+			pos := Texts.Pos(s); Texts.Scan(s);
+			IF (s.class = Texts.Char) & (s.c = ",") THEN Texts.Scan(s) END
 		END;
 		last.next := NIL; names := names.next; pos := Texts.Pos(s)
 	END ReadFileNames;

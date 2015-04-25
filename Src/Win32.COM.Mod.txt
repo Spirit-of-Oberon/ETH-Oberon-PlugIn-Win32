@@ -632,7 +632,7 @@ Kernel32.Str("COM.DllUnregisterServer "); ConsoleCLSID(class.clsid); Kernel32.St
 			Threads.Lock(moduleCS);
 			class := next
 		END;
-		IF (hres = SOk) & (Kernel.lock > 0) THEN hres := SFalse END;
+		IF (hres = SOk) & ~Kernel.CanShutdown() THEN hres := SFalse END;
 		Threads.Unlock(moduleCS);
 		RETURN hres
 	END DllCanUnloadNow;

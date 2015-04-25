@@ -1,4 +1,4 @@
-﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+﻿(* ETH Oberon, Copyright 2001 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
 Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE ScriptFrames; (** portable *)	(* RS, Wed, 9-Jun-1993*)
@@ -1484,7 +1484,7 @@ MODULE ScriptFrames; (** portable *)	(* RS, Wed, 9-Jun-1993*)
 					IF pos >= 0 THEN Call(F, pos, ML IN keysum) END
 				END
 			ELSIF ML IN Keys THEN
-				IF Oberon.New & F.car & (Pos(F, X, Y) = F.carLoc.pos) THEN (*click on caret*)
+				IF Oberon.New & F.car & (Pos(F, X - F.X - x, Y - F.Y - y) = F.carLoc.pos) THEN (*click on caret*)
 					Oberon.Defocus; RestoreCaret; TrackWord(F, x, y, X, Y, pos, keysum);
 					IF MR IN keysum THEN
 						IF (pos >= 0) & ~(MM IN keysum) THEN CallCmd(OpenCmd, F, pos, FALSE) END

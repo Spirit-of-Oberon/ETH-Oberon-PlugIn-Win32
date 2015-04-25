@@ -1,7 +1,7 @@
-﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+﻿(* ETH Oberon, Copyright 2001 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
 Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
-MODULE In; (** portable *)	(* Stream-oriented text input, MR 1992, NW 22.5.93, JG 26.7.93, JM 2.5.95 *)
+MODULE In; (** portable *)	(* based on module from "Programming in Oberon" *)
 
 (** Stream oriented text input. Module In encapsulates the parameter scanning process of commands. *)
 

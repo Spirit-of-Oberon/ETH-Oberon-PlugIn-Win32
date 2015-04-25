@@ -1,4 +1,4 @@
-﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+﻿(* ETH Oberon, Copyright 2001 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
 Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE Builder;	(** portable, except where noted *)
@@ -25,7 +25,8 @@ MODULE Builder;	(** portable, except where noted *)
 	12.12.99 bsm - printing support for ErrorGadgets
 *)
 
-IMPORT OPS, OPM, Compiler, Oberon, Display, Gadgets, Texts, Attributes, Objects, Icons, Modules, Display3, Fonts,
+IMPORT
+	OPS, OPM, Compiler, Oberon, Display, Gadgets, Texts, Attributes, Objects, Icons, Modules, Display3, Fonts, 
 	Effects, Files, Strings, Printer, Printer3, FileDir;
 	
 CONST
@@ -89,7 +90,7 @@ VAR
 	ifdepth: LONGINT;		(* number of $if levels *)
 	OPSGet: OPS.GetProc;
 	skipping: BOOLEAN;
-	errtext: Texts.Text;
+	first: BOOLEAN;	(* first attempt to read Oberon.Text/OP2.Errors *)
 
 (** Get the marked text *)
 PROCEDURE GetText(VAR par: Display.Frame): Texts.Text;
@@ -161,19 +162,29 @@ BEGIN
 	Gadgets.CopyFrame(M, from, to);
 END CopyErrorGadget;
 
-PROCEDURE GetErrMsg (errNr: INTEGER; VAR msg: ARRAY OF CHAR);
-VAR s: Texts.Scanner; n: INTEGER; ch: CHAR; warn: BOOLEAN;
+PROCEDURE GetErrMsg (errNr: INTEGER; VAR msg: ARRAY OF CHAR);	
+VAR s: Texts.Scanner; n: INTEGER; ch: CHAR;  warn: BOOLEAN;
 BEGIN
-	Texts.OpenScanner(s, errtext, 0);
-	warn := (errNr < 0); errNr := ABS(errNr);
-	REPEAT Texts.Scan(s) UNTIL s.eot OR (s.class = Texts.Int) & (s.i = 0);
-	WHILE ~ s.eot & ((s.class # Texts.Int) OR (s.i # errNr)) DO Texts.Scan(s) END;
-	IF ~s.eot THEN Texts.Read(s, ch); n := 0;
-		IF warn THEN COPY("warning: ", msg);
-			WHILE msg[n] # 0X DO INC(n) END
+	Oberon.OpenScanner(s, "OP2.Errors");
+	IF s.class = Texts.Inval THEN msg[0] := 0X;
+		IF first THEN
+			Texts.WriteString(W, "Oberon.Text - OP2.Errors not found");  Texts.WriteLn(W);
+			Texts.Append(Oberon.Log, W.buf);
+			first := FALSE
+		END
+	ELSE
+		warn := (errNr < 0);  errNr := ABS(errNr);
+		REPEAT Texts.Scan(s) UNTIL s.eot OR (s.class = Texts.Int) & (s.i = 0);
+		WHILE ~ s.eot & ((s.class # Texts.Int) OR (s.i # errNr)) DO
+			Texts.Scan(s);  IF (s.class = Texts.Char) & (s.c = "}") THEN s.eot := TRUE END
 		END;
-		WHILE ~s.eot & (ch # 0DX) DO msg[n] := ch; INC(n); Texts.Read(s, ch) END;
-		msg[n] := 0X
+		IF ~s.eot THEN Texts.Read(s, ch); n := 0;
+			IF warn THEN COPY("warning: ", msg);
+				WHILE msg[n] # 0X DO INC(n) END
+			END;
+			WHILE ~s.eot & (ch # 0DX) DO msg[n] := ch; INC(n); Texts.Read(s, ch) END;
+			msg[n] := 0X
+		END
 	END
 END GetErrMsg;
 
@@ -684,7 +695,7 @@ PROCEDURE GetOptions(VAR S: Attributes.Scanner; VAR opts: ARRAY OF CHAR);
 BEGIN
 	i := 0;
 	IF (S.class = Attributes.Char) & (S.c = Oberon.OptionChar) THEN
-		WHILE (i<LEN(opts)) & (Strings.IsAlpha(S.nextCh) OR Strings.IsDigit(S.nextCh) OR (S.nextCh = ".")) DO
+		WHILE (i<LEN(opts)) & (Strings.IsAlpha(S.nextCh) OR Strings.IsDigit(S.nextCh) OR (S.nextCh = ".") OR (S.nextCh = ":")) DO
 			opts[i] := S.nextCh; Attributes.Read(S.R, S.nextCh); INC(i)
 		END;
 		Attributes.Scan(S)
@@ -734,7 +745,7 @@ BEGIN
 	IF t.len = 0 THEN Texts.WriteString(W, s); Texts.WriteString(W, " not found"); Texts.WriteLn(W);
 		Texts.Append(Oberon.Log, W.buf);
 	ELSE
-		Texts.OpenReader(R, t, 0); OPM.Init({}, R, Oberon.Log); (* << win *)
+		Texts.OpenReader(R, t, 0); OPM.Init({}, {}, R, Oberon.Log); (* << win *)
 		InitPreprocessor; OPS.Get(sym);	(* <- preproc *)
 		IF MatchSym(module) THEN (* module *)
 			IF sym = ident THEN (* ident *)
@@ -998,13 +1009,13 @@ END Free;
 PROCEDURE Init();
 	VAR S: Texts.Scanner;
 BEGIN
+	first := TRUE;
 	Oberon.OpenScanner(S, "Builder.AutoMark");
 	IF S.class IN {Texts.Name, Texts.String} THEN
 		Strings.StrToBool(S.s, autoMark)
 	ELSE
 		autoMark := TRUE
-	END;
-	NEW(errtext); Texts.Open(errtext, "OP2.Errors")
+	END
 END Init;
 
 BEGIN

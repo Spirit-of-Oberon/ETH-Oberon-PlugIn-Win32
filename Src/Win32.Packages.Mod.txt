@@ -53,10 +53,11 @@ MODULE Packages; (** portable / source: Win32.Packages.Mod *)	(* ejz  *)
 		findDefName: Compress.Name; findDefD, findDefT, errors: LONGINT;
 		useCrypt, noReg, userPath: BOOLEAN;
 
-	PROCEDURE InitPaths*(user: ARRAY OF CHAR);
+	PROCEDURE InitPaths(user: ARRAY OF CHAR);
 		VAR i, j: LONGINT; done: BOOLEAN;
 	BEGIN
 		IF user = "" THEN
+			userPath := FALSE;
 			paths[0].name := "SYSTEM";
 			paths[1].name := "OBJ";
 			paths[2].name := "SRC";
@@ -84,6 +85,7 @@ MODULE Packages; (** portable / source: Win32.Packages.Mod *)	(* ejz  *)
 			END;
 			paths[6].path[j] := 0X
 		ELSE
+			userPath := TRUE;
 			FileDir.GetWorkingDirectory(paths[1].path);
 			FileDir.ChangeDirectory(user, done); ASSERT(done);
 			FileDir.GetWorkingDirectory(paths[0].path);
@@ -95,11 +97,16 @@ MODULE Packages; (** portable / source: Win32.Packages.Mod *)	(* ejz  *)
 		Registry.OberonPath("Packages", regRoot)
 	END InitPaths;
 
+	PROCEDURE Init*(user: ARRAY OF CHAR);
+	BEGIN
+		IF userPath OR (user # "") THEN InitPaths(user) END;
+		useCrypt := FALSE; noReg := FALSE
+	END Init;
+
 	PROCEDURE OpenScanner(VAR T: Texts.Text; VAR S: Texts.Scanner);
 		VAR crypt, key: ARRAY 64 OF CHAR; beg, end, time: LONGINT;
 	BEGIN
-		IF userPath THEN InitPaths(""); userPath := FALSE END;
-		useCrypt := FALSE; noReg := FALSE;
+		Init("");
 		Texts.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos);
 		Texts.Scan(S);
 		WHILE (S.class = Texts.Char) & (S.c = Oberon.OptionChar) DO
@@ -114,7 +121,7 @@ MODULE Packages; (** portable / source: Win32.Packages.Mod *)	(* ejz  *)
 				Texts.Scan(S)
 			ELSIF (S.class = Texts.Name) & (CAP(S.s[0]) = "U") THEN (* user directory *)
 				Texts.Scan(S); ASSERT(S.class IN {Texts.Name, Texts.String});
-				InitPaths(S.s); userPath := TRUE; Texts.Scan(S)
+				InitPaths(S.s); Texts.Scan(S)
 			END
 		END;
 		IF S.class = Texts.Char THEN
@@ -703,8 +710,9 @@ MODULE Packages; (** portable / source: Win32.Packages.Mod *)	(* ejz  *)
 				IF ch = Texts.TextBlockId THEN
 					NEW(T); Texts.Open(T, ""); Texts.Load(T, F2, Files.Pos(R2), i);
 					Texts.OpenReader(r, T, 0);
-					OPM.Init({}, r, Oberon.Log); OPS.Get := NIL; OPS.Init;
+					OPM.Init({}, {}, r, Oberon.Log); OPS.Get := NIL; OPS.Init;
 					OPS.Get(sym); OPS.Get(sym); ASSERT(sym = OPS.ident);
+					cRes.major := res.major; cRes.minor := res.minor;
 					COPY(OPS.name, cRes.name); Strings.Append(cRes.name, ".Obj");
 					v := CheckVersion(cRes, pack.options, TRUE);
 					IF v IN {VerNewResource, VerNewBuild, VerNewMinorVersion} THEN
@@ -798,7 +806,7 @@ MODULE Packages; (** portable / source: Win32.Packages.Mod *)	(* ejz  *)
 				col := W.col; Texts.SetColor(W, 1);
 				Texts.WriteString(W, file); Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf);
 				Texts.SetColor(W, col)
-			ELSIF (cmd.name = "SET") & ~noReg THEN
+			ELSIF cmd.name = "SET" THEN
 				i := 0; j := 0; v := -1;
 				WHILE file[i] # 0X DO
 					IF (*(file[i] = ".") OR*) (file[i] = "\") THEN (* allow dots in key name *)
@@ -842,7 +850,7 @@ MODULE Packages; (** portable / source: Win32.Packages.Mod *)	(* ejz  *)
 				res.pos := Files.Pos(R);
 				IF i = DataTag THEN
 					res.next := resl; resl := res; NEW(res)
-				ELSIF i = URLTag THEN
+				ELSIF (i = URLTag) & ~noReg THEN
 					Files.ReadString(R, res.name); Files.ReadString(R, options);
 					IF options # "" THEN SystemName(res.name) END; (* \S *)
 					v := CheckVersion(res^, "", FALSE);
@@ -987,7 +995,7 @@ MODULE Packages; (** portable / source: Win32.Packages.Mod *)	(* ejz  *)
 	PROCEDURE *Load(D: Documents.Document);
 		VAR F: Files.File; obj: Objects.Object; gen, err: FileDir.FileName; res: LONGINT;
 	BEGIN
-		D.dsc := NIL;
+		D.dsc := NIL; Init("");
 		F := Files.Old(D.name);
 		REPEAT
 			res := install(F, gen, NIL, GetURL)
@@ -1002,10 +1010,10 @@ MODULE Packages; (** portable / source: Win32.Packages.Mod *)	(* ejz  *)
 						D.dsc := obj; D.W := obj.W; D.H := obj.H
 					END
 				ELSE
-					Texts.WriteString(W, "not a Frame"); Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
+					(* install ok, but no tool to display *)
 				END
 			ELSE
-				Texts.WriteString(W, err); Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
+				(* install ok, but no tool to display *)
 			END
 		ELSE
 			(* error reported by GetURL *)
@@ -1193,18 +1201,31 @@ MODULE Packages; (** portable / source: Win32.Packages.Mod *)	(* ejz  *)
 		END
 	END PathEnumerator;
 
+(*
+	PROCEDURE OpenTool*;
+	BEGIN
+(*
+	System.CreateDirectory for all NEWDEST
+	Packages.Extract for all copy commands (with path)
+	Compiler.Compile for all COMPILE commands with options, check if file in copy list
+	System.Set for all SET
+	display MSG and remark for DEF
+*)	
+	END OpenTool;
+*)	
+
 BEGIN
 	Texts.OpenWriter(W); userPath := TRUE
 END Packages.
 
 Build / Install / Directory / Extract
 
-/C crypt key
+\C crypt key
 	use Compress encryption
 
-/R ( "+" | "-" )
+\R ( "+" | "-" )
 	+: use registry, default
 	-: ignore registry
 
-/U path
+\U path
 	create all files in path

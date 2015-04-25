@@ -1,4 +1,4 @@
-﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+﻿(* ETH Oberon, Copyright 2001 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
 Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE ColorTools; (** portable *)	(** jm 19.1.95 *)
@@ -199,7 +199,7 @@ BEGIN
 	Highlight(li + (max - 1 - lj) * max, li, lj);
 	Oberon.RemoveMarks(x, y+ofs, bw4, bw4);
 	Views.RestoreBlock(block);
-	IF (keysum = {1}) & (i >= 0) THEN
+	IF ((keysum = {1}) OR (Oberon.New & (M.keys = {2}))) & (i >= 0) THEN
 		F.col := F.colors[li + (max - 1 - lj) * max];
 		IF F.cmd[0] # 0X THEN
 			Gadgets.Execute(F.cmd, F, M.dlink, NIL, NIL);
@@ -309,7 +309,7 @@ BEGIN
 				ELSIF M IS Oberon.InputMsg THEN
 					WITH M: Oberon.InputMsg DO
 						IF ~(Gadgets.selected IN F.state) THEN
-							IF (M.id = Oberon.track) & (M.keys = {1}) & Gadgets.InActiveArea(F, M) THEN
+							IF (M.id = Oberon.track) & ((M.keys = {1}) OR (Oberon.New & (M.keys = {2}))) & Gadgets.InActiveArea(F, M) THEN
 								PickColor(F, x, y, w, h, M); M.res := 0;
 							ELSE
 								Gadgets.framehandle(F, M);

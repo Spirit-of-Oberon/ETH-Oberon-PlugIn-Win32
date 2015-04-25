@@ -1,7 +1,7 @@
 ﻿(* Copyright (c) 1994 - 2000 Emil J. Zeller *)
 
 MODULE Windows; (** non-portable / source: Win32.Windows.Mod *)	(* ejz  *)
-	IMPORT SYSTEM, Kernel32, Kernel, Registry, FileDir, Modules, Objects, User32, GDI32, Displays, Display, Threads,
+	IMPORT SYSTEM, Kernel32, Kernel, Registry, FileDir, Modules, Objects, User32, Displays, Display, Threads,
 		Viewers, Input, Strings, Exceptions;
 
 	(** This module implements Displays working in Windows document or control windows. *)
@@ -14,7 +14,7 @@ MODULE Windows; (** non-portable / source: Win32.Windows.Mod *)	(* ejz  *)
 			OLE*: User32.WMUser+30 .. User32.WMUser+39 *)
 		IDFirstAccelCmd = 0; (* addAccel *)
 		IDFirstMenuCmd* = 64; (** first ID to be used by menus (see: WinMenus) *)
-		Insert = 0A0X; Delete = 0A1X;
+		Insert = 0A0X; Delete = 0A1X; Backspace = 07FX;
 		Home = 0A8X; End = 0A9X;
 		PageUp = 0A2X; PageDown = 0A3X;
 		Up = 0C1X; Down = 0C2X; Right = 0C3X; Left = 0C4X; (* cursor keys *)
@@ -23,7 +23,7 @@ MODULE Windows; (** non-portable / source: Win32.Windows.Mod *)	(* ejz  *)
 		F11 = 0FBX; F12 = 0FCX;
 		update = 0; dummy = 1; minimized = 2; external = 3; control = 4;
 		MaxAccel = 32; MaxCmd = 128;
-		ML = 2; MM = 1; MR = 0;
+		ML = 2; MM = 1; MR = 0; MX = 3;
 		GWLWindow* = 0; GWLControl* = 4;
 
 	TYPE
@@ -37,7 +37,7 @@ MODULE Windows; (** non-portable / source: Win32.Windows.Mod *)	(* ejz  *)
 			win: Window;
 			event: Threads.Event;
 			className: ARRAY 32 OF CHAR;
-			style: SET;
+			exstyle, style: SET;
 			x, y, w, h: LONGINT;
 			hMenu: User32.HMenu
 		END;
@@ -64,14 +64,13 @@ MODULE Windows; (** non-portable / source: Win32.Windows.Mod *)	(* ejz  *)
 										END;
 		nAccel: LONGINT;
 		hCurrentCursor: User32.HCursor;
-		capture, hook, mouse: Window;
-		kioskmode*, hookCmd: BOOLEAN;
-		hHook: User32.HHook;
+		capture, mouse: Window;
+		kioskmode*: BOOLEAN;
 		dummyWin*: Window;
 
 	PROCEDURE CreateHWND(create: CreateStruct);
 	BEGIN
-		create.win.hWnd := User32.CreateWindowEx(0, create.className, "", create.style,
+		create.win.hWnd := User32.CreateWindowEx(create.exstyle, create.className, "", create.style,
 			create.x, create.y, create.w, create.h, create.win.hWndParent, create.hMenu, Kernel.hInstance,
 			SYSTEM.VAL(User32.LParam, create));
 		IF User32.WSMaximize IN create.style THEN
@@ -104,10 +103,6 @@ MODULE Windows; (** non-portable / source: Win32.Windows.Mod *)	(* ejz  *)
 			User32.PostQuitMessage(0)
 		ELSIF uMsg = User32.WMClose THEN
 			EXCL(win.state, update);
-			IF hook = win THEN
-				HandleFocus(win, User32.WMKillFocus, 0);
-				User32.UnhookWindowsHookEx(hHook); hook := NIL
-			END;
 			IF mouse = win THEN mouse := NIL END;
 			IF capture = win THEN
 				User32.ReleaseCapture(); capture := NIL
@@ -169,7 +164,15 @@ win.hDC := -1; (* ??? *)
 			|User32.VKF12: ch := F12
 		ELSE
 			IF chars THEN
-				ch := Strings.ISOToOberon[wParam]
+				IF wParam = User32.VKBack THEN
+					IF User32.GetAsyncKeyState(User32.VKControl) < 0 THEN
+						ch := 08X
+					ELSE
+						ch := Backspace
+					END
+				ELSE
+					ch := Strings.ISOToOberon[wParam]
+				END
 			ELSE
 				ch := 0X
 			END
@@ -177,57 +180,36 @@ win.hDC := -1; (* ??? *)
 		RETURN ch
 	END TranslateKey;
 
-	PROCEDURE TranslateAccelerator(win: Window; wParam: User32.WParam; lParam: User32.LParam): BOOLEAN;
-		VAR ch: CHAR; lparam, state: SET; i: LONGINT;
+	PROCEDURE TranslateAccelerator(win: Window; wParam: User32.WParam): BOOLEAN;
+		VAR ch: CHAR; state: SET; i: LONGINT;
 	BEGIN
-		lparam := SYSTEM.VAL(SET, lParam);
-		IF ~(31 IN lparam) THEN
-			ch := TranslateKey(wParam, TRUE);
-			state := {};
-			IF User32.GetAsyncKeyState(User32.VKControl) < 0 THEN
-				INCL(state, Input.CTRL)
-			END;
-			IF User32.GetAsyncKeyState(User32.VKShift) < 0 THEN
-				INCL(state, Input.SHIFT)
-			END;
-			IF User32.GetAsyncKeyState(User32.VKMenu) < 0 THEN
-				INCL(state, Input.ALT)
-			END;
-			i := 0;
-			WHILE i < nAccel DO
-				IF (accel[i].ch = ch) & (accel[i].state = state) THEN
-					hookCmd := TRUE;
-					User32.SendMessage(win.hWnd, User32.WMCommand, accel[i].id, 0);
-					RETURN TRUE
-				END;
-				INC(i)
-			END
+		ch := TranslateKey(wParam, TRUE);
+		state := {};
+		IF User32.GetAsyncKeyState(User32.VKControl) < 0 THEN
+			INCL(state, Input.CTRL)
 		END;
-		hookCmd := FALSE; RETURN FALSE
+		IF User32.GetAsyncKeyState(User32.VKShift) < 0 THEN
+			INCL(state, Input.SHIFT)
+		END;
+		IF User32.GetAsyncKeyState(User32.VKMenu) < 0 THEN
+			INCL(state, Input.ALT)
+		END;
+		i := 0;
+		WHILE i < nAccel DO
+			IF (accel[i].ch = ch) & (accel[i].state = state) THEN
+				User32.SendMessage(win.hWnd, User32.WMCommand, accel[i].id, 0);
+				RETURN TRUE
+			END;
+			INC(i)
+		END;
+		RETURN FALSE
 	END TranslateAccelerator;
-
-	PROCEDURE [WINAPI] *KeyboardHook(code: LONGINT; wParam: User32.WParam; lParam: User32.LParam): User32.LResult;
-	BEGIN
-		IF (code >= 0) & TranslateAccelerator(hook, wParam, lParam) THEN
-			RETURN 0
-		ELSE
-			RETURN User32.CallNextHookEx(hHook, code, wParam, lParam)
-		END
-	END KeyboardHook;
 
 	PROCEDURE HandleFocus(win: Window; uMsg: LONGINT; wParam: User32.WParam);
 		VAR disp: Displays.Display; done: BOOLEAN;
 	BEGIN
-		IF (uMsg = User32.WMSetFocus) & (hook # win) THEN
-			IF hook # NIL THEN
-				User32.UnhookWindowsHookEx(hHook); hook := NIL
-			END;
-			hHook := User32.SetWindowsHookEx(User32.WHKeyboard, KeyboardHook, Kernel.hInstance, 0);
-			hook := win
+		IF uMsg = User32.WMSetFocus THEN
 		ELSIF uMsg = User32.WMKillFocus THEN
-			IF hook = win THEN
-				User32.UnhookWindowsHookEx(hHook); hook := NIL
-			END;
 			IF wParam # Kernel32.NULL THEN
 				disp := Displays.root;
 				WHILE disp # NIL DO
@@ -308,10 +290,14 @@ win.hDC := -1; (* ??? *)
 	END SetCursor;
 
 	PROCEDURE HandleMouse(win: Window; uMsg: LONGINT; wParam: User32.WParam; lParam: User32.LParam);
-		VAR keys: SET; done: BOOLEAN;
+		VAR keys: SET; wheel: Displays.InputEvent; done: BOOLEAN;
 	BEGIN
 		mouse := win;
 		User32.SetCursor(hCurrentCursor);
+		IF uMsg # User32.WMMouseWheel THEN
+			win.track.X := SHORT(lParam MOD ASH(1, 16));
+			win.track.Y := SHORT(win.height-ASH(lParam, -16)-1)
+		END;
 		keys := win.track.keys;
 		CASE uMsg OF
 			User32.WMLButtonDown: INCL(keys, ML)
@@ -320,10 +306,13 @@ win.hDC := -1; (* ??? *)
 			|User32.WMMButtonUp: EXCL(keys, MM)
 			|User32.WMRButtonDown: INCL(keys, MR)
 			|User32.WMRButtonUp: EXCL(keys, MR)
+			|User32.WMXButtonDown: INCL(keys, MX)
+			|User32.WMXButtonUp: EXCL(keys, MX)
+			|User32.WMMouseWheel: NEW(wheel); wheel^ := win.track^;
+				wheel.zDelta := SHORT(ASH(wParam, -16));
+				done := Displays.PutEvent(wheel, win, Displays.wheel, 0)
 		ELSE (* move *)
 		END;
-		win.track.X := SHORT(lParam MOD ASH(1, 16));
-		win.track.Y := SHORT(win.height-ASH(lParam, -16)-1);
 		IF kioskmode THEN
 			IF (SYSTEM.VAL(SET, wParam) * {User32.MKLButton, User32.MKMButton, User32.MKRButton}) # {} THEN
 				keys := {MM}
@@ -344,7 +333,15 @@ win.hDC := -1; (* ??? *)
 	PROCEDURE HandleChar(win: Window; wParam: User32.WParam; lParam: User32.LParam);
 		VAR ch: CHAR;
 	BEGIN
-		ch := Strings.ISOToOberon[wParam];
+		IF wParam = User32.VKBack THEN
+			IF User32.GetAsyncKeyState(User32.VKControl) < 0 THEN
+				ch := 08X
+			ELSE
+				ch := Backspace
+			END
+		ELSE
+			ch := Strings.ISOToOberon[wParam]
+		END;
 		lParam := lParam MOD ASH(1, 16);
 		WHILE lParam > 0 DO
 			Displays.WriteChar(win, ch); DEC(lParam)
@@ -358,7 +355,7 @@ win.hDC := -1; (* ??? *)
 		IF wParam = User32.VKCancel THEN
 			Threads.Break(Threads.oberonLoop);
 			RETURN TRUE
-		ELSE
+		ELSIF ~TranslateAccelerator(win, wParam) THEN
 			ch := TranslateKey(wParam, FALSE);
 			IF ch # 0X THEN
 				lParam := lParam MOD ASH(1, 16);
@@ -489,8 +486,7 @@ win.hDC := -1; (* ??? *)
 
 	(** Common base handler for all visual windows (document or control) provided by this module. *)
 	PROCEDURE WindowHandler*(win: Window; uMsg: LONGINT; wParam: User32.WParam; lParam: User32.LParam): User32.LResult;
-		VAR id: LONGINT; handled, done: BOOLEAN;
-paint: User32.PaintStruct;
+		VAR id: LONGINT; paint: User32.PaintStruct; handled, done: BOOLEAN;
 	BEGIN
 		IF update IN win.state THEN
 			handled := TRUE;
@@ -506,26 +502,24 @@ paint: User32.PaintStruct;
 													Minimize(win)
 												END
 					|User32.WMPaint:
-User32.BeginPaint(win.hWnd, paint);
-												UpdateDisplay(win, Displays.redraw, lParam);
-User32.EndPaint(win.hWnd, paint)
-					|User32.WMMouseActivate: (* User32.SetFocus(win.hWnd) *)
-						IF (hook = NIL) OR ((lParam MOD 65536) # (User32.HTClient)) THEN
+						User32.BeginPaint(win.hWnd, paint);
+						UpdateDisplay(win, Displays.redraw, lParam);
+						User32.EndPaint(win.hWnd, paint)
+					(*|User32.WMMouseActivate:
+						IF (lParam MOD 65536) # (User32.HTClient) THEN
 							User32.SetFocus(win.hWnd)
 						END;
-						RETURN User32.MANoActivate
+						RETURN User32.MANoActivate*)
 					|User32.WMGetMinMaxInfo: handled := GetMinMaxInfo(win, lParam)
 					|User32.WMWindowPosChanging: PosChanging(win, lParam); handled := FALSE
-					|User32.WMKeyDown: IF ~hookCmd THEN
-															IF ~HandleKey(win, wParam, lParam) THEN
-																IF wParam = User32.VKApps THEN
-																	IF mouse = NIL THEN mouse := win END;
-																	IF capture = NIL THEN
-																		User32.SetCapture(mouse.hWnd); capture := mouse
-																	END;
-																	INCL(mouse.track.keys, MM);
-																	done := Displays.PutEvent(mouse.track, mouse, Displays.track, 0)
-																END
+					|User32.WMKeyDown: IF ~HandleKey(win, wParam, lParam) THEN
+															IF wParam = User32.VKApps THEN
+																IF mouse = NIL THEN mouse := win END;
+																IF capture = NIL THEN
+																	User32.SetCapture(mouse.hWnd); capture := mouse
+																END;
+																INCL(mouse.track.keys, MM);
+																done := Displays.PutEvent(mouse.track, mouse, Displays.track, 0)
 															END
 														END
 					|User32.WMKeyUp: IF (wParam = User32.VKApps) & (mouse # NIL) THEN
@@ -644,7 +638,7 @@ User32.EndPaint(win.hWnd, paint)
 		END
 	END WindowObjectHandler;
 
-	PROCEDURE [WINAPI] *WindowProc(hwnd: User32.HWND; uMsg: LONGINT; wParam: User32.WParam; lParam: User32.LParam): User32.LResult;
+	PROCEDURE [WINAPI] WindowProc*(hwnd: User32.HWND; uMsg: LONGINT; wParam: User32.WParam; lParam: User32.LParam): User32.LResult;
 		VAR win: Window;
 	BEGIN
 		win := SYSTEM.VAL(Window, User32.GetWindowLong(hwnd, GWLWindow));
@@ -776,7 +770,7 @@ User32.EndPaint(win.hWnd, paint)
 		END;
 		UnregisterClasses();
 		winMain := NIL;
-		IF Kernel.isEXE & (Kernel.lock <= 0) THEN
+		IF Kernel.isEXE & Kernel.CanShutdown() THEN
 			Kernel.Shutdown(0)
 		END
 	END WinMain;
@@ -821,16 +815,20 @@ User32.EndPaint(win.hWnd, paint)
 		NEW(create.event); Threads.Create(create.event);
 		create.style := {User32.WSMinimizeBox, User32.WSMaximizeBox, User32.WSSysMenu, User32.WSBorder,
 			User32.WSThickFrame, User32.WSVisible};
+		create.exstyle := {};
 		IF LockedSize(win) THEN EXCL(create.style, User32.WSThickFrame) END;
 		IF (w < MAX(INTEGER)) & (h < MAX(INTEGER)) THEN
 			IF x < 0 THEN x := User32.CWUseDefault END;
 			IF y < 0 THEN y := User32.CWUseDefault END;
 			IF w <= 0 THEN w := User32.CWUseDefault END;
 			IF h <= 0 THEN h := User32.CWUseDefault END
-		ELSE
+		ELSIF (w <= MAX(INTEGER)) & (h <= MAX(INTEGER)) THEN
 			x := User32.CWUseDefault; y := User32.CWUseDefault;
 			w := User32.CWUseDefault; h := User32.CWUseDefault;
 			create.style := create.style + {User32.WSMaximize}
+		ELSE
+			x := 0; y := 0; w := Displays.desktop.width; h := Displays.desktop.height;
+			create.style := {User32.WSVisible, User32.WSPopup}; create.exstyle := {User32.WSExTopMost}
 		END;
 		create.x := x; create.y := y; create.w := w; create.h := h;
 		COPY(windowClassName, create.className);
@@ -886,7 +884,7 @@ User32.EndPaint(win.hWnd, paint)
 	PROCEDURE CreateControl*(win: Window; x, y, w, h: LONGINT);
 	BEGIN
 		RegisterControlWinClass(); INCL(win.state, control);
-		win.hWnd := User32.CreateWindowEx(0, controlClassName, "", {User32.WSChild, User32.WSVisible},
+		win.hWnd := User32.CreateWindowEx({}, controlClassName, "", {User32.WSChild, User32.WSVisible},
 			x, y, w, h, win.hWndParent, Kernel32.NULL, Kernel32.NULL, SYSTEM.VAL(LONGINT, win))
 	END CreateControl;
 
@@ -1086,7 +1084,7 @@ User32.EndPaint(win.hWnd, paint)
 		frameY := User32.GetSystemMetrics(User32.SMCYFrame);
 		captionY := User32.GetSystemMetrics(User32.SMCYCaption);
 		menuY := User32.GetSystemMetrics(User32.SMCYMenu);
-		capture := NIL; hook := NIL; mouse := NIL;
+		capture := NIL; mouse := NIL;
 		winMain := NIL; nWindows := 0;
 		hCurrentCursor := Kernel32.NULL;
 		dummyClassName := "Oberon.Dummy.Class";

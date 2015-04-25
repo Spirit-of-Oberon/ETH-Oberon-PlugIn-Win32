@@ -1,4 +1,4 @@
-﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+﻿(* ETH Oberon, Copyright 2001 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
 Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE NamePlates; (** portable *)	(** jm 19.4.95 *)
@@ -15,12 +15,12 @@ MODULE NamePlates; (** portable *)	(** jm 19.4.95 *)
 
 IMPORT
 	Objects, Input, Display, Fonts, Texts, Display3, Oberon, Gadgets, Effects, Printer, Printer3, Files, 
-	Documents, Viewers, Desktops, FileDir;
+	Documents, Viewers, Desktops, TextGadgets0, FileDir;
 	
 CONST
  	(* name plates *)
  	VersionNo = 1; MaxLen = 128; CarHeight = 14; CarWidth = 2; Xoffset = 10;
- 	
+ 
 TYPE
 	NamePlate* = POINTER TO NamePlateDesc;
 	NamePlateDesc* = RECORD (Gadgets.FrameDesc)
@@ -118,7 +118,6 @@ PROCEDURE PlateToDoc(F: NamePlate);
 		lastChar: CHAR;
 BEGIN
 	IF F.carpos >= 0 THEN RETURN END;
-	(*COPY(F.val, F.obj(Documents.Document).name)*)
 	i := 0;
 	WHILE F.val[i] > " " DO
 		INC(i)
@@ -494,7 +493,7 @@ BEGIN
 END Dot;
 
 PROCEDURE RestoreNamePlate(R: Display3.Mask; F: NamePlate; x, y, w, h: INTEGER; dlink: Objects.Object);
-VAR p, X, Y, cx, cy, cw, ch: INTEGER; r: Objects.Object; col: Display.Color;
+VAR p, X, Y, cx, cy, cw, ch: INTEGER; r: Objects.Object; col: Display.Color; eo: INTEGER;
 BEGIN
 	FindModel(F, dlink);
 	Oberon.RemoveMarks(x, y, w, h);
@@ -507,9 +506,9 @@ BEGIN
 		Display3.Line(R, cy, Display.solid, cx, y+5, cx+2, y+7, 1, Display.replace);
 		Display3.Line(R, cy, Display.solid, cx, y+h-6, cx-2, y+h-8, 1, Display.replace);
 		Display3.Line(R, cy, Display.solid, cx, y+h-6, cx+2, y+h-8, 1, Display.replace) *)
-
-		cx := x + XtraOffset DIV 2; cy := y + h DIV 2;
-		cw := XtraOffset-4; ch := h-4;
+		IF ODD(XtraOffset) THEN eo := XtraOffset ELSE eo := XtraOffset-1 END;
+		cx := x + eo DIV 2; cy := y + h DIV 2;
+		cw := eo-4; ch := h-4;
 		IF cw < ch THEN
 			ch := cw;
 			X := x+2;
@@ -597,7 +596,7 @@ END CopyNamePlate;
 PROCEDURE NamePlateHandler*(F: Objects.Object; VAR M: Objects.ObjMsg);
 VAR F2: NamePlate; x, y, w, h: INTEGER; R: Display3.Mask; ver: LONGINT; obj: Objects.Object; A: Objects.AttrMsg;
 BEGIN
-	IF Oberon.New THEN XtraOffset := 15 ELSE XtraOffset := 0 END;
+	IF Oberon.New THEN XtraOffset := TextGadgets0.sliderW ELSE XtraOffset := 0 END;
 	WITH F: NamePlate DO
 		IF M IS Objects.AttrMsg THEN
 			WITH M: Objects.AttrMsg DO NamePlateAttr(F, M) END;

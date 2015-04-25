@@ -1,7 +1,5 @@
-﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+﻿(* ETH Oberon, Copyright 2001 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
 Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
-
-(* Windows specific parts: Copyright (c) 1994 - 2000 Emil J. Zeller *)
 
 MODULE Gadgets; (** portable / source: Win32.Gadgets.Mod *)	(* , jm 18.1.95 *)
 
@@ -1779,11 +1777,6 @@ BEGIN
 	Texts.OpenWriter(W); Texts.OpenWriter(WW); Texts.OpenWriter(mW);
 	NEW(emptyText); Texts.Open(emptyText, "");
 	LoadAliases;
-
-	IF Display.Width < 800 THEN
-		Texts.WriteString(W, "Higher resolution recommended for Gadgets");
-		Texts.WriteLn(W); Log
-	END;
 
 	Attributes.AddMacro("&", StandardMacros); (* lookup *)
 	Attributes.AddMacro("#", StandardMacros); (* executor *)

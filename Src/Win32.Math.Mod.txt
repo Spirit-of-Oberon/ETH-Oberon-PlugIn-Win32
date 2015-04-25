@@ -1,4 +1,4 @@
-﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+﻿(* ETH Oberon, Copyright 2001 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
 Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE Math;	(** portable *)
@@ -12,13 +12,6 @@ IMPORT S := SYSTEM;
 CONST
 	e* = 2.7182818284590452354E0;
 	pi* = 3.14159265358979323846E0;
-
-VAR
-		(* sqrt: *) c11, c12, c13, c14, c15: REAL;
-		(* exp: *) c21, c22, c23, c24: REAL;
-		(* ln: *) c41, c42, c43, c44, c45: REAL;
-		(* sin, cos: *) c31, p31, p32, p33, p30, q31, q32, q33: REAL;
-		(* atan: *) c51, s51, c52, s52, p50, q52, q51, q50: REAL;
 
 PROCEDURE -Sin(x: REAL):REAL;
 CODE {SYSTEM.i386, SYSTEM.FPU}
@@ -106,35 +99,4 @@ BEGIN
 	RETURN Exp(x)
 END exp;
 
-BEGIN 
-	S.PUT(S.ADR(c11), 03EAFBA81H);
-	S.PUT(S.ADR(c12), 03F665222H);
-	S.PUT(S.ADR(c13), 0BEBA6391H);
-	S.PUT(S.ADR(c14), 03F00000EH);
-	S.PUT(S.ADR(c15), 03F3504F3H);	(* 1/sqrt(2) *)
-	S.PUT(S.ADR(c21), 03FB8AA3BH);	(* 1/ln(2) *)
-	S.PUT(S.ADR(c22), 040E6E1ACH);
-	S.PUT(S.ADR(c23), 03D6C5665H);
-	S.PUT(S.ADR(c24), 041A68BBBH);
-	S.PUT(S.ADR(c41), 03F3504F3H);	(* 1/sqrt(2) *)
-	S.PUT(S.ADR(c42), 03F317218H);	(* ln(2) *)
-	S.PUT(S.ADR(c43), 03F654226H);
-	S.PUT(S.ADR(c44), 03FEA3856H);
-	S.PUT(S.ADR(c45), 03FD4114DH);
-	S.PUT(S.ADR(c31), 03F22F983H);	(* 2/pi *)
-	S.PUT(S.ADR(p31), 04253463FH);
-	S.PUT(S.ADR(p32), 0C094A235H);
-	S.PUT(S.ADR(p33), 03DB1AC59H);
-	S.PUT(S.ADR(p30), 042868060H);
-	S.PUT(S.ADR(q31), 0423EBFC9H);
-	S.PUT(S.ADR(q32), 0C15B53F8H);
-	S.PUT(S.ADR(q33), 03EE548F8H);
-	S.PUT(S.ADR(c51), 0401A827AH);	(* 1 + sqrt(2) *)
-	S.PUT(S.ADR(s51), 03FC90FDBH);	(* pi/2 *)
-	S.PUT(S.ADR(c52), 03ED413CDH);	(* sqrt(2) - 1 *)
-	S.PUT(S.ADR(s52), 03F490FDBH);	(* pi/4 *)
-	S.PUT(S.ADR(p50), 040CBD065H);
-	S.PUT(S.ADR(q52), 041099F6AH);
-	S.PUT(S.ADR(q51), 0C08DFBCBH);
-	S.PUT(S.ADR(q50), 03FFE6CB2H)
 END Math.

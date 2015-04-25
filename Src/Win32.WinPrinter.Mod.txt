@@ -141,8 +141,11 @@ MODULE WinPrinter; (** non-portable / source: Win32.WinPrinter.Mod *)	(* ejz  *)
 			END;
 			str := "Md?.Fnt";
 			str[2] := CHR(ORD("0") + ((P.dpi+50) DIV 100) MOD 10);
+			IF P.dpi >= 1000 THEN
+				str[1] := CHR(ORD("0") + ((P.dpi+500) DIV 1000) MOD 10)
+			END;
 			Objects.Register(str, WinFonts.NewFont); (* e.g. Md3.Fnt *)
-			str[0] := "P"; str[1] := "r";
+			str[0] := "P"; IF P.dpi < 1000 THEN str[1] := "r" END;
 			Objects.Register(str, WinFonts.NewFont); (* e.g. Pr3.Fnt *)
 			N.id := Oberon.neutralize; M.F := NIL; Display.Broadcast(N);
 			M.id := Display.newprinter; M.F := NIL; Display.Broadcast(M);
@@ -165,8 +168,11 @@ MODULE WinPrinter; (** non-portable / source: Win32.WinPrinter.Mod *)	(* ejz  *)
 			IF (Printers.current # P) OR (Printers.Unit # P.Unit) OR (Printers.Depth # P.Depth) THEN
 				str := "Md?.Fnt";
 				str[2] := CHR(ORD("0") + ((P.dpi+50) DIV 100) MOD 10);
+				IF P.dpi >= 1000 THEN
+					str[1] := CHR(ORD("0") + ((P.dpi+500) DIV 1000) MOD 10)
+				END;
 				Objects.Register(str, WinFonts.NewFont); (* e.g. Md3.Fnt *)
-				str[0] := "P"; str[1] := "r";
+				str[0] := "P"; IF P.dpi < 1000 THEN str[1] := "r" END;
 				Objects.Register(str, WinFonts.NewFont); (* e.g. Pr3.Fnt *)
 				N.id := Oberon.neutralize; M.F := NIL; Display.Broadcast(N);
 				M.id := Display.newprinter; M.F := NIL; Display.Broadcast(M);
@@ -606,7 +612,11 @@ HALT(99)
 			dx, x, y, w, h: INTEGER;
 	BEGIN
 		WinFonts.ParseName(F.name, family, i, style, class);
-		class := "Pr?"; class[2] := CHR(ORD("0") + ((P.dpi+50) DIV 100) MOD 10);
+		class := "Pr?";
+		class[2] := CHR(ORD("0") + ((P.dpi+50) DIV 100) MOD 10);
+		IF P.dpi >= 1000 THEN
+			class[1] := CHR(ORD("0") + ((P.dpi+500) DIV 1000) MOD 10)
+		END;
 		WinFonts.BuildName(tmp, family, i, style, class);
 		F := Fonts.This(tmp);
 		font := SYSTEM.VAL(Displays.Font, F.ind);
@@ -680,7 +690,12 @@ GDI32.BitBlt(P.hDC, P.textX+x, P.textY-y-p.h, w, h, P.hdcMem, p.x, p.y, GDI32.Sr
 		WITH P: Printer DO
 			COPY(fnt.name, name);
 			i := 0; WHILE (name[i] # ".") & (name[i] # 0X) DO INC(i) END;
-			name[i] := "."; name[i+1] := "M"; name[i+2] := "d";
+			name[i] := "."; name[i+1] := "M";
+			IF P.dpi >= 1000 THEN
+				name[i+2] := CHR(ORD("0") + ((P.dpi+500) DIV 1000) MOD 10)
+			ELSE
+				name[i+2] := "d"
+			END;
 			name[i+3] := CHR(ORD("0") + ((P.dpi+50) DIV 100) MOD 10);
 			name[i+4] := "."; name[i+5] := "F"; name[i+6] := "n"; name[i+7] := "t";
 			name[i+8] := 0X;

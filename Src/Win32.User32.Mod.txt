@@ -9,25 +9,34 @@ MODULE User32; (** non-portable / source: Win32.User32.Mod *)	(* ejz  *)
 	CONST
 		(** window messages *)
 		WMCreate* = 01H; WMDestroy* = 02H; WMMove* = 03H; WMSize* = 05H; WMActivate* = 06H; WMSetFocus* = 07H;
-		WMKillFocus* = 08H; WMPaint* = 0FH; WMClose* = 010H; WMQuit* = 012H; WMSetCursor* = 020H;
+		WMKillFocus* = 08H; WMSetText* = 0CH; WMGetText* = 0DH;
+		WMPaint* = 0FH; WMClose* = 010H; WMQuit* = 012H;
+		WMActivateApp* = 001CH; WMSetCursor* = 020H;
 		WMMouseActivate* = 021H; WMGetMinMaxInfo* = 024H; WMWindowPosChanging* = 046H;
-		WMGetIcon* = 07FH; WMSetIcon* = 080H; WMNCHitTest* = 084H;
+		WMGetIcon* = 07FH; WMSetIcon* = 080H; WMNCHitTest* = 084H; WMNCActivate* = 086H;
 		WMKeyDown* = 0100H; WMKeyUp* = 0101H; WMChar* = 0102H; WMCommand* = 0111H;
-		WMMouseFirst* = 0200H; WMMouseMove* = 0200H; WMMouseLast* = 0209H;
+		WMSysCommand* = 0112H;
+		WMMouseFirst* = 0200H; WMMouseMove* = 0200H; WMMouseLast* = 020DH;
 		WMLButtonDown* = 0201H; WMLButtonUp* = 0202H;
 		WMRButtonDown* = 0204H; WMRButtonUp* = 0205H;
 		WMMButtonDown* = 0207H; WMMButtonUp* = 0208H;
+		WMMouseWheel* = 020AH;
+		WMXButtonDown* = 020BH; WMXButtonUp* = 020CH;
+
 		WMDropFiles* = 0233H;
 		WMCut* = 0300H; WMCopy* = 0301H; WMPaste* = 0302;
 		WMClear* = 0303H; WMUndo* = 0304H;
 		WMUser* = 0400H;
+
+		SCClose* = 0F060H; SCScreenSave* = 0F140H;
 
 		(** WndClass style values *)
 		CSVRedraw* = 0; CSHRedraw* = 1; CSOwnDC* = 5; CSSaveBits* = 11; CSGlobalClass* = 14;
 
 		(** CreateWindow dwStyle values *)
 		WSMaximizeBox* = 16; WSMinimizeBox* = 17; WSThickFrame* = 18; WSSysMenu* = 19; WSBorder* = 23;
-		WSMaximize* = 24; WSVisible* = 28; WSMinimize* = 29; WSChild* = 30;
+		WSMaximize* = 24; WSVisible* = 28; WSMinimize* = 29; WSChild* = 30; WSPopup* = 31;
+		WSExTopMost* = 3;
 
 		(** CreateWindow default value for x, y, nWidth, nHeight *)
 		CWUseDefault* = 080000000H;
@@ -84,6 +93,7 @@ MODULE User32; (** non-portable / source: Win32.User32.Mod *)	(* ejz  *)
 		(** SetWindowPos uFlags values *)
 		SWPNoSize* = 0; SWPNoMove* = 1; SWPNoZOrder* = 2; SWPNoRedraw* = 3; SWPNoActivate* = 4;
 		SWPFrameChanged* = 5; SWPShowWindow* = 6; SWPHideWindow* = 7;
+		HWNDTopMost* = -1;
 
 		(** clipboard formats *)
 		CFText* = 1; CFBitmap* = 2; CFMetafilePict* = 3; CFDIB* = 8; CFEnhMetafile* = 14; CFHDrop* = 15;
@@ -129,6 +139,9 @@ MODULE User32; (** non-portable / source: Win32.User32.Mod *)	(* ejz  *)
 		Color3DLight* = 22;
 		Color3DFace* = ColorBtnFace;
 		Color3DShadow* = ColorBtnShadow;
+
+		(** SystemParametersInfo *)
+		SPISetWorkArea* = 47; SPIGetWorkArea* =  48;
 
 	TYPE
 		(** handle types for different win and gdi objects *)
@@ -272,12 +285,16 @@ MODULE User32; (** non-portable / source: Win32.User32.Mod *)	(* ejz  *)
 		(** The CreateMenu function creates a menu. *)
 		CreateMenu-: PROCEDURE [WINAPI] (): HMenu;
 		(** The CreateWindow function creates an overlapped, pop-up, or child window. *)
-		CreateWindowEx-: PROCEDURE [WINAPI] (dwExStyle: LONGINT; lpClassName, lpWindowName: ARRAY [NOTAG] OF CHAR; dwStyle: SET; x, y, nWidth, nHeight: LONGINT; hWndParent: HWND; hMenu: HMenu; hInstance: Kernel32.HINSTANCE; lpParam: LONGINT): HWND;
+		CreateWindowEx-: PROCEDURE [WINAPI] (dwExStyle: SET; lpClassName, lpWindowName: ARRAY [NOTAG] OF CHAR; dwStyle: SET; x, y, nWidth, nHeight: LONGINT; hWndParent: HWND; hMenu: HMenu; hInstance: Kernel32.HINSTANCE; lpParam: LONGINT): HWND;
 		(** The DefWindowProc function calls the default window procedure to provide default processing for any window
 			messages that an application does not process. *)
 		DefWindowProc-: WndProc;
 		(** The DestroyAcceleratorTable function destroys an accelerator table. *)
 		DestroyAcceleratorTable-: PROCEDURE [WINAPI] (hAccel: HAccel): Kernel32.BOOL;
+		(** The DestroyCursor function destroys a cursor and frees any memory the cursor occupied. *)
+		DestroyCursor-: PROCEDURE [WINAPI] (hCursor: HCursor): Kernel32.BOOL;
+		(** The DestroyIcon function destroys an icon and frees any memory the icon occupied. *)
+		DestroyIcon-: PROCEDURE [WINAPI] (hIcon: HIcon): Kernel32.BOOL;
 		(** The DestroyMenu function destroys the specified menu and frees any memory that the menu occupies. *)
 		DestroyMenu-: PROCEDURE [WINAPI] (hMenu: HMenu): Kernel32.BOOL;
 		(** The DestroyWindow function destroys the specified window. *)
@@ -292,6 +309,9 @@ MODULE User32; (** non-portable / source: Win32.User32.Mod *)	(* ejz  *)
 		EnableWindow-: PROCEDURE [WINAPI] (hWnd: HWND; bEnable: Kernel32.BOOL): Kernel32.BOOL;
 		(** The EndPaint function marks the end of painting in the specified window. *)
 		EndPaint-: PROCEDURE [WINAPI] (hWnd: HWND; VAR lpPaint: PaintStruct): Kernel32.BOOL;
+		(** The EnumChildWindows function enumerates the child windows that belong to the specified parent window
+			by passing the handle to each child window, in turn, to an application-defined callback function. *)
+		EnumChildWindows-: PROCEDURE [WINAPI] (hWndParent: HWND; lpEnumFunc: WndEnumProc; lParam: LParam): Kernel32.BOOL;
 		(** The EnumWindows function enumerates all top-level windows on the screen by passing the handle to each
 			window, in turn, to an application-defined callback function. *)
 		EnumWindows-: PROCEDURE [WINAPI] (lpEnumProc: WndEnumProc; lParam: LParam): Kernel32.BOOL;
@@ -445,6 +465,9 @@ MODULE User32; (** non-portable / source: Win32.User32.Mod *)	(* ejz  *)
 		ShowWindowAsync-: PROCEDURE [WINAPI] (hWnd: HWND; nCmdShow: LONGINT): Kernel32.BOOL;
 		(** The TrackPopupMenu function displays a shortcut menu at the specified location and tracks the selection of
 			items on the menu. *)
+		(** The SystemParametersInfo function queries or sets systemwide parameters. This function can also
+			update the user profile while setting a parameter. *)
+		SystemParametersInfo-: PROCEDURE [WINAPI] (uiAction, uiParam, pvParam, fWinIni: LONGINT): Kernel32.BOOL;
 		TrackPopupMenu-: PROCEDURE [WINAPI] (hMenu: HMenu; uFlags: SET; x, y, nReserved: LONGINT; hWnd: HWND; prcRect: Rect): Kernel32.BOOL;
 		(** The TranslateAccelerator function processes accelerator keys for menu commands. *)
 		TranslateAccelerator-: PROCEDURE [WINAPI] (hWnd: HWND; hAccTable: HAccel; VAR lpMsg: Msg): LONGINT;

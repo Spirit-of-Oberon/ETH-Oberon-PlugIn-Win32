@@ -12,6 +12,7 @@ MODULE WinFonts; (** non-portable / source: Win32.WinFonts.Mod *)	(* ejz  *)
 		CacheSize = 8;
 
 	TYPE
+		Bytes = POINTER TO ARRAY OF CHAR;
 		GetDCProc* = PROCEDURE (class: ARRAY OF CHAR): User32.HDC;
 		RunRec = RECORD beg, end: INTEGER END;
 		BoxRec = RECORD dx, x, y, w, h: INTEGER END;
@@ -72,7 +73,7 @@ MODULE WinFonts; (** non-portable / source: Win32.WinFonts.Mod *)	(* ejz  *)
 		IF size <= 0 THEN
 			size := DefFontSize
 		END;
-		IF (class # "Scn") & ~((((class[0] = "P") & (class[1] = "r")) OR ((class[0] = "M") & (class[1] = "d"))) & ((class[2] >= "0") & (class[2] <= "9"))) THEN
+		IF (class # "Scn") & (class[0] # "P") & (class[0] # "M") THEN
 			COPY("Scn", class)
 		END
 	END ParseName;
@@ -240,7 +241,7 @@ MODULE WinFonts; (** non-portable / source: Win32.WinFonts.Mod *)	(* ejz  *)
 
 	PROCEDURE LoadOberonRasterFile(VAR R: Files.Rider; F: Fonts.Font; font: Displays.RasterFont);
 		VAR
-			rasterBase: POINTER TO ARRAY OF SYSTEM.BYTE; hBitmap: GDI32.HBitmap;
+			rasterBase: Bytes; hBitmap: GDI32.HBitmap;
 			bitmapX, bitmapDX, bitmapW, bitmapH: LONGINT;
 			b, n, a, k, l, m, w, h: LONGINT;
 			nofBoxes: LONGINT;
@@ -376,11 +377,104 @@ SYSTEM.PUT(a + (h - 1 - (b DIV bitmapDX)) * bitmapW + (b MOD bitmapDX), GDI32.T[
 		END
 	END Finalize;
 
+	PROCEDURE ScalePattern(src, dest: Bytes; VAR spat, dpat: Displays.PatternDesc; sw, dw, scale: LONGINT);
+		VAR s, d, x, y, w, i, j, k: LONGINT; bits: SET;
+	BEGIN
+		ASSERT((scale >= 2) & (scale <= 4));
+		y := 0;
+		WHILE y < spat.h DO
+			s := SYSTEM.ADR(src[0]) + y*sw + (spat.x + 7) DIV 8;
+			d := SYSTEM.ADR(dest[0]) + y*scale*dw + (dpat.x + 7) DIV 8;
+			x := 0; w := (spat.w + 7) DIV 8;
+			WHILE x < w DO
+				bits := SYSTEM.VAL(SET, SYSTEM.GET8(s));
+				i := 7;
+				WHILE i >= 0 DO
+					j := 0;
+					WHILE j < scale DO
+						IF i IN bits THEN
+							INCL(bits, scale*i + j)
+						ELSE
+							EXCL(bits, scale*i + j)
+						END;
+						INC(j)
+					END;
+					DEC(i)
+				END;
+				j := 0;
+				WHILE j < scale DO
+					k := 0;
+					WHILE k < scale DO
+						SYSTEM.PUT8(d+j*dw+scale-k-1, SYSTEM.GET8(SYSTEM.ADR(bits)+k));
+						INC(k)
+					END;
+					INC(j)
+				END;
+				INC(s); INC(d, scale); INC(x)
+			END;
+			INC(y)
+		END
+	END ScalePattern;
+
+	PROCEDURE Scale(F1, F2: Fonts.Font; scale: INTEGER);
+		VAR
+			font1, font2: Displays.RasterFont; i, w1, w2, h1, h2, dx: LONGINT;
+			bits1, bits2: Bytes; hBitmap: GDI32.HBitmap;
+	BEGIN
+		font1 := SYSTEM.VAL(Displays.RasterFont, F1.ind);
+		NEW(font2); F2.ind := SYSTEM.VAL(Objects.Index, font2);
+		font2.hFont := Kernel32.NULL;
+		F2.GetObj := GetRasterCharObj;
+		F2.type := F1.type; F2.height := scale*F1.height;
+		F2.minX := scale*F1.minX; F2.maxX := scale*F1.maxX;
+		F2.minY := scale*F1.minY; F2.maxY := scale*F1.maxY;
+		COPY(font1.family, font2.family);
+		font2.size := font1.size; font2.style := font1.style;
+		font2.height := F2.height;
+		font2.minX:= F2.minX; font2.maxX := F2.maxX;
+		font2.minY := F2.minY; font2.maxY := F2.maxY;
+		i := 0; w1 := 0; w2 := 0;
+		WHILE i < 256 DO
+			font2.metrics[i].dx := scale*font1.metrics[i].dx;
+			font2.metrics[i].x := scale*font1.metrics[i].x;
+			font2.metrics[i].y := scale*font1.metrics[i].y;
+			font2.metrics[i].w := scale*font1.metrics[i].w;
+			font2.metrics[i].h := scale*font1.metrics[i].h;
+			INC(w1, (font1.metrics[i].w + 7) DIV 8);
+			INC(w2, (font2.metrics[i].w + 7) DIV 8);
+			INC(i)
+		END;
+		w1 := w1 + (-w1) MOD 4; h1 := F1.maxY - F1.minY;
+		w2 := w2 + (-w2) MOD 4; h2 := F2.maxY - F2.minY;
+		NEW(bits1, w1 * h1); (* temporary *)
+		i := GDI32.GetBitmapBits(font1.patterns[0].hBm, w1 * h1, SYSTEM.ADR(bits1[0]));
+		NEW(bits2, w2 * h2); (* temporary *)
+		i := 0; dx := 0;
+		WHILE i < 256 DO
+			font2.patterns[i].next := NIL;
+			font2.patterns[i].x := dx; font2.patterns[i].y := 0;
+			font2.patterns[i].w := scale*font1.patterns[i].w;
+			font2.patterns[i].h := scale*font1.patterns[i].h;
+			ScalePattern(bits1, bits2, font1.patterns[i], font2.patterns[i], w1, w2, scale);
+			INC(dx, 8*((font2.patterns[i].w + 7) DIV 8));
+			INC(i)
+		END;
+		hBitmap := GDI32.CreateBitmap(8*w2, h2, 1, 1, bits2^);
+		ASSERT(hBitmap # Kernel32.NULL);
+		i := 0;
+		WHILE i < 256 DO
+			font2.patterns[i].hBm := hBitmap;
+			INC(i)
+		END;
+		Kernel.RegisterObject(F2, Finalize, FALSE);
+		Displays.RegisterFont(font2)
+	END Scale;
+
 	PROCEDURE *OpenFont(F: Objects.Library);
 		VAR
 			tmp: FileDir.FileName; family, alias: ARRAY 64 OF CHAR;
-			font: Displays.Font; rfont: Displays.RasterFont; size, i: LONGINT; style: SET;
-			f: Files.File; R: Files.Rider; id: CHAR;
+			font: Displays.Font; rfont: Displays.RasterFont; size, u, v, i: LONGINT; style: SET;
+			f: Files.File; R: Files.Rider; id: CHAR; F0: Fonts.Font;
 		PROCEDURE Substitute(F: Fonts.Font);
 		BEGIN
 			(* F.type := Fonts.substitute;
@@ -405,12 +499,13 @@ SYSTEM.PUT(a + (h - 1 - (b DIV bitmapDX)) * bitmapW + (b MOD bitmapDX), GDI32.T[
 			END;
 			BuildName(F.name, family, size, style, class);
 			F.type := Fonts.font; f := Files.Old(F.name);
-			IF (class[0] = "M") & (class[1] = "d") THEN
+			IF class[0] = "M" THEN
 				F.type := Fonts.metric; getDC := printerDC;
-				class[0] := "P"; class[1] := "r";
+				class[0] := "P";
+				IF class[1] = "d" THEN class[1] := "r" END;
 				BuildName(tmp, family, size, style, class);
 				f := Files.Old(tmp)
-			ELSIF (class[0] = "P") & (class[1] = "r") THEN
+			ELSIF class[0] = "P" THEN
 				getDC := printerDC
 			ELSE (* Scn *)
 				getDC := displayDC
@@ -435,12 +530,43 @@ SYSTEM.PUT(a + (h - 1 - (b DIV bitmapDX)) * bitmapW + (b MOD bitmapDX), GDI32.T[
 				LoadTrueTypeFont(F, font, family, alias, size, style, class)
 			END;
 			IF F.type = -2 THEN
+				IF (class[0] = "P") OR (class[0] = "M") THEN
+					COPY(class, alias); alias[0] := "P";
+					u := 100 * (ORD(alias[2])-ORD("0"));
+					IF (class[1] >= "1") & (class[1] <= "9") THEN
+						u := u + 1000 * (ORD(alias[1])-ORD("0"))
+					END;
+					i := 2;
+					WHILE (u DIV i) >= 100 DO
+						IF (u MOD i) = 0 THEN
+							v := u DIV i;
+							IF v >= 1000 THEN
+								alias[1] := CHR(ORD("0") + ((v+500) DIV 1000) MOD 10)
+							ELSE
+								alias[1] := "r"
+							END;
+							alias[2] := CHR(ORD("0") + ((v+50) DIV 100) MOD 10);
+							BuildName(tmp, family, size, style, alias);
+							f := Files.Old(tmp);
+							IF f # NIL THEN
+								F0 := Fonts.This(tmp);
+								IF F0.type IN {Fonts.font, Fonts.metric} THEN
+									font := SYSTEM.VAL(Displays.Font, F0.ind);
+									IF font IS Displays.RasterFont THEN
+										Scale(F0, F, SHORT(i)); RETURN
+									END
+								END
+							END
+						END;
+						INC(i)
+					END
+				END;
 				Substitute(F)
 			ELSIF F.type # Fonts.substitute THEN
 				Kernel.RegisterObject(F, Finalize, FALSE);
 				font.height := F.height;
 				font.minX:= F.minX; font.maxX := F.maxX;
-				font.minY := F.minY;font.maxY := F.maxY;
+				font.minY := F.minY; font.maxY := F.maxY;
 				Displays.RegisterFont(font)
 			END
 		END
@@ -462,6 +588,8 @@ SYSTEM.PUT(a + (h - 1 - (b DIV bitmapDX)) * bitmapW + (b MOD bitmapDX), GDI32.T[
 		hDC := GDI32.CreateDC("DISPLAY", NIL, NIL, NIL);
 		IF ((class[0] = "P") & (class[1] = "r")) OR ((class[0] = "M") & (class[1] = "d")) THEN
 			unit := 100 * (ORD(class[2])-ORD("0"))
+		ELSIF (class[0] = "P") OR (class[0] = "M") THEN
+			unit := 1000 * (ORD(class[1])-ORD("0")) + 100 * (ORD(class[2])-ORD("0"))
 		ELSE (* Scn *)
 			unit := GDI32.GetDeviceCaps(hDC, GDI32.LogPixelsY)
 		END;

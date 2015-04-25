@@ -1,4 +1,4 @@
-﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+﻿(* ETH Oberon, Copyright 2001 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
 Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE Rembrandt;	(** portable / source: Win32.Rembrandt.Mod *)
@@ -505,16 +505,16 @@ BEGIN
 		IF sy>y+h THEN
 			IF sy-(y+h) < pich*F.zoom THEN
 				pich:= pich-(sy-(y+h)) DIV F.zoom;
-				sy:=y+h; 
+				sy:=y+h
 			ELSE
 				pich:=0
-			END;
+			END
 		END;
 		IF sy-pich*F.zoom<y THEN
 			dh:= (y-(sy-pich*F.zoom)) DIV F.zoom;
 			picy:= picy+dh;
 			pich:=pich-dh
-		END;
+		END
 	END;
 	IF (picw>0) & (pich>0) THEN
 D3.StretchedPict(Q, p, picx, picy, picw, pich, sx, sy-(pich-1)*F.zoom-F.zoom, picw*F.zoom, pich*F.zoom, Display.replace);
@@ -528,9 +528,9 @@ D3.StretchedPict(Q, p, picx, picy, picw, pich, sx, sy-(pich-1)*F.zoom-F.zoom, pi
 				IF px>(picx+picw) THEN px:= picx+picw END;
 				D3.ReplConst(Q, col, sx+(px0-ox)*F.zoom, dy, (px-px0)*F.zoom, F.zoom, Display.replace)
 			END;
-			DEC(py);
+			DEC(py)
 		END;*)
-		IF F.grid THEN DrawGrid(F, Q, x, y, w, h, picx, picy, picw, pich) END;
+		IF F.grid THEN DrawGrid(F, Q, x, y, w, h, picx, picy, picw, pich) END
 	END
 END DisplayBlock;
 

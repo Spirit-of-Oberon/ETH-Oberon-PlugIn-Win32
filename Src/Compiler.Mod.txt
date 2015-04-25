@@ -1,10 +1,9 @@
-﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+﻿(* ETH Oberon, Copyright 2001 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
 Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE Compiler;	(** portable, except where noted *)
 	IMPORT
-		OPP, OPB, OPV, OPT, OPS, OPC, OPL, OPO, OPM,
-		Modules, Display, Oberon, Texts;
+		OPP, OPB, OPV, OPT, OPS, OPC, OPL, OPO, OPM, Modules, Display, Oberon, Texts;
 	
 	CONST
 		NoBreakPC = -1;
@@ -77,33 +76,33 @@ MODULE Compiler;	(** portable, except where noted *)
 		END
 	END GetBreakPC;
 	
-	PROCEDURE ParseOptions(VAR name, options, path, pref, extension: ARRAY OF CHAR;  VAR opt: SET);
+	PROCEDURE ParseOptions(VAR name, options, path, pref, extension: ARRAY OF CHAR;  VAR codeOpt, parserOpt: SET);
 	VAR i, j, k: LONGINT;  ch: CHAR;
 	BEGIN
-		opt := OPM.DefOpt; i := 0; path[0] := 0X; pref[0] := 0X;
-		IF Modules.extension = ".Obx" THEN  INCL(opt, OPM.aos)  END;
+		codeOpt := OPM.DefaultCodeOpt; parserOpt := OPM.DefaultParserOpt;
+		i := 0; path[0] := 0X; pref[0] := 0X;
 		COPY(Modules.extension, extension);
 		LOOP
 			ch := options[i]; INC(i);
 			IF ch = 0X THEN EXIT
-			ELSIF ch = "x" THEN opt := opt / {OPM.inxchk}
-			ELSIF ch = "v" THEN opt := opt / {OPM.ovflchk}
-			ELSIF ch = "t" THEN opt := opt / {OPM.typchk}
-			ELSIF ch = "s" THEN opt := opt / {OPM.newsf}
-			ELSIF ch = "p" THEN opt := opt / {OPM.ptrinit}
-			ELSIF ch = "a" THEN opt := opt / {OPM.assert}
-			ELSIF ch = "S" THEN opt := opt / {OPM.systemchk}
-			ELSIF ch = "n" THEN opt := opt / {OPM.nofiles}
-			ELSIF ch = "e" THEN opt := opt / {OPM.extsf}
-			ELSIF ch = "f" THEN opt := opt / {OPM.findpc}
-			ELSIF ch = "w" THEN opt := opt / {OPM.warning}
-			ELSIF ch = "X" THEN opt := opt + {OPM.prefix}
-			ELSIF ch = "2" THEN opt := opt / {OPM.oberon2}
-			ELSIF ch = "z" THEN opt := opt / {OPM.fullstackinit}
-			ELSIF ch = "1" THEN opt := opt / {OPM.oberon1}
-			ELSIF ch = "q" THEN opt := opt / {OPM.trace}
-			ELSIF ch = "A" THEN opt := opt + {OPM.aos}
-			ELSIF ch = "E" THEN opt := opt - {OPM.aos}
+			ELSIF ch = "x" THEN codeOpt := codeOpt / {OPM.inxchk}
+			ELSIF ch = "v" THEN codeOpt := codeOpt / {OPM.ovflchk}
+			ELSIF ch = "t" THEN codeOpt := codeOpt / {OPM.typchk}
+			ELSIF ch = "p" THEN codeOpt := codeOpt / {OPM.ptrinit}
+			ELSIF ch = "a" THEN codeOpt := codeOpt / {OPM.assert}
+			ELSIF ch = "z" THEN codeOpt := codeOpt / {OPM.fullstackinit}
+			ELSIF ch = "q" THEN codeOpt := codeOpt / {OPM.trace}
+
+			ELSIF ch = "s" THEN parserOpt := parserOpt / {OPM.newsf}
+			ELSIF ch = "S" THEN parserOpt := parserOpt / {OPM.systemchk}
+			ELSIF ch = "n" THEN parserOpt := parserOpt / {OPM.nofiles}
+			ELSIF ch = "e" THEN parserOpt := parserOpt / {OPM.extsf}
+			ELSIF ch = "f" THEN parserOpt := parserOpt / {OPM.findpc}
+			ELSIF ch = "w" THEN parserOpt := parserOpt / {OPM.warning}
+			ELSIF ch = "X" THEN parserOpt := parserOpt + {OPM.prefix}
+			ELSIF ch = "2" THEN parserOpt := parserOpt / {OPM.oberon2}
+			ELSIF ch = "1" THEN parserOpt := parserOpt / {OPM.oberon1}
+			ELSIF ch = "T" THEN parserOpt := parserOpt / {OPM.traceprocs}	(* temp *)
 			ELSIF ch = "." THEN
 				j := 0;
 				WHILE (ch # 0X) & (ch # " ") DO
@@ -129,7 +128,7 @@ MODULE Compiler;	(** portable, except where noted *)
 				pref[k] := 0X
 			END
 		END;
-		IF OPM.prefix IN opt THEN
+		IF OPM.prefix IN parserOpt THEN
 			i := -1; REPEAT INC(i); pref[i] := name[i] UNTIL (name[i] = 0X) OR (name[i] = ".");
 			IF name[i] # "." THEN i := 0 ELSE INC(i) END;
 			pref[i] := 0X
@@ -140,7 +139,7 @@ MODULE Compiler;	(** portable, except where noted *)
 	VAR sym: SHORTINT;
 	BEGIN
 		Texts.WriteString(W, " compiling ");
-		OPM.Init({}, source, log); OPS.Get(sym);
+		OPM.Init({}, {}, source, log); OPS.Get(sym);
 		IF sym = module THEN
 			OPS.Get(sym);
 			IF sym = ident THEN
@@ -168,13 +167,13 @@ MODULE Compiler;	(** portable, except where noted *)
 	
 	PROCEDURE Module*(source: Texts.Reader; name, options: ARRAY OF CHAR; breakpc: LONGINT;
 			log: Texts.Text; VAR error: BOOLEAN);
-		VAR opt: SET; extSF, newSF: BOOLEAN; p: OPT.Node; modName: OPS.Name;
+		VAR codeOpt, parserOpt: SET; extSF, newSF: BOOLEAN; p: OPT.Node; modName: OPS.Name;
 	BEGIN
-		ParseOptions(name, options, OPM.outputPath, OPM.outputPrefix, OPM.extension, opt);
+		ParseOptions(name, options, OPM.outputPath, OPM.outputPrefix, OPM.extension, codeOpt, parserOpt);
 		WriteMsg(source, log);
-		OPM.Init(opt, source, log); OPS.ch := " ";
-		OPB.typSize := OPV.TypSize; OPV.Init(opt, breakpc);
-		newSF := OPM.newsf IN opt; extSF := OPM.extsf IN opt;
+		OPM.Init(codeOpt, parserOpt, source, log); OPS.ch := " ";
+		OPB.typSize := OPV.TypSize; OPV.Init(breakpc);
+		newSF := OPM.newsf IN parserOpt; extSF := OPM.extsf IN parserOpt;
 		OPP.Module(p, modName);
 		IF OPM.noerr THEN
 			OPL.Init;
@@ -290,9 +289,3 @@ Compiler.Compile *
 Compiler.Compile *\s
 Compiler.Compile \.Obx Test.Mod Test.Mod\.Obf Test.Mod ~
 Compiler.Compile @
-
-(*
-	06.04.01	prk	CompileFile exported
-	30.03.01	prk	option constants moved to OPM
-	30.03.01	prk	\A \E option for aos, different objfile version
-*)

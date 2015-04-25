@@ -20,6 +20,7 @@ This makes it possible to use multiple logical displays. Where a display is eith
 		execute* = 12;	(** request to execute a command *)
 		quit* = 13;	(** notification, that the Event service is shutdown *)
 		ping* = 14;	(** checks whether the event dispatcher (Oberon.Loop) is running *)
+		wheel* = 15;	(** mouse wheel *)
 	
 	TYPE
 		(** character metric data *) 
@@ -64,9 +65,11 @@ This makes it possible to use multiple logical displays. Where a display is eith
 			next: Event
 		END;
 
-		InputEvent* = POINTER TO RECORD (Event)	(** id: consume, track *)
-			keys*: SET;	(** mouse buttons, numbered from the right to the left as 0, 1, 2 *)
+		InputEvent* = POINTER TO RECORD (Event)	(** id: consume, track, wheel *)
+			keys*: SET;	(** mouse buttons, numbered from the right to the left as 0, 1, 2
+									3: x-button, 31: wheel *)
 			X*, Y*: LONGINT;	(** mouse position (relative to display) *)
+			zDelta*: LONGINT;	(** wheel roation *)
 			ch*: CHAR	(** character typed *)
 		END;
 

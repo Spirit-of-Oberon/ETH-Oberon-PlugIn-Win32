@@ -1,7 +1,5 @@
-﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+﻿(* ETH Oberon, Copyright 2001 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
 Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
-
-(* Windows specific parts: Copyright (c) 1994 - 2000 Emil J. Zeller *)
 
 MODULE Display3; (** portable, except where noted / source: Win32.Display3.Mod *)	(** jm 17.1.95 / tk 7.12.95*)
 

@@ -1,4 +1,4 @@
-﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+﻿(* ETH Oberon, Copyright 2001 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
 Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE ListGadgets; (** portable *)	(* ps,  *)
@@ -538,7 +538,7 @@ BEGIN
 	IF dy # 0 THEN ScrollUpdate(F, Q, x, y, dy, dlink) END
 END Scroll;
 
-PROCEDURE ToggleLine (F: Frame; line: Line);
+PROCEDURE ToggleLine* (F: Frame; line: Line);
 VAR carL, L: Line; R: ListRiders.Rider; levs, n: INTEGER;
 BEGIN
 	IF line.hasSub THEN

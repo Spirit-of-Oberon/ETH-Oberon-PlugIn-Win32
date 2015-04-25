@@ -1,4 +1,4 @@
-﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+﻿(* ETH Oberon, Copyright 2001 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
 Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE PSPrinter; (** portable *)	(*UNIX version: JT 11.5.90, RC 2.7.93, JS 29.4.9, Windows version: jm 20.12.95 *)
@@ -7,6 +7,8 @@ MODULE PSPrinter; (** portable *)	(*UNIX version: JT 11.5.90, RC 2.7.93, JS 29.4
 		wdm 2000-02-21 duplex printing: uses option "x"
 		jm 20.12.95 EPS support added
 		ps 4.8.96 added border to page (left, right: 2cm / top, bottom: 1.5 cm)
+		ple 2004-04-29 one statement to send an EOT character, 4X, at the 
+		  end of a job.
 	*)
 
 	IMPORT Files, Modules, Printer, Objects, Fonts, Texts, Strings, Oberon, Pictures;
@@ -1118,6 +1120,8 @@ MODULE PSPrinter; (** portable *)	(*UNIX version: JT 11.5.90, RC 2.7.93, JS 29.4
 
 			Files.Set(srcR, bodyF, 0);
 			REPEAT Files.ReadBytes(srcR, buffer, bufSize); Files.WriteBytes(printR, buffer, bufSize-srcR.res) UNTIL srcR.eof;
+			(* End-of-file signal for a LaserJet III with an HP PostScript cartidge. *) 
+            IF ~P.eps THEN Files.Write(printR, 4X) END;  (* ple *)
 			IF ~P.anonymous THEN Files.Register(P.printF) END;
 			P.res := Printer.res;
 

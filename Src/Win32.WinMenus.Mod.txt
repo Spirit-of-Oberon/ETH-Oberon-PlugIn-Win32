@@ -517,10 +517,17 @@ MODULE WinMenus; (** non-portable / source: Win32.Plug.WinMenus.Mod *)	(* ejz  *
 	PROCEDURE ShowDialog*(dialog: Dialog; block: BOOLEAN);
 	BEGIN
 		IF dialog.owner = NIL THEN
+		(*
 			IF block & (dialog.owner = NIL) THEN
 				Invoke(dialog, Displays.desktop); RETURN
 			ELSIF (Display.cur # NIL) & (Display.cur IS Windows.Window) THEN
 				dialog.owner := Display.cur(Windows.Window)
+			END
+		*)
+			IF (Display.cur # NIL) & (Display.cur IS Windows.Window) THEN
+				dialog.owner := Display.cur(Windows.Window)
+			ELSIF block & (dialog.owner = NIL) THEN
+				Invoke(dialog, Displays.desktop); RETURN
 			END
 		END;
 		IF block THEN
@@ -958,7 +965,7 @@ BEGIN
 	AppendItem(subSubMenu, "Flip", "EditTools.FlipCase")
 END TextFormat;
 
-(** Create the stanard menus for:
+(** Create the standard menus for:
 	TextDocs.NewDoc, TextDocs.NewLog, PanelDocs.NewDoc, RembrandtDocs.NewDoc,
 	Columbus.NewDoc, Watson.NewDoc, Compress.NewDoc, TelnetGadgets.NewDoc,
 	HTMLDocs, ContextMenu *)
@@ -1073,6 +1080,7 @@ BEGIN
 	B.lib := L; menu.handle(menu, B);
 	Gadgets.NameObj(subMenu, "DropMenu");
 	Objects.PutName(L.dict, subMenu.ref, "DropMenu");
+
 	Objects.StoreLibrary(L, F, 0, len);
 	Files.Register(F)
 END CreateStdMenus;

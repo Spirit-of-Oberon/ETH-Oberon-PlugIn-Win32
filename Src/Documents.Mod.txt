@@ -1,4 +1,4 @@
-﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+﻿(* ETH Oberon, Copyright 2001 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
 Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE Documents; (** portable *)	(** jm 18.1.95 *)
@@ -30,6 +30,7 @@ MODULE Documents; (** portable *)	(** jm 18.1.95 *)
 IMPORT Texts, Objects, Display, Attributes, Links, Gadgets, Modules, Files, Display3, Effects, Oberon, Fonts, Strings, Out;
 	
 CONST
+	AllowSelect = FALSE;
 	MaxDocTypes = 48;
 
 TYPE
@@ -512,12 +513,12 @@ BEGIN
 						WITH M: Oberon.InputMsg DO
 							IF (M.id = Oberon.track) & ~(Gadgets.selected IN F.state) THEN
 								IF ~Gadgets.InActiveArea(F, M) THEN
-									IF M.keys = {0} THEN HandleSelect(F, M) 
+									IF AllowSelect & (M.keys = {0}) THEN HandleSelect(F, M) 
 									ELSE Gadgets.framehandle(F, M)
 									END
 								ELSE
 									ToMain(F, M.x, M.y, M);
-									IF (M.res < 0) & (M.keys = {0}) THEN HandleSelect(F, M) END;
+									IF AllowSelect & (M.res < 0) & (M.keys = {0}) THEN HandleSelect(F, M) END;
 									IF (M.res < 0) & ~Gadgets.InActiveArea(F, M) THEN Gadgets.framehandle(F, M) END
 								END
 							ELSIF ~(Gadgets.selected IN F.state) THEN ToMain(F, M.x, M.y, M)
@@ -762,7 +763,7 @@ All documents are provided with a standard header on disk so that they can be re
 The document header is followed by the byte stream content of the document. DocumentGeneratorProcedure is called by Documents.Open to create an empty instance of the document gadget, which is then filled by a call to the Load method (as described above). To provide compatibility with the non-Oberon world that does not use such an identification header, an internal table of the Documents module pairs file extensions with document generator procedures. Should no document header be present, the file extension is used to file the (hopefully) correct document generator. The Load method of this document must then load the headerless file. It is allowed (but not recommended) to store a document without a header, should the extension table be set up correctly. The extension table can be extended by adding an entry to the Documents section of the Oberon registry. Eeach entry is a "Extension=Generator" pair.
 
 3. Menus
-Each document requires a menu bar with commands associated with the document type when opened with Desktops.OpenDoc. This menubar is gathered from the links "SystemMenu", "UserMenu" and "DeskMenu" provided by the document when the Desktops.OpenDoc command is executed. The menu can be constructed with the procedure Dekstops.NewMenu or can be taken from a public library. The string given as parameter to procedure NewMenu must contain a sequence of Oberon commands. By immediately following a menu command with a word in square brackets, that word will be used as the menu bar button caption. A typical menu string might look as follows:
+Each document requires a menu bar with commands associated with the document type when opened with Desktops.OpenDoc. This menubar is gathered from the links "SystemMenu", "UserMenu" and "DeskMenu" provided by the document when the Desktops.OpenDoc command is executed. The menu can be constructed with the procedure Desktops.NewMenu or can be taken from a public library. The string given as parameter to procedure NewMenu must contain a sequence of Oberon commands. By immediately following a menu command with a word in square brackets, that word will be used as the menu bar button caption. A typical menu string might look as follows:
 
 	"MyDoc.Search[Search] MyDoc.Save[Store]"
 	

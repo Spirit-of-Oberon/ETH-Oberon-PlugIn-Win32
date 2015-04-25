@@ -1,4 +1,4 @@
-﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+﻿(* ETH Oberon, Copyright 2001 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
 Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE Styles; (** portable *)	(* RS, Wed, 9-Jun-1993 *)
@@ -245,7 +245,7 @@ MODULE Styles; (** portable *)	(* RS, Wed, 9-Jun-1993 *)
 			Files.Read(R, style.nTabs);
 			i := 0; WHILE i < style.nTabs DO Files.ReadNum(R, style.tab[i]); INC(i) END;
 			WHILE i < MaxTabs DO style.tab[i] := 0; INC(i) END;
-		ELSE HALT(33)
+		ELSE HALT(99)
 		END
 	END ReadData;
 

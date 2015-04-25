@@ -1,4 +1,5 @@
-﻿(* Copyright (c) 1994 - 2000 Emil J. Zeller *)
+﻿(* ETH Oberon, Copyright 2001 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE Input; (** portable, except where noted / source: Win32.Input.Mod *)	(* ejz  *)
 	IMPORT SYSTEM, Kernel32, User32, Displays, Display, Viewers;
@@ -6,10 +7,8 @@ MODULE Input; (** portable, except where noted / source: Win32.Input.Mod *)	(* e
 (** Module Input is responsible for event timing, mouse and keyboard input. *)
 
 	CONST
+		TimeUnit* = 1000;	(** timer ticks per second (platform dependent). *)
 		SHIFT* = 0; CTRL* = 1; ALT* = 2; (** constants for KeyState *)
-
-	VAR
-		TimeUnit*: LONGINT; (** timer ticks per second (platform dependent). *)
 
 	(** Returns the number of keystrokes in the keyboard input buffer. *)
 	PROCEDURE Available*(): INTEGER;
@@ -65,11 +64,9 @@ MODULE Input; (** portable, except where noted / source: Win32.Input.Mod *)	(* e
 		RETURN Kernel32.GetTickCount()
 	END Time;
 
-BEGIN
-	TimeUnit := 1000
 END Input.
 
-(** Remark:
+(** Remarks:
 
 Keyboard character codes correspond to the ASCII character set. Some other important codes are:
 

@@ -65,12 +65,12 @@ MODULE Watson;	(** portable *)	(** PS/tk  *)
 
 		(* symbol values *)
 		times = 0; and = 1; plus = 2; minus = 3; eql = 4; arrow = 5; 
-		period = 6; comma = 7; colon = 8; upto = 9; rparen = 10; rbrak = 11; 
-		of = 12; to = 13; lparen = 14; lbrak = 15; lbrace = 16; becomes = 17; 
-		number = 18; string = 19; ident = 20; assert = 21; semicolon = 22; end = 23; 
-		if = 24; case = 25; while = 26; for = 27; loop = 28; with = 29; 
-		array = 30; object = 31; record = 32; pointer = 33; begin = 34; code = 35; const = 36; 
-		type = 37; var = 38; proc = 39; import = 40; module = 41; eot = 42; 
+		period = 6; comma = 7; colon = 8; upto = 9; rparen = 10; rbrak = 11; rbrace = 12;
+		of = 13; to = 14; lparen = 15; lbrak = 16; lbrace = 17; becomes = 18; 
+		number = 19; string = 20; ident = 21; assert = 22; semicolon = 23; end = 24; 
+		if = 25; case = 26; while = 27; for = 28; loop = 29; with = 30; 
+		array = 31; object = 32; record = 33; pointer = 34; begin = 35; code = 36; const = 37; 
+		type = 38; var = 39; proc = 40; import = 41; module = 42; eot = 43; 
 		none = 99;
 		
 		(* visibility of objects *)
@@ -583,7 +583,8 @@ MODULE Watson;	(** portable *)	(** PS/tk  *)
 			ELSIF (name = "LEN") OR (name = "SIZE") OR (name = "CHR") THEN Str(name); RETURN
 			ELSIF (name = "LONG") OR (name = "SHORT") OR (name = "ENTIER") THEN Str(name); RETURN
 			ELSIF (name = "c") OR (name = "winapi") OR (name = "notag") OR (name = "untraced") THEN Str(name); RETURN
-			(*ELSIF (name = "PTR") THEN Str(name); RETURN*)
+			ELSIF (name = "PTR") THEN Str(name); RETURN
+			ELSIF (name = "HUGEINT") THEN Str(name); RETURN
 			ELSE obj:= FindIdent(name);
 				(* check whether object is exported or not *)
 				IF (obj = NIL) THEN (* exported => write control *) SetColor(LinkCol); Str(name); Control("", GotoCmd, name)
@@ -737,6 +738,7 @@ MODULE Watson;	(** portable *)	(** PS/tk  *)
 				| "("  : IF ch = "*" THEN GetCh; Comment(oLine) ELSE s:= lparen END
 				| ")" : s:= rparen
 				| "{" : s:= lbrace
+				| "}" : s:= rbrace
 				| "*" : s :=  times
 				| "-" : s:= minus
 				| "+" : s:= plus
@@ -894,6 +896,10 @@ MODULE Watson;	(** portable *)	(** PS/tk  *)
 			Sym;
 			IF  sym = ident  THEN  COPY(id, flag); Sym  ELSE  err(ident)  END;
 			CheckSym(rbrak)
+		ELSIF sym = lbrace THEN
+			Sym;
+			IF  sym = ident  THEN  COPY(id, flag); Sym  ELSE  err(ident)  END;
+			CheckSym(rbrace)
 		END;
 		COPY(tmp, id)
 	END SysFlags;
@@ -932,7 +938,7 @@ MODULE Watson;	(** portable *)	(** PS/tk  *)
 				Sym; Char(",")
 			END	(* LOOP *)
 		END;
-		Sym; Str("OF "); ShowType(TRUE) 
+		Sym; Str("OF "); ShowType(TRUE)
 	END ArrayType;
 
 	PROCEDURE PointerType;	(* parses and writes a pointer type *)
@@ -1007,7 +1013,7 @@ MODULE Watson;	(** portable *)	(** PS/tk  *)
 		ELSIF sym = proc THEN Str("PROCEDURE");
 			Sym;
 			SysFlags(flag);
-			IF flag # "" THEN  Str(" ["); Str(flag); Str("]")  END;
+			IF flag # "" THEN  Str(" {"); Str(flag); Str("}")  END;
 			IF sym = lparen THEN Sym; FormalParameters(TRUE) END
 		ELSE err(errType)
 		END;
@@ -1078,12 +1084,11 @@ MODULE Watson;	(** portable *)	(** PS/tk  *)
 		WHILE sym = ident DO isVis:= FALSE;
 			LOOP	(* parse ident list *)
 				IF sym = ident THEN newL:= newL OR newLine;
-					Sym;
-					CheckMark(vis);
+					Sym; CheckMark(vis);
 					SysFlags(flag);
 					IF vis > internal THEN
 						IF first THEN first:= FALSE;
-							IF writeVar THEN Keywords(cmnt, "VAR", needsLn & (recLevel <= 0), TRUE) END;
+							IF writeVar THEN Keywords(cmnt, "VAR ", needsLn & (recLevel <= 0), TRUE) END;
 							newL:= TRUE
 						ELSIF isVis THEN Keywords(cmnt, ",", FALSE, FALSE)
 						END;
@@ -1987,8 +1992,3 @@ BEGIN
 	Texts.OpenWriter(W); italic:= Fonts.This("Oberon10i.Scn.Fnt");
 	GetPublicObjects
 END Watson.
-
-(*
-	30.03.01	prk	implemented StatementBlocks in parser
-	30.03.01	prk	handle ASSERT not followed by semicolon (e.g. ASSERT(x)  END )
-*)

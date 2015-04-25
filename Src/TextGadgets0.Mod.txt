@@ -1,4 +1,4 @@
-﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+﻿(* ETH Oberon, Copyright 2001 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
 Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE TextGadgets0; (** portable *)	(* jm 19.1.95 *)
@@ -57,12 +57,14 @@ MODULE TextGadgets0; (** portable *)	(* jm 19.1.95 *)
 	5.5.97 - fixed problem with Display.ConsumeMsg / integrate
 	7.5.97 - scrolling to caret position when copy over / consume text strech
 	22.5.97 - fixed invertC (thanks mad)
+	17.5.01 - ctrl-left/right without selection goes to previous/next word (be)
+	19.6.2004 - variable linespacing, variable box descenders (ph)
 *)
 
 IMPORT Display, Display3, Printer3, Effects, Objects, Gadgets, Oberon, Input, Texts, Fonts, Modules, Files, Printer, Strings;
 
 CONST
-		Version = 4;
+		Version = 5;
 		eolW* = 5;		(** width of a carriage return *)
 		LArrow* = 0C4X; RArrow* = 0C3X;		(** keyboard codes for left/right arrow *)
 		(* Printer Page coordinates *)
@@ -163,6 +165,7 @@ TYPE
 		text*: Texts.Text;
 		org*, time*, frametime: LONGINT;
 		left*, right*, top*, bottom*: INTEGER;
+		linespacing*,asr*,dsr*,h*,boxdsr*:INTEGER;	(**used for formatting of lines in frame*)
 		trailer*: Line;
 		do*: Methods;
 		
@@ -315,9 +318,10 @@ END ToBoxes;
 PROCEDURE FindLine(F: Frame; y, Y: INTEGER; VAR org: LONGINT; VAR L: Line);
 BEGIN
 	L := NIL;
-	IF F.trailer # NIL THEN 
+	IF F.trailer # NIL THEN
 		L := F.trailer.next; org := F.org;
-		WHILE (L.next # F.trailer) & (Y < y + F.H - 1 + L.base - L.dsr) DO org := org + L.len; L := L.next; END
+		WHILE (L # NIL) & (L.next # F.trailer) & (Y < y + F.H - 1 + L.base - L.dsr) DO org := org + L.len; L := L.next END
+		(* gs workaround *)
 	END
 END FindLine;
 
@@ -1349,12 +1353,55 @@ VAR pos, hpos, flushpos, len: LONGINT; loc: Loc; L: Line; carX: INTEGER; setCarX
 		RETURN state * this = this
 	END KeyState;
 
+	PROCEDURE Delimiter(ch: CHAR): BOOLEAN;
+	BEGIN RETURN ~(((CAP(ch) >= "A") & (CAP(ch) <= "Z")) OR ((ch >= "0") & (ch <= "9")))
+	END Delimiter;
+
+	PROCEDURE FindPrevWordDelimiter(VAR pos: LONGINT);
+	VAR R: BackRd; ch: CHAR; SoL: LONGINT;
+	BEGIN
+		IF (pos > F.org) THEN
+			OpenBackRd(R, F.text, pos); SoL := F.carpos.org - 1;
+			Read(R, ch); DEC(pos);
+			IF Delimiter(ch) THEN
+				REPEAT Read(R, ch); DEC(pos) UNTIL  R.eot OR ~Delimiter(ch) OR (pos < SoL)
+			END;
+			IF ~R.eot THEN
+				IF  (pos >= SoL) THEN
+					REPEAT Read(R, ch); DEC(pos) UNTIL R.eot OR Delimiter(ch)
+				END;
+				INC(pos)
+			END
+		END
+	END FindPrevWordDelimiter;
+
+	PROCEDURE FindNextWordDelimiter(VAR pos: LONGINT);
+	VAR R: Texts.Reader; ch: CHAR; EoL: LONGINT;
+	BEGIN
+		Texts.OpenReader(R, F.text, pos); 
+		EoL := F.carpos.org + F.carpos.line.len-1;
+		IF (pos >= EoL) THEN EoL := EoL + F.carpos.line.next.len END; (* current pos @ end of line *)
+		REPEAT Texts.Read(R, ch); INC(pos)
+		UNTIL R.eot OR ~(R.lib IS Fonts.Font) OR Delimiter(ch) OR (pos >= EoL);
+		IF ~R.eot THEN
+			IF (pos < EoL) THEN
+				REPEAT Texts.Read(R, ch); INC(pos)
+				UNTIL R.eot OR ~(R.lib IS Fonts.Font) OR ~Delimiter(ch) OR (pos > EoL);
+				DEC(pos)
+			END
+		END
+	END FindNextWordDelimiter;
+
 BEGIN
 	pos := F.carpos.pos; flushpos := pos; len := 0; setCarX := FALSE;
 	LOOP
 		IF ch = LArrow THEN
 			IF F.sel & KeyState({Input.CTRL}) THEN
 				Left(F, 1); pos := F.selend.pos
+			ELSIF KeyState({Input.CTRL}) THEN
+				(* ctrl-left without selection: go one word left *)
+				Flush;
+				FindPrevWordDelimiter(pos)
 			ELSE
 				Flush;
 				IF pos > F.org THEN pos := pos - 1 END
@@ -1362,6 +1409,10 @@ BEGIN
 		ELSIF ch = RArrow THEN
 			IF F.sel & KeyState({Input.CTRL}) THEN
 				Right(F, 1); pos := F.selend.pos
+			ELSIF KeyState({Input.CTRL}) THEN
+				(* ctrl-right without selection: go one word right *)
+				Flush;
+				FindNextWordDelimiter(pos)
 			ELSE
 				INC(pos)
 			END
@@ -1910,6 +1961,7 @@ BEGIN Gadgets.CopyFrame(M, from, to); to.state0 := from.state0;
 	to.do := from.do; to.text := from.text; to.org := from.org; to.invertC := from.invertC;
 	to.left := from.left; to.right := from.right; to.top := from.top; to.bottom := from.bottom;
 	to.border := from.border; to.col := from.col;
+	to.linespacing := from.linespacing; to.asr := from.asr; to.dsr := from.dsr; to.h := from.h; to.boxdsr := from.boxdsr;
 	IF (deepcopy IN from.state0) OR (M.id = Objects.deep) THEN
 		NEW(to.text); Texts.Open(to.text, "");
 		IF from.text.len > 0 THEN
@@ -1926,6 +1978,7 @@ BEGIN
 	Files.WriteInt(M.R, F.left); Files.WriteInt(M.R, F.right); Files.WriteInt(M.R, F.bottom); Files.WriteInt(M.R, F.top);
 	Gadgets.WriteRef(M.R, F.lib, F.text);
 	Files.WriteInt(M.R, F.col);
+	Files.WriteInt(M.R,F.linespacing); Files.WriteInt(M.R,F.asr); Files.WriteInt(M.R,F.dsr); Files.WriteInt(M.R,F.h); Files.WriteInt(M.R,F.boxdsr); 
 	Gadgets.framehandle(F, M)
 END StoreFrame;
 
@@ -1933,7 +1986,7 @@ PROCEDURE LoadFrame(F: Frame; VAR M: Objects.FileMsg);
 VAR ver: LONGINT; obj: Objects.Object;
 BEGIN
 	Files.ReadNum(M.R, ver);
-	IF (ver # 3) & (ver # 4) THEN HALT(99) END;
+	IF (ver # 3) & (ver # 4) & (ver # 5) THEN HALT(99) END;
 	Files.ReadSet(M.R, F.state0); Files.ReadLInt(M.R, F.org);
 	Files.ReadInt(M.R, F.left); Files.ReadInt(M.R, F.right); Files.ReadInt(M.R, F.bottom); Files.ReadInt(M.R, F.top);
 	Gadgets.ReadRef(M.R, F.lib, obj);
@@ -1941,7 +1994,10 @@ BEGIN
 		F.text := obj(Texts.Text);
 		IF F.org > F.text.len THEN F.org := 0 END
 	END;
-	IF ver = 4 THEN Files.ReadInt(M.R, F.col) END;
+	IF ver IN {4,5} THEN Files.ReadInt(M.R, F.col) END;
+	IF ver = 5 THEN Files.ReadInt(M.R,F.linespacing); Files.ReadInt(M.R,F.asr); Files.ReadInt(M.R,F.dsr); Files.ReadInt(M.R,F.h);  Files.ReadInt(M.R,F.boxdsr);
+	ELSE F.linespacing:=120; F.asr:=10; F.dsr:=3; F.h:=13; F.boxdsr:=3;  (*old default values*)
+	END;
 	IF F.col < 0 THEN F.col := Display3.textbackC END;
 	Gadgets.framehandle(F, M)
 END LoadFrame;
@@ -2487,6 +2543,7 @@ END FrameHandler;
 PROCEDURE InitFrame*(F: Frame; T: Texts.Text);
 BEGIN
 	F.W := 100; F.H := 100; F.border := 2; F.left := 20; F.top := 4; F.right := 2; F.bottom := 4;
+	F.linespacing:=120; F.boxdsr:=3; F.asr:=10; F.dsr:=3; F.h:=13; F.boxdsr:=3; 	(*defaults*)
 	IF Display.Depth(0) = 1 THEN F.col := 0 ELSE F.col := Display3.textbackC END;
 	F.invertC := SHORT(Max(0, 15 - F.col));
 	IF (F.invertC = 0) OR (Display.TrueColor(0)) THEN F.invertC := Display3.invertC END;

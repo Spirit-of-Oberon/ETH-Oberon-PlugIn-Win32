@@ -1,7 +1,5 @@
-﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+﻿(* ETH Oberon, Copyright 2001 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
 Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
-
-(* Windows specific parts: Copyright (c) 1994 - 2000 Emil J. Zeller *)
 
 MODULE Desktops; (** portable / source: Win32.Desktops.Mod *)	(** , jm 1.2.95 *)
 
@@ -44,12 +42,15 @@ MODULE Desktops; (** portable / source: Win32.Desktops.Mod *)	(** , jm 1.2.95 *)
 
 IMPORT
 	Input, Objects, Display, Viewers, Oberon, Gadgets, Attributes, Files, Documents, Texts, Display3, Views, 
-	Printer, Printer3, Effects, Fonts, Pictures, Strings, Windows, Modules, Displays, FileDir, User32, SYSTEM;
+	Printer, Printer3, Effects, Fonts, Strings, Windows, Modules, Displays, FileDir, User32;
 
 CONST
+	AllowSelect = FALSE;
 	leftBorder = 0; frameColor = 12;
 	extend = Display.extend; reduce = Display.reduce;
 	AvoidLostViewer = TRUE;
+	PopupButton = FALSE;
+	CutoffWidth = 1000;
 
 TYPE
 	(** Viewer for displaying documents in a desktop. *)
@@ -301,7 +302,7 @@ VAR
 					IF M.id = Oberon.track THEN
 						IF (M.Y > V.Y + V.H - 5) & (Menu IS Dummy) & (2 IN M.keys) THEN Change(V, M.X, M.Y, M.keys)
 						ELSIF M.Y < V.Y + V.H - V.menuH THEN Main.handle(Main, M);
-							IF (M.res < 0) & (M.keys = {0}) & Effects.InBorder(M.X, M.Y, V.X, V.Y, V.W, V.H - V.menuH) THEN
+							IF AllowSelect & (M.res < 0) & (M.keys = {0}) & Effects.InBorder(M.X, M.Y, V.X, V.Y, V.W, V.H - V.menuH) THEN
 								DocViewerHandleSelect(V, M)
 							END
 						ELSIF M.Y < V.Y + V.H - 1 THEN
@@ -436,7 +437,7 @@ VAR
 						IF M.Y < V.Y + 1 THEN Oberon.DrawCursor(Oberon.Mouse, Effects.Arrow, M.X, M.Y)
 						ELSIF (M.Y > V.Y + V.H - 5) & (Menu IS Dummy) & (2 IN M.keys) THEN (*Change(V, M.X, M.Y, M.keys)*)
 						ELSIF M.Y < V.Y + V.H - V.menuH THEN Main.handle(Main, M);
-							IF (M.res < 0) & (M.keys = {0}) & Effects.InBorder(M.X, M.Y, V.X, V.Y, V.W, V.H - V.menuH) THEN
+							IF AllowSelect & (M.res < 0) & (M.keys = {0}) & Effects.InBorder(M.X, M.Y, V.X, V.Y, V.W, V.H - V.menuH) THEN
 								DocViewerHandleSelect(V, M)
 							END
 						ELSIF M.Y < V.Y + V.H - V.menuH DIV (* 3 * 2 *) 4 * 3 THEN Menu.handle(Menu, M)
@@ -809,7 +810,9 @@ VAR
 		(* Menu *)
 		L.obj := NIL; L.res := -1;
 		IF main # NIL THEN
-			L.id := Objects.get; L.name := "DeskMenu"; main.handle(main, L)
+		L.id := Objects.get;
+			IF F.W > Display.Width DIV 8 * 3 THEN L.name := "DeskMenu" ELSE L.name := "SystemMenu" END;
+			main.handle(main, L)
 		END; 
 		IF (L.obj # NIL) & (L.obj IS Gadgets.Frame) & (L.res >= 0) THEN obj := L.obj
 		ELSE
@@ -915,7 +918,7 @@ VAR
 				Gadgets.framehandle(F, M)
 			ELSE
 				ToMain(F, x, y, M);
-				IF (M.res < 0) & (M.keys = {0}) THEN HandleSelect(F, M) END;
+				IF AllowSelect & (M.res < 0) & (M.keys = {0}) THEN HandleSelect(F, M) END;
 				IF (M.res < 0) & ~Gadgets.InActiveArea(F, M) THEN Gadgets.framehandle(F, M) END
 			END
 		END
@@ -1140,7 +1143,7 @@ VAR
 	PROCEDURE NewMenu*(menubar: ARRAY OF CHAR): Display.Frame;
 		VAR
 			obj, list: Objects.Object; P, f: Gadgets.Frame; X, p: INTEGER; cmd, title: ARRAY 64 OF CHAR;
-			C: Display.ConsumeMsg; i: LONGINT;
+			C: Display.ConsumeMsg; i: LONGINT; havecopy: BOOLEAN;
 		PROCEDURE Button(caption, command: ARRAY OF CHAR);
 		BEGIN
 			obj := Gadgets.CreateObject("BasicGadgets.NewButton"); f := obj(Gadgets.Frame);
@@ -1196,7 +1199,7 @@ VAR
 			END
 		END GenTitle;
 	BEGIN
-		p := 1; list := NIL; X := 0;
+		p := 1; list := NIL; X := 0; havecopy := FALSE;
 		obj := Gadgets.CreateObject("Panels.NewPanel"); P := obj(Gadgets.Frame);
 		P.W := Display.Width; P.H := menuH;
 		(* PanelHandler := P.handle; (* cache *) (deactivated - ps) *)
@@ -1207,8 +1210,15 @@ VAR
 		f.slink := list; list := f;
 
 		Button("Close", "Desktops.CloseDoc");
-		Button("Hide", "Finder.Minimize");
-		Button("Grow", "Desktops.Grow");
+		IF PopupButton THEN obj := Gadgets.FindPublicObj("Desktops.DocButton") END;
+		IF PopupButton & (obj # NIL) THEN
+			obj := Gadgets.Clone(obj, TRUE);
+			f := obj(Gadgets.Frame); havecopy := TRUE;
+			f.X := X; f.Y := p; f.slink := list; list := f; INC(X, f.W)
+		ELSE
+			Button("Hide", "Finder.Minimize");
+			Button("Grow", "Desktops.Grow")
+		END;
 		i := 0;
 		WHILE menubar[i] # 0X DO
 			GetString(cmd);
@@ -1217,7 +1227,7 @@ VAR
 			ELSE
 				GenTitle(cmd, title)
 			END;
-		IF (cmd = "System.Close") OR (cmd = "System.Grow") THEN
+		IF (cmd = "System.Close") OR (cmd = "System.Grow") OR (havecopy & (cmd = "Desktops.Copy")) THEN
 			(* skip - already have that *)
 		ELSE
 			Button(title, cmd)
@@ -1382,7 +1392,7 @@ VAR
 		VAR
 			S: Attributes.Scanner; F: Gadgets.Frame; B: Objects.BindMsg; X, Y: INTEGER; vwr: Viewers.Viewer;
 			obj: Objects.Object; f: Files.File; doc: Documents.Document; filename: ARRAY 64 OF CHAR; v: Views.View;
-			V: DocViewer; main: Gadgets.Frame; A: Objects.AttrMsg; L: Objects.LinkMsg; P: Pictures.Picture; window: BOOLEAN;
+			V: DocViewer; main: Gadgets.Frame; A: Objects.AttrMsg; window: BOOLEAN;
 		PROCEDURE IsDesktop(VAR f: Files.File): BOOLEAN;
 			VAR R: Files.Rider; i, x, y, w, h: INTEGER; s: ARRAY 64 OF CHAR;
 		BEGIN
@@ -1684,7 +1694,8 @@ VAR
 	BEGIN
 		(* special menus *)
 		L.id := Objects.get; L.obj := NIL; L.res := -1;
-		IF desktop THEN L.name := "DeskMenu"
+		IF desktop THEN
+			IF D.W > Display.Width DIV 8 * 3 THEN L.name := "DeskMenu" ELSE L.name := "SystemMenu" END
 		ELSIF system THEN L.name := "SystemMenu"
 		ELSE L.name := "UserMenu"
 		END;
@@ -1711,10 +1722,10 @@ VAR
 		VAR
 			C: Display.ConsumeMsg; open, menu: Display.Frame; X, Y: INTEGER; v: Viewers.Viewer; V: DocViewer;
 			A: Objects.AttrMsg; DF: DocGadget; CM: Display.ControlMsg;
-			system, window, adaptive: BOOLEAN;
+			viewerSystem, window, adaptive: BOOLEAN;
 	BEGIN
-		IF (D.lib # NIL) & (D.lib.name # "") THEN HALT(99) END;
-		V := NIL; system := FALSE; window := TRUE;
+		IF (D.lib # NIL) & (D.lib.name # "") THEN HALT(99) END; (* uh-uh, public object *)
+		V := NIL; viewerSystem := FALSE; window := TRUE;
 		v := Oberon.MarkedViewer();
 		IF v = NIL THEN
 			IF Oberon.Par.vwr = NIL THEN Oberon.Par.vwr := Viewers.This(0, 0) END;
@@ -1723,9 +1734,9 @@ VAR
 		IF v # NIL THEN
 			IF (v IS DocViewer) & ~(HasMenu(v(DocViewer))) THEN (* in the desktop *)
 				V := v(DocViewer);
-				system := FALSE; window := FALSE
+				viewerSystem := FALSE; window := FALSE
 			ELSIF v.kind IN {Viewers.IsDisplay, Viewers.IsTrack, Viewers.IsFiller, Viewers.IsViewer} THEN
-				system := TRUE; window := FALSE
+				viewerSystem := TRUE; window := FALSE
 			END
 		END;
 		window := window OR forceWin; forceWin := FALSE;
@@ -1733,18 +1744,18 @@ VAR
 			menu := CreateMenu(D, FALSE, FALSE, TRUE);
 			V := NewWinDocViewer(menu, D)
 		ELSE
-			IF ~system THEN (* in the desktop *)
+			IF ~viewerSystem THEN (* in the desktop *)
 				NewDocGadget(); DF := Objects.NewObj(DocGadget);
-				menu := CreateMenu(D, TRUE, FALSE, FALSE);		
+				menu := CreateMenu(D, TRUE, FALSE, FALSE);
 				(* private *)
 				Init(DF, menu(Gadgets.Frame), D, TRUE);
 				open := DF;
 				CM.id := Display.restore; CM.F := NIL; CM.x := 0; CM.y := 0; CM.dlink := NIL; CM.res := -1; open.handle(open, CM);
 				C.id := Display.drop; C.obj := open;
 				AllocateDocGadget(V, open.W, open.H, C.F, C.u, C.v); C.x := 0; C.y := 0;
-				IF C.F # NIL THEN Display.Broadcast(C); system := C.res < 0 ELSE system := TRUE END
+				IF C.F # NIL THEN Display.Broadcast(C); viewerSystem := C.res < 0 ELSE viewerSystem := TRUE END
 			END;
-			IF system THEN (* in the viewer system, or desktop integration failed *)
+			IF viewerSystem THEN (* in the viewer system, or desktop integration failed *)
 				IF D.W <= Display.Width DIV 8 * 3 THEN Oberon.AllocateSystemViewer(Oberon.Par.vwr.X, X, Y)
 				ELSE Oberon.AllocateUserViewer(Oberon.Par.vwr.X, X, Y)
 				END;
@@ -1765,7 +1776,7 @@ VAR
 	PROCEDURE ReplaceCurrentDoc*(D: Documents.Document);
 		VAR
 			V: DocViewer; obj: Objects.Object; A: Display.ModifyMsg; menu, open: Display.Frame; rect: User32.Rect;
-			x, y, w, h: INTEGER; AM: Objects.AttrMsg; addview, system: BOOLEAN; Vr: Viewers.Viewer;
+			x, y, w, h: INTEGER; AM: Objects.AttrMsg; addview, viewerSystem: BOOLEAN; Vr: Viewers.Viewer;
 	BEGIN
 		obj := Gadgets.context;
 		WHILE (obj # NIL) & ~(obj IS DocGadget) & ~(obj IS DocViewer) DO obj := obj.dlink END;
@@ -1781,8 +1792,9 @@ VAR
 					Display.Broadcast(A)
 				END
 			ELSE
-				V := obj(DocViewer); system := V.kind IN {Viewers.IsDisplay, Viewers.IsTrack, Viewers.IsFiller, Viewers.IsViewer};
-				IF ~system OR forceWin THEN
+				V := obj(DocViewer);
+				viewerSystem := V.kind IN {Viewers.IsDisplay, Viewers.IsTrack, Viewers.IsFiller, Viewers.IsViewer};
+				IF ~viewerSystem OR forceWin THEN
 					User32.GetWindowRect(V.win.hWnd, rect);
 					Attributes.SetInt(D, "WindowsLeft", rect.left);
 					Attributes.SetInt(D, "WindowsTop", rect.top);
@@ -1791,14 +1803,15 @@ VAR
 					Viewers.recall := Vr;
 					RETURN
 				END;
-				IF HasMenu(V) THEN menu := CreateMenu(D, FALSE, V.X >= Display.Width DIV 8 * 5, ~system)
+				IF HasMenu(V) THEN menu := CreateMenu(D, FALSE, V.X >= Display.Width DIV 8 * 5, ~viewerSystem)
 				ELSE menu := NewDummy()
 				END;
-				open := D;
 				AM.id := Objects.get; AM.name := "Adaptive"; AM.class := Objects.Inval; AM.b := FALSE; AM.res := -1; D.handle(D, AM);
 				addview := (AM.res >= 0) & (AM.class = Objects.Bool) & ~AM.b;
 				IF addview THEN
 					open := Views.ViewOf(D); open.W := D.W; open.H := D.H
+				ELSE
+					open := D
 				END;
 				V.dsc := menu; V.dsc.next := open; V.menuH := menu.H;
 				Restore(V)
@@ -2182,10 +2195,14 @@ VAR
 	BEGIN
 		Texts.OpenWriter(W); forceWin := FALSE;
 		menuH := 20; menuC := 13;
-		IF Display.Width <= 800 THEN
-			menuButtonW := 36; namePlateW := 75
+		IF PopupButton THEN
+			menuButtonW := 39;  namePlateW := 143
 		ELSE
-			menuButtonW := 39; namePlateW := 110
+			IF Display.Width < CutoffWidth THEN
+				menuButtonW := 36;  namePlateW := 140(*84*)
+			ELSE
+				menuButtonW := 39;  namePlateW := 140
+			END
 		END;
 		recDocWidth := namePlateW + 3*menuButtonW;
 		newWinMenu := NIL; mod := Modules.ThisMod("WinMenus")

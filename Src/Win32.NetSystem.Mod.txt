@@ -1,6 +1,5 @@
-﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+﻿(* ETH Oberon, Copyright 2001 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
 Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
-(* Copyright (c) 1994 - 2000 Emil J. Zeller *)
 
 MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod *)	(* ejz  *)
 	IMPORT SYSTEM, Kernel, Kernel32, Modules, Threads, User32, WSock32, Input, Fonts, Texts, Oberon, Display,
@@ -76,8 +75,9 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 		passwords: Password;
 		tcpMtx: Threads.Mutex;
 		W: Texts.Writer;
-		ready: BOOLEAN;
+		ready, started: BOOLEAN;
 
+		localIP*,
 		anyIP*, (** "NIL" ip-number *)
 		allIP*, (** broadcast ip-number *)
 		hostIP*: IPAdr; (** ip-number of local machine *)
@@ -122,7 +122,9 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 			END;
 			tcpMtx := NIL
 		END;
-		WSock32.WSACleanup()
+		IF started THEN
+			WSock32.WSACleanup()
+		END
 	END stop;
 
 	PROCEDURE [WINAPI] *WindowHandler(win: Windows.Window; uMsg: LONGINT; wParam: User32.WParam; lParam: User32.LParam): User32.LResult;
@@ -255,7 +257,7 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 	PROCEDURE AsyncGetIP(VAR hostInfo: HostInfo; name: ARRAY OF CHAR);	(** non-portable *)
 		VAR i: LONGINT;
 	BEGIN
-		hostInfo := NIL; ASSERT(ready);
+		hostInfo := NIL;
 		NEW(hostInfo); Strings.Lower(name, name);
 		NEW(hostInfo.event); Threads.Create(hostInfo.event);
 		hostInfo.getip := TRUE; hostInfo.next := NIL; COPY(name, hostInfo.name);
@@ -286,15 +288,17 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 	PROCEDURE GetIP*(name: ARRAY OF CHAR; VAR IP: IPAdr);
 		VAR hostInfo: HostInfo;
 	BEGIN
-		IP := anyIP; ASSERT(ready);
-		AsyncGetIP(hostInfo, name);
-		IF (hostInfo # NIL) & Threads.Wait(hostInfo.event, GetIPTimeOut) & ~hostInfo.err THEN IP := hostInfo.ip END
+		IP := anyIP;
+		IF ready THEN
+			AsyncGetIP(hostInfo, name);
+			IF (hostInfo # NIL) & Threads.Wait(hostInfo.event, GetIPTimeOut) & ~hostInfo.err THEN IP := hostInfo.ip END
+		END
 	END GetIP;
 
 (* GetName is the reverse of GetIP. Given an ip-number, it delivers the name of a host. *)
 	PROCEDURE AsyncGetName(VAR hostInfo: HostInfo; IP: IPAdr);	(** non-portable *)
 	BEGIN
-		hostInfo := NIL; ASSERT(ready);
+		hostInfo := NIL;
 		NEW(hostInfo); NEW(hostInfo.event); Threads.Create(hostInfo.event);
 		hostInfo.getip := FALSE; hostInfo.next := NIL; SYSTEM.MOVE(SYSTEM.ADR(IP), SYSTEM.ADR(hostInfo.ip), IPAdrLen);
 		hostInfo.err := TRUE; hostInfo.handle := 0; Threads.Lock(tcpMtx);
@@ -311,9 +315,11 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 	PROCEDURE GetName*(IP: IPAdr; VAR name: ARRAY OF CHAR);
 		VAR hostInfo: HostInfo;
 	BEGIN
-		COPY("", name); ASSERT(ready);
-		AsyncGetName(hostInfo, IP);
-		IF (hostInfo # NIL) & Threads.Wait(hostInfo.event, GetNameTimeOut) & ~hostInfo.err THEN COPY(hostInfo.name, name) END
+		COPY("", name);
+		IF ready THEN
+			AsyncGetName(hostInfo, IP);
+			IF (hostInfo # NIL) & Threads.Wait(hostInfo.event, GetNameTimeOut) & ~hostInfo.err THEN COPY(hostInfo.name, name) END
+		END
 	END GetName;
 
 	PROCEDURE FreeConnTabEntry(): LONGINT;
@@ -339,9 +345,9 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 	PROCEDURE OpenConn(VAR C: Connection; locPort: INTEGER; remIP: IPAdr; remPort: INTEGER; VAR res: INTEGER);
 		VAR sadr: WSock32.SockAddrIN; ret, err: LONGINT;
 	BEGIN
-		ASSERT(ready);
-		Threads.Lock(tcpMtx);
 		res := error; C := NIL;
+		IF ~ready THEN RETURN END;
+		Threads.Lock(tcpMtx);
 		IF remPort = anyport THEN
 			IF locPort # anyport THEN
 				ret := FreeConnTabEntry();
@@ -421,6 +427,8 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 
 (** -- TCP section. *)
 
+(* Stream oriented communication *)
+
 (** Procedure opens a connection. locPort, remPort, remIP are contained in the quadrupel <locIP, remIP, locPort, remPort>
 	which determines a connection uniquely. As locIP is always the current machine, it is omitted. If remPort is equal to
 	anyport or remIP is equal to anyIP, a passive connection will be opened. After execution, C is a brand new connection.
@@ -476,7 +484,6 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 (** Procedure closes the connection. Connection can not be used for send operations afterwards. *)
 	PROCEDURE CloseConnection*(C: Connection);
 	BEGIN
-		ASSERT(ready);
 		IF C.sock # WSock32.InvalidSocket THEN
 			FlushSendBuffer(C);
 			ConnectionFinalizer(C);
@@ -484,11 +491,10 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 		END
 	END CloseConnection;
 
-(** Indicates whether there exists a remote machine which wants to connect to the local one. This Procedure is only usefully
-	defined on passive connections. For active connections (State(C) # listen), it always delivers FALSE. *)
+(** Indicates whether there exists a remote machine which wants to connect to the local one. This Procedure is only useful
+	on passive connections. For active connections (State(C) # listen), it always delivers FALSE. *)
 	PROCEDURE Requested*(C: Connection): BOOLEAN;
 	BEGIN
-		ASSERT(ready);
 		RETURN C.req > 0
 	END Requested;
 
@@ -498,7 +504,6 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 	PROCEDURE Accept*(C: Connection; VAR newC: Connection; VAR res: INTEGER);
 		VAR ret: LONGINT;
 	BEGIN
-		ASSERT(ready);
 		newC := NIL; res := error;
 		IF C.req > 0 THEN
 			Threads.Lock(tcpMtx);
@@ -526,7 +531,6 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 (** Procedure returns the state of a connection (see constant section). *)
 	PROCEDURE State*(C: Connection): INTEGER;
 	BEGIN
-		ASSERT(ready);
 		IF C.sendBufEnd > 0 THEN FlushSendBuffer(C) END;
 		RETURN C.state
 	END State;
@@ -535,7 +539,6 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 	PROCEDURE Available*(C: Connection): LONGINT;
 		VAR err, ret, avail: LONGINT;
 	BEGIN
-		ASSERT(ready);
 		IF C.sendBufEnd > 0 THEN FlushSendBuffer(C) END;
 		avail := C.recBufEnd-C.recBufPos;
 		IF (avail < RecBufLimit) & (C.sock # WSock32.InvalidSocket) THEN
@@ -551,9 +554,9 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 			IF ret < 0 THEN (* SocketError *)
 				err := WSock32.WSAGetLastError();
 				IF (err = WSock32.WSAEInval) OR (err = WSock32.WSAEConnAborted) OR (err = WSock32.WSAEConnReset) THEN
-					Kernel32.Str("Available error "); Kernel32.Int(err); Kernel32.Ln();
-					C.state := closed; C.res := error
+					C.state := closed
 				ELSIF (err # WSock32.WSAEWouldBlock) & (err # WSock32.WSAENoBufs) THEN
+					Kernel32.Str("Available error "); Kernel32.Int(err); Kernel32.Ln();
 					C.res := error
 				END;
 				ret := 0
@@ -571,7 +574,6 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 	PROCEDURE GetPartner*(C: Connection; VAR remIP: IPAdr; VAR remPort: INTEGER);
 		VAR saddr: WSock32.SockAddrIN; ret, len: LONGINT;
 	BEGIN
-		ASSERT(ready);
 		len := SIZE(WSock32.SockAddrIN);
 		ret := WSock32.getpeername(C.sock, saddr, len);
 		IF ret = 0 THEN
@@ -587,7 +589,7 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 	PROCEDURE WriteBytes*(C: Connection; pos, len: LONGINT; VAR x: ARRAY OF SYSTEM.BYTE);
 		VAR free, clen: LONGINT;
 	BEGIN
-		ASSERT((LEN(x) >= (pos+len)) & ready);
+		ASSERT(LEN(x) >= (pos+len));
 		WHILE (len > 0) & (C.res = done) DO
 			free := SendBufSize-C.sendBufEnd;
 			IF len <= free THEN
@@ -635,7 +637,7 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 	PROCEDURE ReadBytes*(C: Connection; pos, len: LONGINT; VAR x: ARRAY OF SYSTEM.BYTE);
 		VAR ret, err, free, clen: LONGINT;
 	BEGIN
-		ASSERT((LEN(x) >= (pos+len)) & ready);
+		ASSERT(LEN(x) >= (pos+len));
 		IF C.sendBufEnd > 0 THEN FlushSendBuffer(C) END;
 		WHILE (len > 0) & (C.res = done) DO
 			free := C.recBufEnd-C.recBufPos;
@@ -716,6 +718,8 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 
 (** -- UDP section. *)
 
+(* Datagram oriented communication *)
+
 	PROCEDURE *SockFinalizer(S: PTR);
 	BEGIN
 		WITH S: Socket DO
@@ -730,9 +734,9 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 	PROCEDURE OpenSocket*(VAR S: Socket; locPort: INTEGER; VAR res: INTEGER);
 		VAR ret: LONGINT; sadr: WSock32.SockAddrIN;
 	BEGIN
-		ASSERT(ready);
-		NEW(S); res := error;
-		S.sock := WSock32.socket(WSock32.PFINet, WSock32.SockDGram, WSock32.IPProtoUDP);
+		S := NIL; res := error;
+		IF ~ready THEN RETURN END;
+		NEW(S); S.sock := WSock32.socket(WSock32.PFINet, WSock32.SockDGram, WSock32.IPProtoUDP);
 		IF S.sock # WSock32.InvalidSocket THEN
 			sadr.sinFamily := WSock32.PFINet; sadr.sinAddr := 0;
 			IF locPort # anyport THEN
@@ -744,6 +748,10 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 			IF ret # 0 THEN
 				SockFinalizer(S)
 			ELSE
+(*
+ret := 1; (* TRUE *)
+ret := WSock32.setsockopt(S.sock, WSock32.SOLSocket, WSock32.SOBroadcast, ret, 4);
+*)
 				Kernel.RegisterObject(S, SockFinalizer, FALSE);
 				res := done
 			END
@@ -754,41 +762,52 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 (** Closes the socket. You can not receive datagrams anymore. *)
 	PROCEDURE CloseSocket*(S: Socket);
 	BEGIN
-		ASSERT(ready);
 		SockFinalizer(S)
 	END CloseSocket;
 
 (** Sends len bytes of data (beginning at pos in buf) to the host specified by remIP and remPort. *)
 	PROCEDURE SendDG*(S: Socket; remIP: IPAdr; remPort: INTEGER; pos, len: LONGINT; VAR buf: ARRAY OF SYSTEM.BYTE);
-		VAR ret: LONGINT; sadr: WSock32.SockAddrIN;
+		VAR ret, err: LONGINT; sadr: WSock32.SockAddrIN;
 	BEGIN
-		ASSERT((LEN(buf) >= (pos+len)) & ready);
+		ASSERT(LEN(buf) >= (pos+len));
 		SYSTEM.MOVE(SYSTEM.ADR(remIP), SYSTEM.ADR(sadr.sinAddr), IPAdrLen);
 		sadr.sinFamily := WSock32.PFINet; sadr.sinPort := WSock32.htons(remPort);
 		ret := WSock32.sendto(S.sock, buf[pos], len, 0, sadr, SIZE(WSock32.SockAddrIN));
-		S.res := SHORT(ret)
+		IF ret < 0 THEN (* SocketError *)
+			err := WSock32.WSAGetLastError();
+			S.res := error
+		ELSIF ret =  len THEN
+			S.res := done
+		ELSE
+			S.res := error
+		END
 	END SendDG;
 
-(** Stores an entire datagram in buf beginning at pos. On success, remIP and remPort indicate the sender, len indicate the
+(** Stores an entire datagram in buf beginning at pos. On success (S.res = done), remIP and remPort indicate the sender, len indicate the
 	length of valid data. *)
 	PROCEDURE ReceiveDG*(S: Socket; VAR remIP: IPAdr; VAR remPort: INTEGER; pos: LONGINT; VAR len: LONGINT; VAR buf: ARRAY OF SYSTEM.BYTE);
 		VAR l: LONGINT; sadr: WSock32.SockAddrIN;
 	BEGIN
-		ASSERT((pos <= LEN(buf)) & ready);
+		ASSERT(pos <= LEN(buf));
 		l := SIZE(WSock32.SockAddrIN);
-		len := WSock32.recvfrom(S.sock, buf[pos], LEN(buf)-pos, 0, sadr, l);
-		remPort := WSock32.ntohs(sadr.sinPort);
-		SYSTEM.MOVE(SYSTEM.ADR(sadr.sinAddr), SYSTEM.ADR(remIP), IPAdrLen)
+		WSock32.ioctlsocket(S.sock, WSock32.FIONRead, len);
+		IF len > 0 THEN
+			ASSERT(LEN(buf) >= (pos+len));
+			len := WSock32.recvfrom(S.sock, buf[pos], len, 0, sadr, l);
+			remPort := WSock32.ntohs(sadr.sinPort);
+			SYSTEM.MOVE(SYSTEM.ADR(sadr.sinAddr), SYSTEM.ADR(remIP), IPAdrLen)
+		END
 	END ReceiveDG;
 
 (** Returns the size of the first available datagram on the socket, otherwise <= 0. *)
 	PROCEDURE AvailableDG*(S: Socket): LONGINT;
 		VAR avail: LONGINT;
 	BEGIN
-		ASSERT(ready);
 		WSock32.ioctlsocket(S.sock, WSock32.FIONRead, avail);
 		RETURN avail
 	END AvailableDG;
+
+(* Conversions *)
 
 (** Write 2 bytes in network byte ordering to buf[pos]. *)
 	PROCEDURE PutInt*(VAR buf: ARRAY OF SYSTEM.BYTE; pos: INTEGER; x: INTEGER);
@@ -834,7 +853,8 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 	PROCEDURE Init();
 		VAR i: LONGINT; done: BOOLEAN;
 	BEGIN
-		anyIP := 0; allIP := -1; ToHost("127.0.0.1", hostIP, done);
+		anyIP := 0; allIP := -1; ToHost("127.0.0.1", localIP, done);
+		hostIP := localIP; hostName := "";
 		FOR i := 0 TO ConnTabSize-1 DO
 			ConnTab[i] := SYSTEM.VAL(LONGINT, NIL)
 		END;
@@ -843,6 +863,16 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 		END;
 		curIP := 0; Modules.InstallTermHandler(Stop)
 	END Init;
+
+	PROCEDURE GetAllIP();
+		VAR sadr: WSock32.SockAddrIN; socket, n, ret: LONGINT;
+	BEGIN
+		socket := WSock32.socket(WSock32.PFINet, WSock32.SockDGram, WSock32.IPProtoUDP);
+		sadr.sinFamily := WSock32.PFINet; sadr.sinAddr := 0;
+		ret := WSock32.WSAIoctl(socket, WSock32.SIOGetBroadcastAddress, NIL, 0, sadr, SIZE(WSock32.SockAddrIN), n, 0, 0);
+		IF ret = 0 THEN allIP := sadr.sinAddr END;
+		WSock32.closesocket(socket)
+	END GetAllIP;
 
 (** Command NetSystem.Start ~ Start up NetSystem. *)
 	PROCEDURE Start*;
@@ -854,24 +884,27 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 			async: BOOLEAN;
 	BEGIN
 		IF ~ready THEN
-			Init(); hostInfos := NIL;
-			NEW(tcpMtx); Threads.Init(tcpMtx);
-			Kernel32.Str("WSAStartup: ");
-			ret := WSock32.WSAStartup(101H, data);
-			IF ret # 0 THEN
-				ready := FALSE; Kernel32.Int(ret)
-			ELSE
-				ret := 0; i := 0;
-				WHILE (ret <= 256) & (data.szDescription[ret] # 0X) DO
-					IF data.szDescription[ret] >= " " THEN
-						str[i] := data.szDescription[ret]; INC(i)
-					ELSIF (data.szDescription[ret] = Strings.CR) OR (data.szDescription[ret] = Strings.LF) THEN
-						str[i] := 0X; i := 0; Kernel32.Str(str); Kernel32.Ln()
+			IF ~started THEN
+				Init(); hostInfos := NIL;
+				NEW(tcpMtx); Threads.Init(tcpMtx);
+				Kernel32.Str("WSAStartup: ");
+				ret := WSock32.WSAStartup(101H, data);
+				IF ret # 0 THEN
+					ready := FALSE; Kernel32.Int(ret)
+				ELSE
+					ret := 0; i := 0;
+					WHILE (ret <= 256) & (data.szDescription[ret] # 0X) DO
+						IF data.szDescription[ret] >= " " THEN
+							str[i] := data.szDescription[ret]; INC(i)
+						ELSIF (data.szDescription[ret] = Strings.CR) OR (data.szDescription[ret] = Strings.LF) THEN
+							str[i] := 0X; i := 0; Kernel32.Str(str); Kernel32.Ln()
+						END;
+						INC(ret)
 					END;
-					INC(ret)
+					str[i] := 0X; Kernel32.Str(str);
+					ready := TRUE
 				END;
-				str[i] := 0X; Kernel32.Str(str);
-				ready := TRUE
+				started := ready
 			END;
 			IF ready THEN
 				Kernel32.Ln();
@@ -913,9 +946,10 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 					END
 				END
 			END;
-			IF ready & (hostIP # anyIP) THEN
+			IF ready & ((hostIP # anyIP) & (hostIP # localIP)) THEN
 				ToNum(hostIP, str);
-				Kernel32.Str(str)
+				Kernel32.Str(str);
+				GetAllIP()
 			ELSE
 				Kernel32.Str("failed");
 				ready := FALSE; Stop()
@@ -923,6 +957,12 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 			Kernel32.Ln()
 		END
 	END Start;
+
+	PROCEDURE Started*(): BOOLEAN;
+	BEGIN
+		IF ~ready THEN Start() END;
+		RETURN ready
+	END Started;
 
 (** -- Passwords section. *)
 
@@ -996,26 +1036,28 @@ specified user's password. *)
 			pass := pass.next
 		END;
 		IF pass # NIL THEN
-			COPY(pass.user, user); COPY(pass.passwd, password); RETURN
-		ELSIF (service # "") & (host # "") THEN
-			IF user = "" THEN
-				COPY(service, msg); Strings.Append(msg, " to "); Strings.Append(msg, host);
-				getPassword("Please enter your username for", msg, Fonts.This("Syntax12.Scn.Fnt"), temp, TRUE);
-				COPY(temp, user)
-			ELSE
-				COPY(user, temp)
-			END;
-			IF temp # "" THEN
-				COPY(service, msg); Strings.Append(msg, " to "); Strings.Append(msg, temp); Strings.AppendCh(msg, "@"); Strings.Append(msg, host);
-				getPassword("Please enter your password for", msg, Fonts.This("Syntax12.Scn.Fnt"), password, FALSE);
-				IF password # "" THEN
-					NEW(pass); pass.next := passwords; passwords := pass;
-					COPY(service, pass.service); COPY(host, pass.host); COPY(temp, pass.user); COPY(password, pass.passwd);
-					RETURN
+			COPY(pass.user, user); COPY(pass.passwd, password)
+		ELSE
+			IF (service # "") & (host # "") THEN
+				IF user = "" THEN
+					COPY(service, msg); Strings.Append(msg, " to "); Strings.Append(msg, host);
+					getPassword("Please enter your username for", msg, Fonts.This("Syntax12.Scn.Fnt"), temp, TRUE);
+					COPY(temp, user)
+				ELSE
+					COPY(user, temp)
+				END;
+				IF temp # "" THEN
+					COPY(service, msg); Strings.Append(msg, " to "); Strings.Append(msg, temp); Strings.AppendCh(msg, "@"); Strings.Append(msg, host);
+					getPassword("Please enter your password for", msg, Fonts.This("Syntax12.Scn.Fnt"), password, FALSE);
+					IF password # "" THEN
+						NEW(pass); pass.next := passwords; passwords := pass;
+						COPY(service, pass.service); COPY(host, pass.host); COPY(temp, pass.user); COPY(password, pass.passwd);
+						RETURN
+					END
 				END
-			END
-		END;
-		COPY("", user); COPY("", password)
+			END;
+			COPY("", user); COPY("", password)
+		END
 	END GetPassword;
 
 	(** Remove password for user using service on host. *)
@@ -1036,18 +1078,22 @@ specified user's password. *)
 		END
 	END DelPassword;
 
-(** Command NetSystem.SetUser { service ":" ["//"] user [ ":" password ] "@" host [ "/" ] } "~" <enter password>
+	PROCEDURE InputRead(VAR ch: CHAR);	(* not really clean *)
+	BEGIN
+		Input.Read(ch)
+	END InputRead;
+
+(** Command NetSystem.SetUser { service ":" ["//"] [ user [ ":" password ] "@" ] host [ "/" ] } "~" <enter password>
 		If password is not specified in-line, prompts for the password for the (service, host, user) triple. 
 		The (service, host, user, password) 4-tuple is stored in memory for retrieval with GetPassword. 
 		Multiple identical passwords may be set with one command. *)
 	PROCEDURE SetUser*;
 		VAR
 			R: Texts.Reader;
-			service, usr, host, pwd: ARRAY HostNameLen OF CHAR;
-			pass, list: Password;
+			service, usr, host, pwd, entered: ARRAY 64 OF CHAR;
 			ok, verbose: BOOLEAN;
 			ch: CHAR;
-	
+			pass: Password;
 		PROCEDURE Next(VAR str: ARRAY OF CHAR);
 			VAR i: LONGINT;
 		BEGIN
@@ -1061,83 +1107,90 @@ specified user's password. *)
 			END;
 			str[i] := 0X
 		END Next;
-		
-		PROCEDURE ReadPwd;
-			VAR i: LONGINT;
+		PROCEDURE InputStr(prompt: ARRAY OF CHAR; show: BOOLEAN; VAR str: ARRAY OF CHAR);
+			VAR i: LONGINT; ch: CHAR;
 		BEGIN
-			Texts.WriteString(W, "Password: "); Texts.Append(Oberon.Log, W.buf);
-			Input.Read(ch); i := 0;
-			WHILE ch > " " DO
+			Texts.SetColor(W, 1); Texts.WriteString(W, prompt); Texts.SetColor(W, 15);
+			Texts.Append(Oberon.Log, W.buf);
+			InputRead(ch); i := 0;
+			WHILE (ch # 0DX) & (ch # 1AX)  DO
 				IF ch = 7FX THEN
 					IF i > 0 THEN
 						Texts.Delete(Oberon.Log, Oberon.Log.len-1, Oberon.Log.len);
 						DEC(i)
 					END
 				ELSE
-					Texts.Write(W, "*"); Texts.Append(Oberon.Log, W.buf);
-					pwd[i] := ch; INC(i)
+					IF show THEN Texts.Write(W, ch) ELSE Texts.Write(W, "*") END;
+					Texts.Append(Oberon.Log, W.buf);
+					str[i] := ch;  INC(i)
 				END;
-				Input.Read(ch)
+				InputRead(ch)
 			END;
-			pwd[i] := 0X;
-			Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
-		END ReadPwd;
-			
+			IF ch # 0DX THEN i := 0 END;
+			str[i] := 0X;
+			Texts.WriteLn(W);  Texts.Append(Oberon.Log, W.buf)
+		END InputStr;
 		PROCEDURE Replace(p: Password);
-			VAR q: Password;
+			VAR q, prev: Password;  msg: ARRAY 12 OF CHAR;
 		BEGIN
-			q := passwords;
+			q := passwords;  prev := NIL;
 			WHILE (q # NIL) & ~((q.service = p.service) & (q.host = p.host) & (q.user = p.user)) DO
-				q := q.next
+				prev := q;  q := q.next
 			END;
-			IF verbose THEN
-				Texts.WriteString(W, p.service); Texts.Write(W, ":");
-				Texts.WriteString(W, p.user); Texts.Write(W, "@"); Texts.WriteString(W, p.host)
-			END;
-			IF q = NIL THEN
-				p.next := passwords; passwords := p;
-				IF verbose THEN Texts.WriteString(W, " password set") END
+			IF q # NIL THEN	(* password exists, delete old one first *)
+				IF prev = NIL THEN passwords := passwords.next
+				ELSE prev.next := q.next
+				END;
+				msg := "replaced"
 			ELSE
-				COPY(p.passwd, q.passwd);
-				IF verbose THEN Texts.WriteString(W, " password replaced") END
+				msg := "set"
 			END;
-			IF verbose THEN Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf) END
+			p.next := passwords;  passwords := p;
+			IF verbose THEN
+				Texts.WriteString(W, p.service);  Texts.Write(W, ":");  
+				Texts.WriteString(W, p.user);  Texts.Write(W, "@");  Texts.WriteString(W, p.host);
+				Texts.WriteString(W, " password ");  Texts.WriteString(W, msg);
+				Texts.WriteLn(W);  Texts.Append(Oberon.Log, W.buf)
+			END
 		END Replace;
-		
 	BEGIN
 		Texts.OpenReader(R, Oberon.Par.text, Oberon.Par.pos);
-		ok := TRUE; verbose := FALSE; list := NIL;
+		ok := TRUE;  entered[0] := 0X;  verbose := FALSE;
 		WHILE ~R.eot & ok DO
-			ok := FALSE; Next(service);
+			ok := FALSE;  Next(service);
 			IF service = "\v" THEN verbose := TRUE; Next(service) END;
 			Strings.Lower(service, service);
 			IF ch = ":" THEN
 				Next(usr);
-				IF ch = "@" THEN	(* no password specified, prompt for password later *)
-					Next(host); Strings.Lower(host, host);
-					IF host # "" THEN
-						NEW(pass); pass.next := list; list := pass;	(* add to temp list *)
-						COPY(service, pass.service); COPY(host, pass.host); COPY(usr, pass.user);
-						ok := TRUE
-					END
-				ELSIF ch = ":" THEN	(* password specified in-line *)
+				IF ch = ":" THEN	(* password specified in-line *)
 					Next(pwd);
-					IF ch = "@" THEN
-						Next(host);
-						IF host # "" THEN
-							NEW(pass); COPY(service, pass.service); COPY(host, pass.host); 
-							COPY(usr, pass.user); COPY(pwd, pass.passwd);
-							Replace(pass); ok := TRUE
-						END
-					END
-				END
-			END
-		END;
-		IF list # NIL THEN
-			ReadPwd;
-			IF ch = 0DX THEN	(* password entered *)
-				WHILE list # NIL DO
-					pass := list; list := list.next; COPY(pwd, pass.passwd); Replace(pass)
+					IF ch = "@" THEN Next(host) ELSE COPY(pwd, host); pwd[0] := 0X END
+				ELSIF ch = "@" THEN	(* no password specified in-line *)
+					pwd[0] := 0X; Next(host)
+				ELSE	(* no user or password specified *)
+					COPY(usr, host); usr[0] := 0X; pwd[0] := 0X
+				END;
+				Strings.Lower(host, host);
+				IF host[0] # 0X THEN
+					IF (usr[0] = 0X) OR ((pwd[0] = 0X) & (entered[0] = 0X)) THEN
+						Texts.WriteString(W, service);  Texts.WriteString(W, "://");
+						IF usr[0] # 0X THEN Texts.WriteString(W, usr); Texts.Write(W, "@") END;
+						Texts.WriteString(W, host);  Texts.WriteLn(W)
+					END;
+					IF usr[0] = 0X THEN	(* no user specified, prompt *)
+						InputStr("Enter user name: ", TRUE, usr);
+						IF usr[0] = 0X THEN RETURN END
+					END;
+					IF pwd[0] = 0X THEN	(* no pwd specified *)
+						IF entered[0] = 0X THEN	(* prompt first time *)
+							InputStr("Enter password: ", FALSE, entered);
+							IF entered[0] = 0X THEN RETURN END	(* esc *)
+						END;
+						pwd := entered
+					END;
+					NEW(pass);  COPY(service, pass.service); COPY(host, pass.host); 
+					COPY(usr, pass.user);  COPY(pwd, pass.passwd);
+					Replace(pass);  ok := TRUE
 				END
 			END
 		END
@@ -1157,5 +1210,5 @@ BEGIN
 	SendTimeOut := 30*Input.TimeUnit;
 	ReceiveTimeOut := SendTimeOut;
 	passwords := NIL;
-	ready := FALSE; Start()
+	ready := FALSE; started := FALSE;Start()
 END NetSystem.

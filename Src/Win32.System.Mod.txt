@@ -1,4 +1,4 @@
-﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+﻿(* ETH Oberon, Copyright 2001 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
 Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 (* Windows specific parts: Copyright (c) 1994 - 2000 Emil J. Zeller *)
@@ -170,7 +170,7 @@ IMPORT SYSTEM, Kernel32, Kernel, Registry, FileDir, Files, Modules, Objects, Dis
 		IF (S.class = Texts.Char) & (S.c = "*") THEN
 			F := Oberon.MarkedFrame()
 		ELSIF (par.vwr # NIL) & (par.vwr.dsc # NIL) THEN
-			F := par.vwr.dsc.next;
+			F := par.vwr.dsc; IF F.next # NIL THEN F := F.next END; (* Control vs. Document *)
 			F.handle(F, L);
 			IF (L.obj # NIL) & (L.obj IS Display.Frame) THEN
 				A.id := Objects.get; A.name := "Gen"; L.obj.handle(L.obj, A);
@@ -178,7 +178,7 @@ IMPORT SYSTEM, Kernel32, Kernel, Registry, FileDir, Files, Modules, Objects, Dis
 					F := par.obj(Display.Frame);
 					F := F.dlink(Display.Frame);
 					F := F.next.dsc
-				ELSE
+				ELSE (* TextGadget, ... *)
 					F := L.obj(Display.Frame)
 				END
 			END
@@ -281,16 +281,16 @@ IMPORT SYSTEM, Kernel32, Kernel, Registry, FileDir, Files, Modules, Objects, Dis
 *)
 		M := Kernel.modules; n := 0; var := 0; const := 0; code := 0;
 		WHILE M # NIL DO
-			Texts.WriteString(W, M.name);  Texts.Write(W, 9X);
+			Texts.WriteString(W, M.name); Texts.Write(W, 9X);
 			dsize := M.sb - SYSTEM.ADR(M.data[0]);	(* data size *)
-			(*Texts.WriteInt(W, dsize, 1);  Texts.Write(W, 9X);*)
-			INC(var, dsize);  csize := LEN(M.data)-dsize;
-			(*Texts.WriteInt(W, csize, 1);  Texts.Write(W, 9X);*)	(* const size *)
+			(*Texts.WriteInt(W, dsize, 1); Texts.Write(W, 9X);*)
+			INC(var, dsize); csize := LEN(M.data)-dsize;
+			(*Texts.WriteInt(W, csize, 1); Texts.Write(W, 9X);*)	(* const size *)
 			INC(const, csize);
-			(*Texts.WriteInt(W, LEN(M.code), 1);  Texts.Write(W, 9X);*)	(* code size *)
+			(*Texts.WriteInt(W, LEN(M.code), 1); Texts.Write(W, 9X);*)	(* code size *)
 			INC(code, LEN(M.code));
-			Texts.WriteInt(W, dsize + csize + LEN(M.code), 1);  Texts.Write(W, 9X);
-			Texts.WriteInt(W, M.refcnt, 1);  Texts.WriteLn(W);
+			Texts.WriteInt(W, dsize + csize + LEN(M.code), 1); Texts.Write(W, 9X);
+			Texts.WriteInt(W, M.refcnt, 1); Texts.WriteLn(W);
 			M := M.next; INC(n)
 		END;
 		IF n > 1 THEN
@@ -300,7 +300,7 @@ IMPORT SYSTEM, Kernel32, Kernel, Registry, FileDir, Files, Modules, Objects, Dis
 		Texts.WriteInt(W, const, 1); Texts.Write(W, 9X);
 		Texts.WriteInt(W, code, 1); Texts.Write(W, 9X);
 *)
-			Texts.WriteInt(W, var + const + code, 1);  Texts.Write(W, 9X);
+			Texts.WriteInt(W, var + const + code, 1); Texts.Write(W, 9X);
 			Texts.WriteInt(W, n, 1); Texts.Write(W, 9X)
 		END;
 		Texts.WriteLn(W); Texts.Append(T, W.buf);
@@ -647,36 +647,36 @@ IMPORT SYSTEM, Kernel32, Kernel, Registry, FileDir, Files, Modules, Objects, Dis
 
 (* --- Toolbox for system inspection *)
 
-PROCEDURE WriteK(VAR W: Texts.Writer;  k: LONGINT);
+PROCEDURE WriteK(VAR W: Texts.Writer; k: LONGINT);
 VAR suffix: CHAR;
 BEGIN
 	IF k < 10*1024 THEN suffix := "K"
 	ELSIF k < 10*1024*1024 THEN suffix := "M"; k := k DIV 1024
 	ELSE suffix := "G"; k := k DIV (1024*1024)
 	END;
-	Texts.WriteInt(W, k, 1);  Texts.Write(W, suffix);  Texts.Write(W, "b")
+	Texts.WriteInt(W, k, 1); Texts.Write(W, suffix); Texts.Write(W, "b")
 END WriteK;
 
 PROCEDURE Watch*;
 VAR free, total, largest: LONGINT;
 BEGIN
-	Texts.WriteString(W, "System.Watch");  Texts.WriteLn(W);
+	Texts.WriteString(W, "System.Watch"); Texts.WriteLn(W);
 	free := (Kernel.Available()+512) DIV 1024;
 	total := (Kernel.Available()+Kernel.Used()+512) DIV 1024;
 	largest := (Kernel.LargestAvailable()+512) DIV 1024;
-	Texts.Write(W, 9X);  Texts.WriteString(W, "Heap has ");
-	WriteK(W, free);  Texts.WriteString(W, " of ");
-	WriteK(W, total);  Texts.WriteString(W, " free (");
-	WriteK(W, largest);  Texts.WriteString(W, " contiguous)");  Texts.WriteLn(W);
+	Texts.Write(W, 9X); Texts.WriteString(W, "Heap has ");
+	WriteK(W, free); Texts.WriteString(W, " of ");
+	WriteK(W, total); Texts.WriteString(W, " free (");
+	WriteK(W, largest); Texts.WriteString(W, " contiguous)"); Texts.WriteLn(W);
 	Texts.Append(Oberon.Log, W.buf)
 END Watch;
 
-PROCEDURE GetNum(refs: Bytes;  VAR i, num: LONGINT);
-VAR n, s: LONGINT;  x: CHAR;
+PROCEDURE GetNum(refs: Bytes; VAR i, num: LONGINT);
+VAR n, s: LONGINT; x: CHAR;
 BEGIN
-	s := 0;  n := 0;  x := refs[i];  INC(i);
+	s := 0; n := 0; x := refs[i]; INC(i);
 	WHILE ORD(x) >= 128 DO
-		INC(n, ASH(ORD(x) - 128, s));  INC(s, 7);  x := refs[i];  INC(i)
+		INC(n, ASH(ORD(x) - 128, s)); INC(s, 7); x := refs[i]; INC(i)
 	END;
 	num := n + ASH(ORD(x) MOD 64 - ORD(x) DIV 64 * 64, s)
 END GetNum;
@@ -695,13 +695,13 @@ END GetNum;
 	RecordVar = (16X | 1DX) tdadr/n .	(* record, recordpointer *)
 *)
 
-(* FindProc - Find a procedure in the reference block.  Return index of name, or -1 if not found. *)
+(* FindProc - Find a procedure in the reference block. Return index of name, or -1 if not found. *)
 
-PROCEDURE FindProc(refs: Bytes;  ofs: LONGINT): LONGINT;
-VAR i, m, t, proc: LONGINT;  ch: CHAR;
+PROCEDURE FindProc(refs: Bytes; ofs: LONGINT): LONGINT;
+VAR i, m, t, proc: LONGINT; ch: CHAR;
 BEGIN
-	proc := -1;  i := 0;  m := LEN(refs^);
-	ch := refs[i];  INC(i);
+	proc := -1; i := 0; m := LEN(refs^);
+	ch := refs[i]; INC(i);
 	WHILE (i < m) & ((ch = 0F8X) OR (ch = 0F9X)) DO	(* proc *)
 		GetNum(refs, i, t);	(* pofs *)
 		IF t > ofs THEN	(* previous procedure was the one *)
@@ -712,17 +712,17 @@ BEGIN
 				INC(i, 3)	(* RetType, procLev, slFlag *)
 			END;
 			proc := i;	(* remember this position, just before the name *)
-			REPEAT ch := refs[i];  INC(i) UNTIL ch = 0X;	(* pname *)
+			REPEAT ch := refs[i]; INC(i) UNTIL ch = 0X;	(* pname *)
 			IF i < m THEN
-				ch := refs[i];  INC(i);	(* 1X | 3X | 0F8X | 0F9X *)
+				ch := refs[i]; INC(i);	(* 1X | 3X | 0F8X | 0F9X *)
 				WHILE (i < m) & (ch >= 1X) & (ch <= 3X) DO	(* var *)
-					ch := refs[i];  INC(i);	(* type *)
+					ch := refs[i]; INC(i);	(* type *)
 					IF (ch >= 81X) OR (ch = 16X) OR (ch = 1DX) THEN
 						GetNum(refs, i, t)	(* dim/tdadr *)
 					END;
 					GetNum(refs, i, t);	(* vofs *)
-					REPEAT ch := refs[i];  INC(i) UNTIL ch = 0X;	(* vname *)
-					IF i < m THEN ch := refs[i];  INC(i) END	(* 1X | 3X | 0F8X | 0F9X *)
+					REPEAT ch := refs[i]; INC(i) UNTIL ch = 0X;	(* vname *)
+					IF i < m THEN ch := refs[i]; INC(i) END	(* 1X | 3X | 0F8X | 0F9X *)
 				END
 			END
 		END
@@ -742,28 +742,28 @@ END FindProc;
 	vname = string .	(* variable name *)
 *)
 
-(* FindProc - Find a procedure in the reference block.  Return index of name, or -1 if not found. *)
+(* FindProc - Find a procedure in the reference block. Return index of name, or -1 if not found. *)
 
-PROCEDURE FindProc(refs: Bytes;  ofs: LONGINT): LONGINT;
-VAR i, m, t, proc: LONGINT;  ch: CHAR;
+PROCEDURE FindProc(refs: Bytes; ofs: LONGINT): LONGINT;
+VAR i, m, t, proc: LONGINT; ch: CHAR;
 BEGIN
-	proc := -1;  i := 0;  m := LEN(refs^);
-	ch := refs[i];  INC(i);
+	proc := -1; i := 0; m := LEN(refs^);
+	ch := refs[i]; INC(i);
 	WHILE (i < m) & (ch = 0F8X) DO	(* proc *)
 		GetNum(refs, i, t);	(* pofs *)
 		IF t > ofs THEN	(* previous procedure was the one *)
 			ch := 0X	(* stop search *)
 		ELSE	(* ~found *)
 			proc := i;	(* remember this position, just before the name *)
-			REPEAT ch := refs[i];  INC(i) UNTIL ch = 0X;	(* pname *)
+			REPEAT ch := refs[i]; INC(i) UNTIL ch = 0X;	(* pname *)
 			IF i < m THEN
-				ch := refs[i];  INC(i);	(* 1X | 3X | 0F8X *)
+				ch := refs[i]; INC(i);	(* 1X | 3X | 0F8X *)
 				WHILE (i < m) & (ch >= 1X) & (ch <= 3X) DO	(* var *)
-					ch := refs[i];  INC(i);	(* type *)
+					ch := refs[i]; INC(i);	(* type *)
 					IF ch >= 81X THEN GetNum(refs, i, t) END;	(* dim *)
 					GetNum(refs, i, t);	(* vofs *)
-					REPEAT ch := refs[i];  INC(i) UNTIL ch = 0X;	(* vname *)
-					IF i < m THEN ch := refs[i];  INC(i) END	(* 1X | 3X | 0F8X *)
+					REPEAT ch := refs[i]; INC(i) UNTIL ch = 0X;	(* vname *)
+					IF i < m THEN ch := refs[i]; INC(i) END	(* 1X | 3X | 0F8X *)
 				END
 			END
 		END
@@ -773,14 +773,14 @@ BEGIN
 END FindProc;
 *)
 
-PROCEDURE WriteProc(VAR W: Texts.Writer; mod: Modules.Module;  pc, fp: LONGINT;  VAR refs: Bytes;  VAR refpos, base: LONGINT);
+PROCEDURE WriteProc(VAR W: Texts.Writer; mod: Modules.Module; pc, fp: LONGINT; VAR refs: Bytes; VAR refpos, base: LONGINT);
 VAR ch: CHAR;
 BEGIN
 	refpos := -1;
 	IF mod = NIL THEN
-		Texts.WriteString(W, "Unknown EIP =");  Texts.WriteHex(W, pc);  Texts.Write(W, "H");
+		Texts.WriteString(W, "Unknown EIP ="); Texts.WriteHex(W, pc); Texts.Write(W, "H");
 		IF fp # -1 THEN
-			Texts.WriteString(W, " EBP =");  Texts.WriteHex(W, fp);  Texts.Write(W, "H")
+			Texts.WriteString(W, " EBP ="); Texts.WriteHex(W, fp); Texts.Write(W, "H")
 		END
 	ELSE
 		Texts.WriteString(W, mod.name);
@@ -790,9 +790,9 @@ BEGIN
 			refpos := FindProc(refs, pc);
 			IF refpos # -1 THEN
 				Texts.Write(W, ".");
-				ch := refs[refpos];  INC(refpos);
+				ch := refs[refpos]; INC(refpos);
 				IF ch = "$" THEN base := mod.sb ELSE base := fp END;	(* for variables *)
-				WHILE ch # 0X DO Texts.Write(W, ch);  ch := refs[refpos];  INC(refpos) END
+				WHILE ch # 0X DO Texts.Write(W, ch); ch := refs[refpos]; INC(refpos) END
 			END
 		END;
 		Texts.WriteString(W, "  PC = "); Texts.WriteInt(W, pc, 1)
@@ -800,7 +800,7 @@ BEGIN
 END WriteProc;
 
 PROCEDURE GetTypeName(ptr: LONGINT; VAR name: ARRAY OF CHAR);
-	VAR tag: LONGINT; type: Types.Type;
+	VAR tag, i, n: LONGINT; type: Types.Type;
 BEGIN
 	IF ptr > 1024*1024 THEN
 		SYSTEM.GET(ptr-4, tag);
@@ -809,7 +809,13 @@ BEGIN
 			IF tag > 1024*1024 THEN
 				type := SYSTEM.VAL(Types.Type, tag);
 				IF type.module # NIL THEN
-					COPY(type.module.name, name); Strings.AppendCh(name, ".")
+					n := LEN(name);
+					Kernel32.ReadProcessMemory(Kernel32.GetCurrentProcess(), SYSTEM.ADR(type.module.name[0]), name, n, i);
+					DEC(n); name[n] := 0X; i := 0;
+					WHILE (i < n) & (name[i] > " ") DO
+						INC(i)
+					END;
+					name[i] := "."; name[i+1] := 0X
 				END;
 				Strings.Append(name, type.name); RETURN
 			END
@@ -836,10 +842,10 @@ VAR
 	mode, ch: CHAR; m, adr, type, n, lval, size, tmp1, tmp2, tdadr0, tdadr1: LONGINT; etc: BOOLEAN;
 	sval: SHORTINT; ival: INTEGER; tmp: Bytes; set: SET; rval: REAL; lrval: LONGREAL;
 BEGIN
-	m := LEN(refs^);  mode := refs[i];  INC(i);
+	m := LEN(refs^); mode := refs[i]; INC(i);
 	WHILE (i < m) & (mode >= 1X) & (mode <= 3X) DO	(* var *)
 		tdadr0 := 0; tdadr1 := 0;
-		type := ORD(refs[i]);  INC(i);  etc := FALSE;
+		type := ORD(refs[i]); INC(i); etc := FALSE;
 		IF type > 80H THEN
 			IF type = 83H THEN type := 15 ELSE DEC(type, 80H) END;
 			GetNum(refs, i, n)
@@ -852,47 +858,47 @@ BEGIN
 			IF type = 15 THEN n := MaxString (* best guess *) ELSE n := 1 END
 		END;
 		GetNum(refs, i, adr);
-		Texts.Write(W, 9X);  ch := refs[i];  INC(i);
-		WHILE ch # 0X DO Texts.Write(W, ch);  ch := refs[i];  INC(i) END;
+		Texts.Write(W, 9X); ch := refs[i]; INC(i);
+		WHILE ch # 0X DO Texts.Write(W, ch); ch := refs[i]; INC(i) END;
 		Texts.WriteString(W, " = ");
 		INC(adr, base);
 		IF n = 0 THEN	(* open array *)
 			SYSTEM.GET(adr+4, n)	(* real LEN from stack *)
 		END;
 		IF type = 15 THEN
-			IF n > MaxString THEN etc := TRUE;  n := MaxString END
+			IF n > MaxString THEN etc := TRUE; n := MaxString END
 		ELSE
-			IF n > MaxArray THEN etc := TRUE;  n := MaxArray END
+			IF n > MaxArray THEN etc := TRUE; n := MaxArray END
 		END;
 		IF mode # 1X THEN SYSTEM.GET(adr, adr) END;	(* indirect *)
 		IF (adr >= -4) & (adr < 4096) THEN
-			Texts.WriteString(W, "NIL reference (");  Texts.WriteHex(W, adr);  Texts.WriteString(W, "H )")
+			Texts.WriteString(W, "NIL reference ("); Texts.WriteHex(W, adr); Texts.WriteString(W, "H )")
 		ELSE
 			IF type = 15 THEN
 				Texts.Write(W, 22X);
 				LOOP
 					IF n = 0 THEN EXIT END;
-					SYSTEM.GET(adr, ch);  INC(adr);
+					SYSTEM.GET(adr, ch); INC(adr);
 					IF (ch < " ") OR (ch > "~") THEN EXIT END;
-					Texts.Write(W, ch);  DEC(n)
+					Texts.Write(W, ch); DEC(n)
 				END;
-				Texts.Write(W, 22X);  etc := (ch # 0X)
+				Texts.Write(W, 22X); etc := (ch # 0X)
 			ELSE
 				CASE type OF
 					1..4: size := 1
 					|5: size := 2
 					|6..7,9,13,14,29: size := 4
-					|8: size := 8
+					|8, 16: size := 8
 					|22: size := 0; ASSERT(n <= 1)
 				ELSE
-					Texts.WriteString(W, "bad type ");  Texts.WriteInt(W, type, 1);  n := 0
+					Texts.WriteString(W, "bad type "); Texts.WriteInt(W, type, 1); n := 0
 				END;
 				WHILE n > 0 DO
 					CASE type OF
 						1,3:	(* BYTE, CHAR *)
 							SYSTEM.GET(adr, ch);
 							IF (ch > " ") & (ch <= "~") THEN Texts.Write(W, ch)
-							ELSE Texts.WriteHex(W, ORD(ch));  Texts.Write(W, "X")
+							ELSE Texts.WriteHex(W, ORD(ch)); Texts.Write(W, "X")
 							END
 						|2:	(* BOOLEAN *)
 							SYSTEM.GET(adr, ch);
@@ -901,27 +907,30 @@ BEGIN
 							ELSE Texts.WriteInt(W, ORD(ch), 1)
 							END
 						|4:	(* SHORTINT *)
-							SYSTEM.GET(adr, sval);  Texts.WriteInt(W, sval, 1)
+							SYSTEM.GET(adr, sval); Texts.WriteInt(W, sval, 1)
 						|5:	(* INTEGER *)
-							SYSTEM.GET(adr, ival);  Texts.WriteInt(W, ival, 1)
+							SYSTEM.GET(adr, ival); Texts.WriteInt(W, ival, 1)
 						|6:	(* LONGINT *)
-							SYSTEM.GET(adr, lval);  Texts.WriteInt(W, lval, 1)
+							SYSTEM.GET(adr, lval); Texts.WriteInt(W, lval, 1)
 						|7:	(* REAL *)
-							SYSTEM.GET(adr, rval);  Texts.WriteReal(W, rval, 15)
+							SYSTEM.GET(adr, rval); Texts.WriteReal(W, rval, 15)
 						|8:	(* LONGREAL *)
-							SYSTEM.GET(adr, lrval);  Texts.WriteLongReal(W, lrval, 24)
+							SYSTEM.GET(adr, lrval); Texts.WriteLongReal(W, lrval, 24)
 						|9:	(* SET *)
-							SYSTEM.GET(adr, set);  Texts.WriteSet(W, set)
+							SYSTEM.GET(adr, set); Texts.WriteSet(W, set)
 						|13, 29:	(* POINTER *)
-							SYSTEM.GET(adr, tdadr1);  Texts.WriteHex(W, tdadr1);  Texts.Write(W, "H");
+							SYSTEM.GET(adr, tdadr1); Texts.WriteHex(W, tdadr1); Texts.Write(W, "H");
 							IF type = 13 THEN tdadr1 := 0 END
 						|22:	(* RECORD *)
-							tdadr1 := tdadr0; Texts.WriteHex(W, tdadr1);  Texts.Write(W, "H")
+							tdadr1 := tdadr0; Texts.WriteHex(W, tdadr1); Texts.Write(W, "H")
 						|14:	(* PROC *)
 							SYSTEM.GET(adr, lval);
 							IF lval = 0 THEN Texts.WriteString(W, "NIL")
 							ELSE WriteProc(W, Kernel.GetMod(lval), lval, -1, tmp, tmp1, tmp2)
 							END
+						|16:	(* HUGEINT *)
+							SYSTEM.GET(adr+4, lval); Texts.WriteHex(W, lval);
+							SYSTEM.GET(adr, lval); Texts.WriteHex(W, lval)
 					END;
 					IF type IN {13, 22, 29} THEN
 						WriteType(W, tdadr1, tdadr0)						
@@ -933,29 +942,29 @@ BEGIN
 		END;
 		IF etc THEN Texts.WriteString(W, " ...") END;
 		Texts.WriteLn(W);
-		IF i < m THEN mode := refs[i];  INC(i) END
+		IF i < m THEN mode := refs[i]; INC(i) END
 	END
 END Variables;
 
 PROCEDURE OutState (VAR name: ARRAY OF CHAR; t: Texts.Text);
-VAR mod: Modules.Module; refpos, i: LONGINT; refs: Bytes;  ch: CHAR;
+VAR mod: Modules.Module; refpos, i: LONGINT; refs: Bytes; ch: CHAR;
 BEGIN
-	i := 0;  WHILE (name[i] # 0X) & (name[i] # ".") DO INC(i) END;
+	i := 0; WHILE (name[i] # 0X) & (name[i] # ".") DO INC(i) END;
 	name[i] := 0X;
 	Texts.WriteString(W, name); mod := Kernel.modules;
 	WHILE (mod # NIL) & (mod.name # name) DO mod := mod.next END;
 	IF mod # NIL THEN
-		Texts.WriteString(W, "  SB ="); Texts.WriteHex(W, mod.sb); Texts.Write(W, "H");  Texts.WriteLn(W);
+		Texts.WriteString(W, "  SB ="); Texts.WriteHex(W, mod.sb); Texts.Write(W, "H"); Texts.WriteLn(W);
 		refs := SYSTEM.VAL(Bytes, mod.refs);
 		IF (refs # NIL) & (LEN(mod.refs) # 0) THEN
 			refpos := FindProc(refs, 0);	(* assume module body is at PC = 0 *)
 			IF refpos # -1 THEN
-				REPEAT ch := refs[refpos];  INC(refpos) UNTIL ch = 0X;
+				REPEAT ch := refs[refpos]; INC(refpos) UNTIL ch = 0X;
 				Variables(W, mod, refs, refpos, mod.sb)
 			END
 		END
 	ELSE
-		Texts.WriteString(W, " not loaded");  Texts.WriteLn(W)
+		Texts.WriteString(W, " not loaded"); Texts.WriteLn(W)
 	END;
 	Texts.Append(t, W.buf)
 END OutState;
@@ -992,19 +1001,19 @@ BEGIN
 			Texts.Append(T, W.buf);
 			OpenText("Commands", T, TRUE)
 		ELSE
-			Texts.WriteString(W, Modules.resMsg);  Texts.WriteLn(W);  
+			Texts.WriteString(W, Modules.resMsg); Texts.WriteLn(W);
 			Texts.Append(Oberon.Log, W.buf)
 		END
 	END
 END ShowCommands;
 
 PROCEDURE ShowTasks*;
-VAR T: Texts.Text;  n: Oberon.Task;  ofs, t: LONGINT;  m: Modules.Module;
+VAR T: Texts.Text; n: Oberon.Task; ofs, t: LONGINT; m: Modules.Module;
 BEGIN
-	n := Oberon.NextTask;  t := Input.Time();
+	n := Oberon.NextTask; t := Input.Time();
 	REPEAT
-		ofs := SYSTEM.VAL(LONGINT, n.handle);  m := Kernel.GetMod(ofs);
-		Texts.WriteString(W, m.name);  Texts.WriteString(W, "  PC = ");  
+		ofs := SYSTEM.VAL(LONGINT, n.handle); m := Kernel.GetMod(ofs);
+		Texts.WriteString(W, m.name); Texts.WriteString(W, "  PC = ");
 		Texts.WriteInt(W, ofs-SYSTEM.ADR(m.code[0]), 1);
 		IF n.safe THEN Texts.WriteString(W, "  safe  ")
 		ELSE Texts.WriteString(W, "  unsafe  ")
@@ -1013,7 +1022,7 @@ BEGIN
 		IF n.time - t <= 0 THEN 
 			Texts.WriteString(W, " ready")
 		ELSE
-			Texts.WriteString(W, " waiting ");  Texts.WriteInt(W, (n.time-t)*1000 DIV Input.TimeUnit, 1);  
+			Texts.WriteString(W, " waiting "); Texts.WriteInt(W, (n.time-t)*1000 DIV Input.TimeUnit, 1);
 			Texts.WriteString(W, "ms")
 		END;
 		Texts.WriteLn(W);
@@ -1049,7 +1058,7 @@ END ShowTasks;
 			WriteProc(Wt, mod, pc, fp, refs, refpos, base); Texts.WriteLn(Wt);
 			IF refpos # -1 THEN Variables(Wt, mod, refs, refpos, base) END;
 			lastfp := fp;
-			SYSTEM.GET(fp+4, pc);  SYSTEM.GET(fp, fp); (* return addr from stack *)
+			SYSTEM.GET(fp+4, pc); SYSTEM.GET(fp, fp); (* return addr from stack *)
 			IF (fp < lastfp) OR (fp >= stackBottom) THEN EXIT END; (* not called from stack *)
 			mod := Kernel.GetMod(pc)
 		END;
@@ -1073,7 +1082,7 @@ END ShowTasks;
 
 	PROCEDURE Quit*;
 	BEGIN
-		IF Kernel.isEXE & (Kernel.lock <= 0) THEN
+		IF Kernel.isEXE & Kernel.CanShutdown() THEN
 			Kernel.Shutdown(0)
 		ELSE
 			HALT(99)
@@ -1252,28 +1261,40 @@ BEGIN
 	ver.dwOSVersionInfoSize := SIZE(Kernel32.OSVersionInfo);
 	Kernel32.GetVersionEx(ver);
 	IF ver.dwPlatformId = Kernel32.VerPlatformWin32s THEN
-		Texts.WriteString(W, "Win32s")
+		Texts.WriteString(W, "3.1 with Win32s")
 	ELSIF ver.dwPlatformId = Kernel32.VerPlatformWin32Windows THEN
 		IF ver.dwMinorVersion = 0 THEN
 			Texts.WriteString(W, "95")
-		ELSIF ver.dwMinorVersion > 0 THEN
+		ELSIF ver.dwMinorVersion = 10 THEN
 			Texts.WriteString(W, "98")
+		ELSIF ver.dwMinorVersion = 90 THEN
+			Texts.WriteString(W, "ME")
 		ELSE
-			Texts.WriteString(W, "??")
+			Texts.WriteString(W, "DOS")
 		END;
 		ver.dwMajorVersion := ver.dwBuildNumber DIV (256*256*256);
-		ver.dwMinorVersion :=  (ver.dwBuildNumber DIV (256*256)) MOD 256;
+		ver.dwMinorVersion := (ver.dwBuildNumber DIV (256*256)) MOD 256;
 		ver.dwBuildNumber := ver.dwBuildNumber MOD (256*256)
 	ELSIF ver.dwPlatformId = Kernel32.VerPlatformWin32NT THEN
-		IF ver.dwMajorVersion = 5 THEN
-			Texts.WriteString(W, "2000")
-		ELSIF (ver.dwMajorVersion = 3) OR (ver.dwMajorVersion = 4) THEN
-			Texts.WriteString(W, "NT")
+		IF ver.dwMajorVersion = 6 THEN
+			IF ver.dwMinorVersion = 1 THEN
+				Texts.WriteString(W, "2008")
+			ELSE
+				Texts.WriteString(W, "Vista")
+			END
+		ELSIF ver.dwMajorVersion = 5 THEN
+			IF ver.dwMinorVersion = 0 THEN
+				Texts.WriteString(W, "2000")
+			ELSIF ver.dwMinorVersion = 2 THEN
+				Texts.WriteString(W, "2003")
+			ELSE
+				Texts.WriteString(W, "XP")
+			END
 		ELSE
-			Texts.WriteString(W, "??")
+			Texts.WriteString(W, "NT")
 		END
 	ELSE
-		Texts.WriteString(W, "??")
+		Texts.WriteString(W, "?")
 	END;
 	Texts.WriteString(W, " Version "); Texts.WriteInt(W, ver.dwMajorVersion, 0);
 	Texts.Write(W, "."); Texts.WriteInt(W, ver.dwMinorVersion, 0);

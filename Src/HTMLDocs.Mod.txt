@@ -1,4 +1,5 @@
-﻿(* Copyright (c) 1994 - 2000 Emil J. Zeller *)
+﻿(* ETH Oberon, Copyright 2001 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE HTMLDocs; (** portable *)	(* ejz , Greek & Math support by afi *)
 	IMPORT Objects, Input, Strings, Display, Display3, Fonts, HyperDocs, Texts, Gadgets, Documents, HTTPDocs0, TextDocs,
@@ -1252,7 +1253,10 @@ to.elems := from.elems
 		ELSE
 		END;
 						Texts.SetFont (P.W, fnt);
+(*
 					ELSIF (i >= 160) & (i <= 250) THEN	(* Math character *)
+*)
+					ELSIF (i = 167) OR (i = 176) OR (i = 177) OR (i = 162) OR (i = 247) THEN	(* Math character *)
 						Texts.SetFont (P.W, ChangeFontFamily(fnt, "Math"));
 		CASE i OF	(*   glyph	TeX name *)
 			  167: Texts.Write(P.W, "v")	(*	v	S *)
@@ -1262,9 +1266,11 @@ to.elems := from.elems
 			| 162: Texts.Write(P.W, "~")	(*	~	cents *)
 		ELSE
 		END;
-						Texts.SetFont (P.W, fnt);
-					ELSE
+						Texts.SetFont (P.W, fnt)
+					ELSIF (i < 256) THEN
 						Texts.Write(P.W, Strings.ISOToOberon[i])
+					ELSE (* The character is not available in ETH Oberon / PC Native. *)
+						Texts.Write(P.W, CHR(0))  (* Make a nul character. *)
 					END
 				END
 			ELSE
@@ -1336,7 +1342,11 @@ to.elems := from.elems
 					|189: Strings.Append(str, " 1/2")
 					|190: Strings.Append(str, " 3/4")
 				ELSE
-					Strings.AppendCh(str, Strings.ISOToOberon[i])
+					IF i < 256 THEN
+						Strings.AppendCh(str, Strings.ISOToOberon[i])
+				    ELSE (* The character is not available in ETH Oberon / PC Native 05.01.2003. *)
+						Strings.AppendCh(str, CHR(0))  (* Make a nul character. *)					
+					END
 				END
 			ELSE
 				Strings.Append(str, "&#")
@@ -3088,7 +3098,7 @@ ELSIF ~on THEN
 			IF me.S.state # End THEN
 				i := Input.Time(); timeOut := i + Input.TimeUnit; me.time := i;
 				St := me.S.S; app := FALSE;
-				me.S.avail := St.Available(St); minSize := 64;
+				me.S.avail := St.Available(St); minSize := (*64*)1;	(* workaround for hang problem after NetSystem.State change *)
 				IF (me.S.avail < minSize) & (me.S.avail > 0) THEN
 					IF St.State(St) = Streams.closed THEN
 						minSize := me.S.avail

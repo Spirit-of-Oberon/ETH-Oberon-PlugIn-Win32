@@ -1,4 +1,5 @@
-﻿(* Copyright (c) 1994 - 2000 Emil J. Zeller *)
+﻿(* ETH Oberon, Copyright 2001 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE Display; (** portable, except where noted / source: Win32.Display.Mod *)	(* ejz  *)
 	IMPORT SYSTEM, Kernel32, Files, Modules, Objects, User32, GDI32, Displays;
@@ -25,7 +26,7 @@ MODULE Display; (** portable, except where noted / source: Win32.Display.Mod *)	
 		get* = 0; set* = 1; reset* = 2; (** SelectMsg id. *)
 		drop* = 0; integrate* = 1; (** ConsumeMsg id. *)
 
-		(** TransferFormat() return values. value DIV 8 = bytes per pixel. portable, release >= 2.4 *)
+	(** TransferFormat() return values.  value DIV 8 = bytes per pixel.  portable, release >= 2.4*)
 		unknown* = 0; index8* = 8; color555* = 16; color565* = 17; color664* = 18; color888* = 24; color8888* = 32;
 
 	TYPE
@@ -151,7 +152,7 @@ MODULE Display; (** portable, except where noted / source: Win32.Display.Mod *)	
 		END
 	END GetColor;
 
-	(** Return true color with specified components. 0 <= red, green, blue < 256. Not all display regions support true color values, see TrueColor(). *)
+	(** Return true color with specified components. 0 <= red, green, blue < 256.  Not all display regions support true color values, see TrueColor(). *)
 	PROCEDURE RGB*(red, green, blue: LONGINT): Color;	(** portable, release >= 2.4 *)
 	BEGIN
 		RETURN MIN(LONGINT) + ASH(red, 16) + ASH(green, 8) + blue
@@ -410,12 +411,6 @@ HALT(99)
 			w := SHORT(p.w); h := SHORT(p.h)
 		END
 	END GetDim;
-
-(*
-	PROCEDURE WritePattern*(VAR R: Files.Rider; pat: Pattern);
-
-	PROCEDURE ReadPattern*(VAR R: Files.Rider; VAR pat: Pattern);
-*)
 
 	(** Define a new pattern. *)
 	PROCEDURE NewPattern*(w, h: LONGINT; VAR image: ARRAY OF SET): Pattern;

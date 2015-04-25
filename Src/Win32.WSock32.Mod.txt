@@ -13,11 +13,18 @@ MODULE WSock32; (** non-portable / source: Win32.WSock32.Mod *)	(* ejz  *)
 		MAXGETHOSTSTRUCT* = 1024;
 		WSADescriptionLen* = 256; WSASysStatusLen* = 128;
 		FDRead* = 01H; FDWrite* = 02H; FDAccept *= 08H; FDConnect* = 010H; FDClose* = 020H;
-		WSABaseErr = 10000; WSAEInval* = WSABaseErr+22; WSAEWouldBlock* = WSABaseErr+35;
+		WSABaseErr = 10000;
+		WSAEInval* = WSABaseErr+22; WSAEWouldBlock* = WSABaseErr+35; WSAEInProgress* = WSABaseErr+36;
 		WSAEConnAborted* = WSABaseErr+53; WSAEConnReset* = WSABaseErr+54; WSAENoBufs* = WSABaseErr+55;
+		WSAEShutdown* = WSABaseErr+58;
 		FIONRead* = 4004667FH;
 		SOLSocket* = 0FFFFH; SOSndTimeo* = 01005H; SORcvTimeo* = 01006H;
 		MsgPeek* = 2;
+		SDReceive* = 0; SDSend* = 1; SDBoth* = 2;
+		FDSetSize = 64;
+		SOMaxConn* = 07FFFFFFFH;
+		SOBroadcast* = 020H;
+		SIOGetBroadcastAddress* = 048000005H;
 
 	TYPE
 		Socket* = Kernel32.HANDLE;
@@ -56,6 +63,15 @@ MODULE WSock32; (** non-portable / source: Win32.WSock32.Mod *)	(* ejz  *)
 			hAddrList*: Kernel32.ADDRESS
 		END;
 
+		TimeVal* = RECORD [NOTAG]
+			tvsec*, tvusec*: LONGINT
+		END;
+
+		FDSet* = RECORD [NOTAG]
+			fdcount*: LONGINT;
+			fdarray*: ARRAY FDSetSize OF Socket
+		END;
+
 	VAR
 		wsock32: Kernel32.HMODULE;
 		(** The Windows Sockets WSACleanup function terminates use of the Ws2_32.dll. *)
@@ -71,6 +87,8 @@ MODULE WSock32; (** non-portable / source: Win32.WSock32.Mod *)	(* ejz  *)
 		WSAAsyncSelect-: PROCEDURE [WINAPI] (s: Socket; hWnd: User32.HWND; wMsg: LONGINT; lEvent: LONGINT): LONGINT;
 		(** The Windows Sockets WSAGetLastError function gets the error status for the last operation that failed. *)
 		WSAGetLastError-: PROCEDURE [WINAPI] (): LONGINT;
+		(** The WSAIoctl function controls the mode of a socket. *)
+		WSAIoctl-: PROCEDURE [WINAPI] (s: Socket; dwIoControlCode: LONGINT; VAR lpvInBuffer: ARRAY [NOTAG] OF SYSTEM.BYTE; cbInBuffer: LONGINT; lpvOutBuffer: ARRAY [NOTAG] OF SYSTEM.BYTE; cbOutBuffer: LONGINT; VAR lpcbBytesReturned: LONGINT; lpOverlapped, lpCompletionRoutine: Kernel32.ADDRESS): LONGINT;
 		(** The Windows Sockets WSASocket function creates a socket that is bound to a specific transport-service provider. *)
 		WSASocket-: PROCEDURE [WINAPI] (af, type, protocol: LONGINT; VAR lpProtocolInfo: WSAProtocolInfo; g: Group; dwFlags: LONGINT): Socket;
 		(** The Windows Sockets WSAStartup function initiates use of Ws2_32.dll by a process. *)
@@ -118,7 +136,9 @@ MODULE WSock32; (** non-portable / source: Win32.WSock32.Mod *)	(* ejz  *)
 		setsockopt-: PROCEDURE [WINAPI] (s: Socket; level, optname: LONGINT; VAR optval: ARRAY [NOTAG] OF SYSTEM.BYTE; optlen: LONGINT): LONGINT;
 		(** The Windows Sockets socket function creates a socket that is bound to a specific service provider. *)
 		socket-: PROCEDURE [WINAPI] (af, type, protocol: LONGINT): Socket;
-
+		shutdown-: PROCEDURE [WINAPI] (s: Socket; how: LONGINT): LONGINT;
+		select-: PROCEDURE [WINAPI] (nfds: LONGINT; VAR readfds, writefds, exceptfds: FDSet; timeout: TimeVal): LONGINT;
+	
 	PROCEDURE *TermMod();
 	BEGIN
 		IF wsock32 # Kernel32.NULL THEN
@@ -137,6 +157,7 @@ MODULE WSock32; (** non-portable / source: Win32.WSock32.Mod *)	(* ejz  *)
 		Kernel32.GetProcAddress(wsock32, "WSAAsyncGetHostByName", SYSTEM.VAL(LONGINT, WSAAsyncGetHostByName));
 		Kernel32.GetProcAddress(wsock32, "WSAAsyncSelect", SYSTEM.VAL(LONGINT, WSAAsyncSelect));
 		Kernel32.GetProcAddress(wsock32, "WSAGetLastError", SYSTEM.VAL(LONGINT, WSAGetLastError));
+		Kernel32.GetProcAddress(wsock32, "WSAIoctl", SYSTEM.VAL(LONGINT, WSAIoctl));
 		Kernel32.GetProcAddress(wsock32, "WSASocketA", SYSTEM.VAL(LONGINT, WSASocket));
 		Kernel32.GetProcAddress(wsock32, "WSAStartup", SYSTEM.VAL(LONGINT, WSAStartup));
 		Kernel32.GetProcAddress(wsock32, "accept", SYSTEM.VAL(LONGINT, accept));
@@ -158,6 +179,8 @@ MODULE WSock32; (** non-portable / source: Win32.WSock32.Mod *)	(* ejz  *)
 		Kernel32.GetProcAddress(wsock32, "sendto", SYSTEM.VAL(LONGINT, sendto));
 		Kernel32.GetProcAddress(wsock32, "setsockopt", SYSTEM.VAL(LONGINT, setsockopt));
 		Kernel32.GetProcAddress(wsock32, "socket", SYSTEM.VAL(LONGINT, socket));
+		Kernel32.GetProcAddress(wsock32, "shutdown", SYSTEM.VAL(LONGINT, shutdown));
+		Kernel32.GetProcAddress(wsock32, "select", SYSTEM.VAL(LONGINT, select));
 		Modules.InstallTermHandler(TermMod)
 	END Init;
 

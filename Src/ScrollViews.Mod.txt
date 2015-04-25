@@ -1,4 +1,4 @@
-﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+﻿(* ETH Oberon, Copyright 2001 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
 Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE ScrollViews; (** portable *)	(** PS  **)
@@ -595,9 +595,7 @@ BEGIN
 	
 	IF M.res < 0 THEN (* child does not respond *)
 		last0 := last; last := F;
-		IF 2 IN M.keys THEN (* left *)
-			Oberon.DrawCursor(Oberon.Mouse, Effects.Arrow, M.X, M.Y)
-		ELSIF 1 IN M.keys THEN (* middle *)
+		IF (1 IN M.keys) OR (Oberon.New & (2 IN M.keys)) THEN (* middle *)
 			b:= F.border;
 			IF (f # NIL) & (f IS Gadgets.Frame) & ~(Gadgets.lockedcontents IN F.state) THEN
 				WITH f: Gadgets.Frame DO

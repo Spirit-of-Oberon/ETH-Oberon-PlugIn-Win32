@@ -1,4 +1,5 @@
-﻿(* Copyright (c) 1994 - 2000 Emil J. Zeller *)
+﻿(* ETH Oberon, Copyright 2001 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 (** Module Bitmaps provide a portable way to save and restore areas of the display. *)
 
@@ -53,13 +54,17 @@ MODULE Bitmaps; (** non-portable / source: Win32.Bitmaps.Mod *)	(* ejz  *)
 		bitmap.hOldBm := Kernel32.NULL; bitmap.width := w; bitmap.height := h;
 		hDC := GDI32.CreateDC("DISPLAY", NIL, NIL, NIL);
 		bitmap.hBm := GDI32.CreateCompatibleBitmap(hDC, w, h);
+		IF bitmap.hBm = Kernel32.NULL THEN
+			Kernel.GC(); bitmap.hBm := GDI32.CreateCompatibleBitmap(hDC, w, h)
+		END;
 		GDI32.DeleteDC(hDC);
 		IF bitmap.hBm # Kernel32.NULL THEN
 			bitmap.clipL := 0; bitmap.clipB := 0;
 			bitmap.clipR := MAX(INTEGER); bitmap.clipT := MAX(INTEGER);
 			Kernel.RegisterObject(bitmap, Finalize, FALSE);
 			RETURN bitmap
-		END
+		END;
+		RETURN NIL
 	END New;
 
 	PROCEDURE Open(disp: Displays.Display);

@@ -1,9 +1,7 @@
-﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+﻿(* ETH Oberon, Copyright 2001 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
 Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
-(* Windows specific parts: Copyright (c) 1994 - 2000 Emil J. Zeller *)
-
-MODULE Oberon; (** portable, except where noted / source: Win32.Oberon.Mod *)	(* ejz  *)
+MODULE Oberon; (** portable, except where noted / source: Win32.Oberon.Mod *)	(* JG 22.7.94, ejz  *)
 	IMPORT SYSTEM, Kernel32, Kernel, Registry, Modules, Objects, User32, Displays, Display,
 		Fonts, Input, Dates, Strings, Texts, Threads, Viewers, FileDir, Windows;
 
@@ -113,7 +111,7 @@ Oberon system manager for dispatch of keyboard and mouse input, scheduling of ta
 				updateObj: upcall to Gadgets.Update
 				execute: upcall to Gadgets.Execute
 				install: upcall to WinPlugIns.Install
-				print: upcall to WinPlugIns.Print *)
+				print: upcall to WinFrames.Print *)
 		updateObj*: UpdateObjProc;	(** non-portable *)
 		execute*: PROCEDURE (executorObj: Display.Frame; cmd: ARRAY OF CHAR);	(** non-portable *)
 		install*: PROCEDURE (win: Viewers.Window);	(** non-portable *)
@@ -517,7 +515,7 @@ Oberon system manager for dispatch of keyboard and mouse input, scheduling of ta
 			P := Modules.ThisCommand(Mod, name);
 			IF Modules.res = 0 THEN
 				Par := par;
-				IF Par.frame # NIL THEN
+				IF par.frame # NIL THEN
 					f := Par.frame;
 					WHILE (f # NIL) & ~(f IS Viewers.Viewer) DO
 						f := f.dlink
@@ -614,15 +612,31 @@ Oberon system manager for dispatch of keyboard and mouse input, scheduling of ta
 	END SetOffset;
 
 	PROCEDURE *WriteEntry(key, value: ARRAY OF CHAR);
-		VAR i: LONGINT;
+		VAR i: LONGINT; ch: CHAR; simple: BOOLEAN;
 	BEGIN
 		IF key # "" THEN
 			Texts.Write(W, 022X); Texts.WriteString(W, key); Texts.Write(W, 022X); 
 			Texts.WriteString(W, "=")
 		END;
-		i := 0;
-		WHILE value[i] > " " DO INC(i) END;
-		IF value[i] # 0X THEN
+		ch := value[0];
+		IF (CAP(ch) >= "A") & (CAP(ch) <= "Z") OR (ch = ".") OR (ch = "/") THEN (* Texts.Name *)
+			INC(i); ch := value[i];
+			WHILE (ch # 0X) & Texts.nameChars[ORD(ch)] DO
+				INC(i); ch := value[i]
+			END;
+			simple := ch = 0X
+		ELSIF ch = '"' THEN (* Texts.String *)
+			simple := TRUE
+		ELSIF (ch = "-") OR (ch = "+") OR ((ch >= "0") & (ch <= "9")) THEN (* Texts.Int *)
+			INC(i); ch := value[i];
+			WHILE (ch # 0X) & (((ch >= "0") & (ch <= "9")) OR ((CAP(ch) >= "A") & (CAP(ch) <= "F"))) DO
+				INC(i); ch := value[i]
+			END;
+			simple := (ch = 0X) OR (CAP(ch) = "H")
+		ELSE
+			simple := FALSE
+		END;
+		IF ~simple THEN
 			Texts.Write(W, "{"); Texts.WriteString(W, value); Texts.Write(W, "}")
 		ELSE
 			Texts.WriteString(W, value)
@@ -766,13 +780,13 @@ Oberon system manager for dispatch of keyboard and mouse input, scheduling of ta
 		Threads.Unlock(Viewers.moduleCS)
 	END UnlockOberon;
 
-	(** Command invoken by the Neutralize key (ESC, F2, F8) *)
+	(** Broadcast ControlMsg with id=neutralize to all viewers (ESC/F2). *)
 	PROCEDURE Neutralize*;	(** non-portable *)
 	BEGIN
 		Control(NIL, neutralize, TRUE); FadeCursor(Pointer)
 	END Neutralize;
 
-	(** Command invoken by the Setup key (F1, F7) *)
+	(** Send ControlMsg with id=mark to viewer unter the mouse pointer (F1, F7). *)
 	PROCEDURE Setup*;	(** non-portable *)
 		VAR V: Viewers.Viewer; N: ControlMsg; keys: SET;
 	BEGIN
@@ -786,7 +800,7 @@ Oberon system manager for dispatch of keyboard and mouse input, scheduling of ta
 		END
 	END Setup;
 
-	(** Command invoken by the Refresh key (F9) *)
+	(** Redraw viewer unter the mouse pointer (F9). *)
 	PROCEDURE RefreshDisplay*;	(** non-portable *)
 		VAR V: Viewers.Viewer;
 	BEGIN
@@ -796,9 +810,16 @@ Oberon system manager for dispatch of keyboard and mouse input, scheduling of ta
 		END
 	END RefreshDisplay;
 
+	(** Invert the value of Oberon.New (F8). *)
+	PROCEDURE FlipNew*;
+	BEGIN
+		New := ~New; RefreshDisplay()
+	END FlipNew;
+
 	PROCEDURE Init();
 		VAR
 			S: Texts.Scanner; diff: ARRAY 8 OF CHAR;
+			pename: FileDir.FileName;
 			i, j: LONGINT; done: BOOLEAN;
 	BEGIN
 		NEW(Par); NEW(Par.vwr); Par.vwr.kind := -1; NEW(Par.frame); Par.vwr.dsc := Par.frame;
@@ -832,7 +853,14 @@ Oberon system manager for dispatch of keyboard and mouse input, scheduling of ta
 		END;
 		updateObj := NIL; execute := NIL; install := NIL; print := NIL;
 		IF Kernel.isEXE THEN
-			done := Displays.PutCmd(NIL, NIL, "System.StartEXE", 0)
+			Kernel32.GetModuleFileName(Kernel.hInstance, pename, LEN(pename));
+			Strings.GetSuffix(pename, diff); Strings.Upper(diff, diff);
+			IF diff = "SCR" THEN
+				done := Displays.PutCmd(NIL, NIL, "System.StartDLL", 0);
+				done := Displays.PutCmd(NIL, NIL, "ScreenSaver.Init", 0)
+			ELSE (* EXE *)
+				done := Displays.PutCmd(NIL, NIL, "System.StartEXE", 0)
+			END
 		ELSE
 			done := Displays.PutCmd(NIL, NIL, "System.StartDLL", 0)
 		END
@@ -895,6 +923,18 @@ Oberon system manager for dispatch of keyboard and mouse input, scheduling of ta
 													V := Viewers.This(M.X, M.Y)
 												END;
 												Viewers.Send(V, M)
+					|Displays.wheel: M.F := NIL; M.id := consume;
+												M.fnt := CurFnt; M.col := CurCol; M.voff := CurOff;
+												WITH event: Displays.InputEvent DO
+													IF event.zDelta > 0 THEN
+														M.ch := 0C1X (* Up *)
+													ELSIF event.zDelta < 0 THEN
+														M.ch := 0C2X (* Down *)
+													ELSE
+														M.ch := 0X
+													END;
+													IF M.ch # 0X THEN Display.Broadcast(M) END
+												END
 					|Displays.update: updateObj(event(Displays.UpdateEvent).obj)
 					|Displays.execute: WITH event: Displays.CommandEvent DO
 														IF (event.executor # NIL) & (event.executor IS Display.Frame) & (execute # NIL) THEN
@@ -964,7 +1004,7 @@ END Oberon.
 (** Remarks:
 
 1. Command execution
-Execution of commands is the task of modules Module. Oberon.Call provides an abstraction for this mechanism and also a way to pass parameters in the form of a text to the executed command. After command execution, the global variable Oberon.Par is a pointer to a parameter record specifying a parameter text, a position in that text, and details what objects are involved in the commands. The vwr field of the ParRec points to the viewer in which the command was executed. The frame field of the ParRec points to the direct child of the vwr (the menu or the main frame) from which the command was executed. This semantic is compatible with older Oberon applications and is seldomly used today. The obj field of the ParRec points to the object (normally a frame) that executed the command. The Oberon.Par pointer is initialized before command execution to the parameter record passed to Oberon.Call.
+Execution of commands is the task of modules Module. Oberon.Call provides an abstraction for this mechanism and also a way to pass parameters in the form of a text to the executed command. After command execution, the global variable Oberon.Par is a pointer to a parameter record specifying a parameter text, a position in that text, and details what objects are involved in the commands. The vwr field of the ParRec points to the viewer in which the command was executed. The frame field of the ParRec points to the direct child of the vwr (the menu or the main frame) from which the command was executed. This semantics is compatible with older Oberon applications and is seldomly used today. The obj field of the ParRec points to the object (normally a frame) that executed the command. The Oberon.Par pointer is initialized before command execution to the parameter record passed to Oberon.Call.
 
 2. Cursors and Markers
 Markers are a way to draw and undraw a shape on the display. Typically, draw and undraw can be realized by an invert display operation. Cursors keep track of the current position and state (visible or not) of a marker. The Mouse cursor is the standard mouse arrow, and the Pointer cursor is the star marker placed with the Setup key. Repeatedly calling Oberon.DrawCursor with different coordinates move a cursor (and marker) across the display. Before drawing in a certain area of the display, cursors should be removed with Oberon.RemoveMarks or Oberon.FadeCursor (failingly to do so may result in the cursor leaving garbage on the display when drawing operations are performed in its vicinity). Note that on some Oberon host platforms (Windows, Mac, Unix) the mouse cursor is under control of the host windowing system, and is automatically faded when required. It is recommended to fade the cursor on these platforms anyway, as your Oberon programs will then also work on native Oberon systems.

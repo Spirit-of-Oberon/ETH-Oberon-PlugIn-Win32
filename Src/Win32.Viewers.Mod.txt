@@ -1,4 +1,4 @@
-﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+﻿(* ETH Oberon, Copyright 2001 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
 Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE Viewers; (** portable, except where noted / source: Win32.Viewers.Mod *)	(* JG 4.8.93, ejz  *)
@@ -225,7 +225,7 @@ END;
 		VAR T, U: Display.Frame; M: Display.ControlMsg; N: Display.ModifyMsg; safe: BOOLEAN;
 	BEGIN
 		IF V = NIL THEN	(* called from System.Trap *)
-			IF bcF = NIL THEN	(* can not do anything *)
+			IF (bcF = NIL) OR ~(bcF IS Viewer) THEN	(* can not do anything *)
 				bcF := NIL; bcLev := 0; RETURN
 			END;
 			V := bcF(Viewer);	(* close the outermost viewer *)

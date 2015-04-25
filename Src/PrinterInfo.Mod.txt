@@ -1,4 +1,5 @@
-﻿(* Copyright (c) 1994 - 2000 Emil J. Zeller *)
+﻿(* ETH Oberon, Copyright 2001 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE PrinterInfo; (** portable *)	(* ejz  *)
 	IMPORT Objects, Display, Fonts, Printer, Pictures, Strings, Texts, Oberon, Attributes, Gadgets;
@@ -163,7 +164,7 @@ MODULE PrinterInfo; (** portable *)	(* ejz  *)
 				IF S.s # "" THEN
 					Texts.WriteString(W, ", options: "); Texts.WriteString(W, S.s)
 				END;
-				FrameTop := Printer.FrameY+Printer.FrameH;
+				FrameTop := P.FrameY+P.FrameH;
 
 				Printer.ReplConst(P.FrameX, P.FrameY, P.FrameW, 1);
 				Printer.ReplConst(P.FrameX, P.FrameY, 1, P.FrameH);
