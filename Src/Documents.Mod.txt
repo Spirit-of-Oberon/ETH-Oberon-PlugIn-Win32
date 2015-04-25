@@ -1,22 +1,10 @@
-﻿(* OBERON System 3, Release 2.3.
-
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
-
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
-
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
+﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE Documents; (** portable *)	(** jm 18.1.95 *)
 
-(**The Documents module forms the basis of the Gadgets document model.
-*)
+(** The Documents module forms the basis of the Gadgets document model. *)
+
 (*
 	6.4.94 - VERY SPECIAL DOCUMENT WITH DSC HAVING THE SAME COORDINATES AS THE DOCUMENT
 	Old version can be found in DocumentsOld.Mod.
@@ -50,7 +38,7 @@ TYPE
 		name*: ARRAY 128 OF CHAR;	(** Document name. *)
 		Load*: PROCEDURE (D: Document);	(** Load document contents from disk. *)
 		Store*: PROCEDURE (D: Document);	(** Store document contents to disk. *)
-		time: LONGINT;
+		time: LONGINT
 	END;
 	
 	(** Find out what document is located at X, Y on the display. *)
@@ -93,7 +81,7 @@ BEGIN
 	Links.LoadLinks(R, lib, link)
 END LoadAttachments;
 
-PROCEDURE StoreAttachments*(VAR R: Files.Rider; attr: Attributes.Attr; VAR link: Links.Link);
+PROCEDURE StoreAttachments*(VAR R: Files.Rider; attr: Attributes.Attr; link: Links.Link);
 VAR r: Files.Rider; F: Files.File; patch, len: LONGINT; lib: Objects.Library; M: Objects.BindMsg;
 BEGIN
 	F := Files.Base(R);
@@ -185,7 +173,7 @@ END Cap;
 
 (** Open the give document with name name. NIL is returned on failure. Unknown document types are opened as text documents. *)
 PROCEDURE Open*(name: ARRAY OF CHAR): Document;
-VAR i, j, colonpos: INTEGER; ext: ARRAY 64 OF CHAR; D: Document;
+VAR i, j, colonpos, dotpos: INTEGER; ext: ARRAY 64 OF CHAR; D: Document;
 	loaderror: BOOLEAN;
 BEGIN
 	COPY(name, errMsg); Strings.AppendCh(errMsg, " ");
@@ -199,6 +187,7 @@ BEGIN
 			END;
 			INC(i)
 		END;
+		dotpos := j;
 		IF colonpos > 1 THEN (* jm *)
 			i := 0; j := 0;
 			WHILE i < colonpos DO
@@ -209,9 +198,10 @@ BEGIN
 			i := 0; WHILE (i # reg) & (~DocService[i] OR (DocExt[i] # ext)) DO INC(i) END;
 			IF i = reg THEN (* unknown type *)
 				colonpos := -1	(* ignore colon and try with extension *)
-			END;
+			END
 		END;
 		IF colonpos <= 1 THEN
+			j := dotpos;
 			IF (j >= 0) THEN
 			i := 0; INC(j); WHILE (name[j] # 0X) & (i # 31) DO ext[i] := Cap(name[j]); INC(i); INC(j) END; (* copy extension *)
 			ext[i] := 0X; i := 0;
@@ -247,20 +237,20 @@ BEGIN
 	END
 END Register;
 
-PROCEDURE RegisterStandardTypes(section: ARRAY OF CHAR;  service: BOOLEAN);
-VAR S: Texts.Scanner; ext, newproc: ARRAY 32 OF CHAR;  err: BOOLEAN;
+PROCEDURE RegisterStandardTypes(section: ARRAY OF CHAR; service: BOOLEAN);
+VAR S: Texts.Scanner; ext, newproc: ARRAY 32 OF CHAR; err: BOOLEAN;
 BEGIN
 	Oberon.OpenScanner(S, section);
 	IF S.class = Texts.Inval THEN
-		Out.String("Oberon.Text - ");  Out.String(section);  Out.String(" not found");  Out.Ln
+		Out.String("Oberon.Text - "); Out.String(section); Out.String(" not found"); Out.Ln
 	ELSE
 		err := FALSE;
 		WHILE (S.class IN {Texts.Name, Texts.String}) & ~err DO
-			COPY(S.s, ext);  Texts.Scan(S);
+			COPY(S.s, ext); Texts.Scan(S);
 			IF (S.class = Texts.Char) & (S.c = "=") THEN
 				Texts.Scan(S);
 				IF S.class IN {Texts.Name, Texts.String} THEN
-					COPY(S.s, newproc);  Texts.Scan(S);
+					COPY(S.s, newproc); Texts.Scan(S);
 					Register(ext, newproc, service)
 				ELSE err := TRUE
 				END
@@ -269,7 +259,7 @@ BEGIN
 		END;
 		err := err OR (S.class # Texts.Char) OR (S.c # "}");
 		IF err THEN
-			Out.String("Error in ");  Out.String(section);  Out.Ln
+			Out.String("Error in "); Out.String(section); Out.Ln
 		END
 	END
 END RegisterStandardTypes;
@@ -289,7 +279,7 @@ BEGIN
 		ELSE
 			Display3.Copy(F.mask, R); R.x := 0; R.y := 0;
 			(*
-			Display3.Intersect(R, F.dsc.X,  F.dsc.Y, F.dsc.W,  F.dsc.H);
+			Display3.Intersect(R, F.dsc.X, F.dsc.Y, F.dsc.W, F.dsc.H);
 			R.x := -F.dsc.X; R.y := -(F.dsc.Y + F.dsc.H - 1); Display3.Shift(R);
 			*)
 			SetMask(F.dsc, R)
@@ -337,7 +327,7 @@ BEGIN
 				x := M.x + F.X; y := M.y + F.Y; w := F.W; h := F.H;
 				Gadgets.MakeMask(F, x, y, M.dlink, R);
 				Display3.FillPattern(R, Display3.blue, Display3.selectpat, 0, 0, x, y, w, h, Display.paint);
-			END;
+			END
 		END
 	ELSE (* unoptimized *)
 		IF (F.dsc # NIL) & (M.stamp # F.stamp) THEN F.stamp := M.stamp;
@@ -394,13 +384,13 @@ BEGIN check(F);
 		IF F.dsc # NIL THEN
 			(* display main frame *)
 			D.device := Display.screen; D.id := Display.area; D.F := F.dsc; D.u := M.u;
-			D.v :=  M.v; D.w := M.w; D.h := M.h;
+			D.v := M.v; D.w := M.w; D.h := M.h;
 			ClipAgainst(D.u, D.v, D.w, D.h, 0, -F.dsc.H +1, F.dsc.W, F.dsc.H);
 			D.dlink := M.dlink; D.res := -1; Objects.Stamp(D);
 			ToMain(F, ox, oy, D);
 		ELSE
 			Display3.FilledRect3D(R, Display3.FG, Display3.FG, Display3.BG, x, y, w, h, 1, Display.replace);
-			Display3.String(R, Display3.FG,  x + 5, y + h - 20, Fonts.Default, "Document not found", Display.paint);
+			Display3.String(R, Display3.FG, x + 5, y + h - 20, Fonts.Default, "Document not found", Display.paint);
 		END;
 	ELSE
 		IF F.dsc # NIL THEN
@@ -408,7 +398,7 @@ BEGIN check(F);
 			ToMain(F, ox, oy, D)
 		ELSE
 			Display3.FilledRect3D(R, Display3.FG, Display3.FG, Display3.BG, x, y, w, h, 1, Display.replace);
-			Display3.String(R, Display3.FG,  x + 5, y + h -  20, Fonts.Default, "Document not found", Display.paint);
+			Display3.String(R, Display3.FG, x + 5, y + h - 20, Fonts.Default, "Document not found", Display.paint);
 		END;
 	END;
 	IF Gadgets.selected IN F.state THEN
@@ -457,7 +447,7 @@ BEGIN
 		main := F.dsc(Gadgets.Frame);
 		IF Gadgets.selected IN main.state THEN
 			S.F := main; S.res := -1; S.x := 0; S.y := 0;
-			S.id := Display.reset; F.time := 0;
+			S.id := Display.reset; F.time := -1;
 			ToMain(F, 0, 0, S);
 			Gadgets.Update(main)
 		END
@@ -482,7 +472,7 @@ BEGIN
 		M.res := 0;
 		IF keysum = {0, 2} THEN (* RL delete selection *)
 			(* nothing *)
-		ELSIF keysum = {0, 1} THEN  (* RM copy to focus *)
+		ELSIF keysum = {0, 1} THEN (* RM copy to focus *)
 			C.id := Objects.shallow; C.obj := NIL; Objects.Stamp(C); F.dsc.handle(F.dsc, C);
 			IF C.obj # NIL THEN
 				(*
@@ -505,7 +495,7 @@ BEGIN
 				IF (M.F = NIL) OR (M.F = F) THEN	(* message addressed to this frame *)
 					x := M.x + F.X; y := M.y + F.Y; w := F.W; h := F.H; (* calculate display coordinates *)
 					IF M IS Display.DisplayMsg THEN
-						WITH M: Display.DisplayMsg  DO
+						WITH M: Display.DisplayMsg DO
 							IF M.device = Display.screen THEN
 								IF (M.id = Display.full) OR (M.F = NIL) THEN
 									Gadgets.MakeMask(F, x, y, M.dlink, R);
@@ -531,7 +521,7 @@ BEGIN
 									IF (M.res < 0) & ~Gadgets.InActiveArea(F, M) THEN Gadgets.framehandle(F, M) END
 								END
 							ELSIF ~(Gadgets.selected IN F.state) THEN ToMain(F, M.x, M.y, M)
-							ELSE  Gadgets.framehandle(F, M)
+							ELSE Gadgets.framehandle(F, M)
 							END
 						END
 					ELSIF M IS Display.ModifyMsg THEN
@@ -560,7 +550,7 @@ BEGIN
 								N.id := Oberon.neutralize; N.F := NIL; N.res := -1; ToMain(F, M.x, M.y, N)
 							ELSIF M.id = Display.reset THEN
 							ELSIF M.id = Display.get THEN
-								IF (F.time > M.time) & (Gadgets.selected IN F.dsc(Gadgets.Frame).state) THEN
+								IF (((M.time-F.time) < 0) OR (M.time = -1)) & (Gadgets.selected IN F.dsc(Gadgets.Frame).state) THEN
 									M.time := F.time; M.sel := F; M.obj := F.dsc
 								END
 							END;
@@ -814,5 +804,4 @@ URL are unique references to documents located on the network. An URL is identif
 
 	"protocol://location/name"
 	
-Typical protocols are http, mailto, ftp and so forth. The Documents module handles documents with URL-like names in a special way. Should the Open procedure be requested to open a document name with a protocol name followed by a ":", the protocol name is looked up in extension table instead of the filename extension. That is, protocols have precedence over filename extensions. 
-*)
+Typical protocols are http, mailto, ftp and so forth. The Documents module handles documents with URL-like names in a special way. Should the Open procedure be requested to open a document name with a protocol name followed by a ":", the protocol name is looked up in extension table instead of the filename extension. That is, protocols have precedence over filename extensions. *)

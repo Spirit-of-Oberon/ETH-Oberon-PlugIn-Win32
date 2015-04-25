@@ -1,24 +1,11 @@
-﻿(* OBERON System 3, Release 2.3.
-
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
-
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
-
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
+﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE Printer; (** portable *)	(* jm 26.10.95 *)
 
-(**Module Printer provide an interface for installable printers.
-*)
+(** Module Printer provide an interface for installable printers. *)
 
-IMPORT Console, Modules, Pictures, Fonts, Texts, Oberon;
+IMPORT Kernel32, Modules, Pictures, Display, Fonts, Texts, Oberon;
 
 CONST
 	Unit300 = 3048; (* 300 dpi resolution *)
@@ -58,8 +45,8 @@ VAR
 	res*: INTEGER;	(** result code. 0 = ok, 1 = no such printer, 2 = no link, 3 = printer not ready, 4 = no permission *)
 	current*: Printer;	(** Current active printer. *)
 
-PROCEDURE SplitName (VAR name, MName, PName: ARRAY OF CHAR);
-VAR i, j: LONGINT;
+PROCEDURE SplitName(VAR name, MName, PName: ARRAY OF CHAR);
+	VAR i, j: LONGINT;
 BEGIN i := 0;
 	WHILE name[i] # "." DO MName[i] := name[i]; INC(i) END;
 	MName[i] := 0X; INC(i); j := 0;
@@ -68,8 +55,10 @@ BEGIN i := 0;
 END SplitName;
 
 PROCEDURE LoadDefaultPrinter;
-VAR s, defMod, defCmd: ARRAY 64 OF CHAR; Mod: Modules.Module; Cmd: Modules.Command;
-	S: Texts.Scanner;
+	VAR
+		S: Texts.Scanner;
+		s, defMod, defCmd: ARRAY 64 OF CHAR;
+		Mod: Modules.Module; Cmd: Modules.Command;
 BEGIN
 	current := NIL;
 	Oberon.OpenScanner(S, "Printer.Default"); 
@@ -86,7 +75,7 @@ BEGIN
 			Cmd()
 		END
 	ELSE
-		Console.Str("Printer.LoadDefaultPrinter "); Console.Str(s); Console.Str(" not found"); Console.Ln();
+		Kernel32.Str("Printer.LoadDefaultPrinter "); Kernel32.Str(s); Kernel32.Str(" not found"); Kernel32.Ln();
 		Mod := Modules.ThisMod("WinPrinter");
 		IF Modules.res = 0 THEN
 			Cmd := Modules.ThisCommand(Mod, "Install");
@@ -99,18 +88,22 @@ END LoadDefaultPrinter;
 
 (** Install printer driver. P.InitMetrics is called to initialise the page metrics. *) 
 PROCEDURE Install*(P: Printer);
+	VAR M: Display.ControlMsg; N: Oberon.ControlMsg;
 BEGIN
 	ASSERT(P # NIL, 100);
 	P.InitMetrics(P);
 	Width := P.Width; Height := P.Height; Depth := P.Depth;
 	FrameX := P.FrameX; FrameY := P.FrameY; FrameW := P.FrameW; FrameH := P.FrameH;
-	Unit := P.Unit;
-	current := P
+	Unit := P.Unit; current := P;
+	N.id := Oberon.neutralize; M.F := NIL; Display.Broadcast(N);
+	M.id := Display.newprinter; M.F := NIL; Display.Broadcast(M);
+	M.id := Display.suspend; M.F := NIL; Display.Broadcast(M);
+	M.id := Display.restore; M.F := NIL; Display.Broadcast(M)
 END Install;
 
-(** Open specified printer.  res code is set. *)
-PROCEDURE Open* (printer, options: ARRAY OF CHAR);
-VAR P: Printer;
+(** Open specified printer. res code is set. *)
+PROCEDURE Open*(printer, options: ARRAY OF CHAR);
+	VAR P: Printer;
 BEGIN
 	IF current # NIL THEN
 		P := current;
@@ -125,7 +118,7 @@ BEGIN
 END Open;
 
 PROCEDURE Close*;
-VAR P: Printer;
+	VAR P: Printer;
 BEGIN
 	P := current;
 	P.Close(P);
@@ -135,66 +128,75 @@ BEGIN
 	Unit := P.Unit
 END Close;
 
-PROCEDURE Page* (nofcopies: INTEGER);
-BEGIN current.Page(current, nofcopies)
+PROCEDURE Page*(nofcopies: INTEGER);
+BEGIN
+	current.Page(current, nofcopies)
 END Page;
 
-PROCEDURE ReplConst* (x, y, w, h: INTEGER);
-BEGIN current.ReplConst(current, x, y, w, h)
+PROCEDURE ReplConst*(x, y, w, h: INTEGER);
+BEGIN
+	current.ReplConst(current, x, y, w, h)
 END ReplConst;
 
-PROCEDURE ReplPattern* (x, y, w, h: INTEGER; patno: INTEGER);
-BEGIN current.ReplPattern(current, x, y, w, h, patno)
+PROCEDURE ReplPattern*(x, y, w, h: INTEGER; patno: INTEGER);
+BEGIN
+	current.ReplPattern(current, x, y, w, h, patno)
 END ReplPattern;
 
-PROCEDURE Line* (x0, y0, x1, y1: INTEGER);
-BEGIN current.Line(current, x0, y0, x1, y1)
+PROCEDURE Line*(x0, y0, x1, y1: INTEGER);
+BEGIN
+	current.Line(current, x0, y0, x1, y1)
 END Line;
 
-PROCEDURE Circle* (x0, y0, r: INTEGER);
-BEGIN current.Circle(current, x0, y0, r)
+PROCEDURE Circle*(x0, y0, r: INTEGER);
+BEGIN
+	current.Circle(current, x0, y0, r)
 END Circle;
 
-PROCEDURE Ellipse* (x0, y0, a, b: INTEGER);
-BEGIN current.Ellipse(current, x0, y0, a, b)
+PROCEDURE Ellipse*(x0, y0, a, b: INTEGER);
+BEGIN
+	current.Ellipse(current, x0, y0, a, b)
 END Ellipse;
 
-PROCEDURE Spline* (x0, y0, n, open: INTEGER; VAR X, Y: ARRAY OF INTEGER);
-BEGIN current.Spline(current, x0, y0, n, open, X, Y)
+PROCEDURE Spline*(x0, y0, n, open: INTEGER; VAR X, Y: ARRAY OF INTEGER);
+BEGIN
+	current.Spline(current, x0, y0, n, open, X, Y)
 END Spline;
 
-PROCEDURE Picture* (P: Pictures.Picture; sx, sy, sw, sh, dx, dy, dw, dh, mode: INTEGER);
-BEGIN current.Picture(current, P, sx, sy, sw, sh, dx, dy, dw, dh, mode)
+PROCEDURE Picture*(P: Pictures.Picture; sx, sy, sw, sh, dx, dy, dw, dh, mode: INTEGER);
+BEGIN
+	current.Picture(current, P, sx, sy, sw, sh, dx, dy, dw, dh, mode)
 END Picture;
 
-PROCEDURE UseListFont* (name: ARRAY OF CHAR);
-BEGIN current.UseListFont(current, name)
+PROCEDURE UseListFont*(name: ARRAY OF CHAR);
+BEGIN
+	current.UseListFont(current, name)
 END UseListFont;
 
-PROCEDURE String* (x, y: INTEGER; str: ARRAY OF CHAR; fnt: Fonts.Font);
-BEGIN current.String(current, x, y, str, fnt)
+PROCEDURE String*(x, y: INTEGER; str: ARRAY OF CHAR; fnt: Fonts.Font);
+BEGIN
+	current.String(current, x, y, str, fnt)
 END String;
 
-PROCEDURE ContString* (str: ARRAY OF CHAR; fnt: Fonts.Font);
-BEGIN current.ContString(current, str, fnt)
+PROCEDURE ContString*(str: ARRAY OF CHAR; fnt: Fonts.Font);
+BEGIN
+	current.ContString(current, str, fnt)
 END ContString;
 
-PROCEDURE UseColor* (red, green, blue: INTEGER);
-BEGIN current.UseColor(current, red, green, blue)
+PROCEDURE UseColor*(red, green, blue: INTEGER);
+BEGIN
+	current.UseColor(current, red, green, blue)
 END UseColor;
 
-PROCEDURE GetMetric* (fnt: Fonts.Font): Fonts.Font;
-BEGIN RETURN current.GetMetric(current, fnt)
+PROCEDURE GetMetric*(fnt: Fonts.Font): Fonts.Font;
+BEGIN
+	RETURN current.GetMetric(current, fnt)
 END GetMetric;
 
-PROCEDURE Init;
 BEGIN
 	Height := 0; Width := 0;
 	Unit := Unit300;
 	LoadDefaultPrinter
-END Init;
-
-BEGIN Init
 END Printer.
 
 (** Remarks:
@@ -224,6 +226,4 @@ END Printer.
 11. The default printer that is installed at startup is specified in the System section of the registry under key DefaultPrinter. The value of the key must be the name of a command that installs a printer. Windows Oberon supports WinPrinter.Install and PSPrinter.Install. Oberon has to be rebooted before a change will take effect.
 
 	System.Set Printer Default := "WinPrinter.Install"
-	System.Get Printer
-
-*)
+	System.Get Printer *)

@@ -1,63 +1,131 @@
-﻿(* OBERON System 3, Release 2.3.
+﻿(* Copyright (c) 1994 - 2000 Emil J. Zeller *)
 
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
+MODULE COMDLG32; (** non-portable / source: Win32.COMDLG32.Mod *)	(* ejz  *)
+	IMPORT SYSTEM, Kernel32, User32, Modules;
 
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
-
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
-
-MODULE COMDLG32; (** non-portable / source: Win32.COMDLG32.Mod *)	(* ejz,  *)
-	IMPORT S := SYSTEM, Kernel32, User32;
+(** This module defines all the Win32 COMDLG32 APIs used by Oberon. *)
 
 	CONST
-		PDPageNums* = 02H; PDNoSelection* = 04H; PDNoPageNums* = 08H; PDReturnDC* = 0100H; PDReturnDefault* = 0400H;
-		PSDMargins* = 02; PSDInThousendthsOfInches* = 04H; PSDInHundredthsOfMillimeters* = 08H;
+		(** PRINTDLG Flags values *)
+		PDPageNums* = 1; PDReturnDC* = 8; PDReturnDefault* = 10;
+		(** PAGESETUPDLG Flags values *)
+		PSDMargins* = 1; PSDInThousandthsOfInches* = 2; PSDInHundredthsOfMillimeters* = 3;
+
+		(** FindReplace Flags values *)
+		FRDown* = 0; FRWholeWord* = 1; FRMatchCase* = 2; FRFindNext* = 3; FRReplace* = 4;
+		FRReplaceAll* = 5; FRDialogTerm* = 6; FRShowHelp * = 7; FRENableHook* = 8;
+		FREnableTemplate* = 9; FRNoUpDown* = 10; FRNoMatchCase* = 11; FRNoWholeWord* = 12;
+		FREnableTemplateHandle* = 13; FRHideUpDown* = 14; FRHideMatchCase* = 15;
+		FRHideWholeWord* = 16;
+		FindMsgString = "commdlg_FindReplace";
 
 	TYPE
-		PRINTDLG* = RECORD
-			size*: LONGINT;
-			hwndOwner*: LONGINT;
-			devMode*, devNames*: LONGINT;
-			hDC*: LONGINT;
-			flags*: LONGINT;
-			from*, to*, min*, max*: INTEGER;
-			fill*: ARRAY 2+8*4 OF S.BYTE
+		(** The PRINTDLG structure contains information that the PrintDlg function uses to initialize the Print dialog box. *)
+		PRINTDLG* = RECORD [NOTAG]
+			lStructSize*: LONGINT;
+			hwndOwner*: User32.HWND;
+			hDevMode*, hDevNames*: Kernel32.HANDLE;
+			hDC*: User32.HDC;
+			Flags*: SET;
+			nFromPage*, nToPage*: INTEGER;
+			nMinPage*, nMaxPage*: INTEGER; 
+			fill*: ARRAY 2+8*4 OF SYSTEM.BYTE
 		END;
-		PAGESETUPDLG* = RECORD
-			size*: LONGINT;
-			hwndOwner*: LONGINT;
-			devMode*, devNames*: LONGINT;
-			flags*: LONGINT;
-			paperSize*: User32.Point;
-			minMargin*, margin*: User32.Rect;
-			hInstance*, custData*: LONGINT;
-			pageSetupHook*: LONGINT;
-			pagePaintHook*: LONGINT;
-			pageSetupTemplateName*: LONGINT;
-			pageSetupTemplate*: LONGINT
-    	END;
- 
-	VAR
-		CommDlgExtendedError-: PROCEDURE (): LONGINT;
-		PrintDlg-: PROCEDURE (lppd: LONGINT): LONGINT;
-		PageSetupDlg-: PROCEDURE (lppsd: LONGINT): LONGINT;
 
+		(** The PAGESETUPDLG structure contains information the PageSetupDlg function uses to initialize the Page Setup
+			dialog box. *)
+		PAGESETUPDLG* = RECORD [NOTAG]
+			lStructSize*: LONGINT;
+			hwndOwner*: User32.HWND;
+			hDevMode*, hDevNames*: Kernel32.HGLOBAL;
+			Flags*: SET;
+			ptPaperSize*: User32.Point;
+			rtMinMargin*, rtMargin*: User32.Rect;
+			hInstance*: Kernel32.HINSTANCE; 
+			lCustData*: LONGINT;
+			lpfnPageSetupHook*: Kernel32.ADDRESS;
+			lpfnPagePaintHook*: Kernel32.ADDRESS;
+			lpPageSetupTemplateName*: Kernel32.LPSTR;
+			hPageSetupTemplate*: Kernel32.HANDLE
+		END; 
+
+		(** The OPENFILENAME structure contains information that the GetOpenFileName and GetSaveFileName functions
+			use to initialize an Open or Save As dialog box. *)
+		OpenFileName* = RECORD [NOTAG] 
+			lStructSize*: LONGINT;
+			hwndOwner*: User32.HWND;
+			hInstance*: Kernel32.HINSTANCE; 
+			lpstrFilter*, lpstrCustomFilter*: Kernel32.LPSTR;
+			nMaxCustFilter*, nFilterIndex*: LONGINT;
+			lpstrFile*: Kernel32.LPSTR;
+			nMaxFile*: LONGINT; 
+			lpstrFileTitle*: Kernel32.LPSTR;
+			nMaxFileTitle*: LONGINT; 
+			lpstrInitialDir*, lpstrTitle*: Kernel32.LPSTR;
+			Flags*: SET;
+			nFileOffset*, nFileExtension*: INTEGER;
+			lpstrDefExt*: Kernel32.LPSTR;
+			lCustData*: User32.LParam;
+			lpfnHook*: Kernel32.ADDRESS;
+			lpTemplateName*: Kernel32.LPSTR
+		END; 
+ 
+		(** The FINDREPLACE structure contains information that the FindText and ReplaceText functions use
+			to initialize the Find and Replace common dialog boxes. *)
+		FindReplace* = RECORD [NOTAG]
+			lStructSize*: LONGINT;
+			hwndOwner*: User32.HWND;
+			hInstance*: Kernel32.HINSTANCE; 
+			Flags*: SET;
+			lpstrFindWhat*, lpstrReplaceWith*: Kernel32.LPSTR;
+			wFindWhatLen*, wReplaceWithLen*: INTEGER;
+			lCustData*: User32.LParam; 
+			lpfnHook*: Kernel32.ADDRESS;
+			lpTemplateName*: Kernel32.LPSTR
+		END;
+
+	VAR
+		(** The CommDlgExtendedError function returns a common dialog box error code. *)
+		CommDlgExtendedError-: PROCEDURE [WINAPI] (): LONGINT;
+		(** The FindText function creates a system-defined modeless Find dialog box that lets the user
+			specify a string to search for and options to use when searching for text in a document. *)
+		FindText-: PROCEDURE [WINAPI] (VAR lpfr: FindReplace): User32.HWND;
+		(** The GetOpenFileName function creates an Open dialog box that lets the user specify the drive, directory, and the
+			name of a file or set of files to open. *)
+		GetOpenFileName-: PROCEDURE [WINAPI] (VAR lpofn: OpenFileName): Kernel32.BOOL;
+		(** The GetSaveFileName function creates a Save dialog box that lets the user specify the drive, directory, and name
+			of a file to save. *)
+		GetSaveFileName-: PROCEDURE [WINAPI] (VAR lpofn: OpenFileName): Kernel32.BOOL;
+		(** The PageSetupDlg function creates a Page Setup dialog box that enables the user to specify the attributes of a
+			printed page. *)
+		PageSetupDlg-: PROCEDURE [WINAPI] (VAR lppsd: PAGESETUPDLG): Kernel32.BOOL;
+		(** The PrintDlg function displays a Print dialog box. *)
+		PrintDlg-: PROCEDURE [WINAPI] (VAR lppd: PRINTDLG): Kernel32.BOOL;
+		mod: Kernel32.HMODULE;
+		(** The ReplaceText function creates a system-defined modeless dialog box that lets the user
+			specify a string to search for and a replacement string, as well as options to control the find and
+			replace operations. *)
+		ReplaceText-: PROCEDURE [WINAPI] (VAR lpfr: FindReplace): User32.HWND;
+		WMFindText-: LONGINT;
+ 
 	PROCEDURE InitAPI();
-		VAR mod: LONGINT;
 	BEGIN
+		WMFindText := User32.RegisterWindowMessage(FindMsgString);
 		mod := Kernel32.LoadLibrary("COMDLG32");
-		Kernel32.GetAdr(mod, "CommDlgExtendedError", S.VAL(LONGINT, CommDlgExtendedError));
-		Kernel32.GetAdr(mod, "PrintDlgA", S.VAL(LONGINT, PrintDlg));
-		Kernel32.GetAdr(mod, "PageSetupDlgA", S.VAL(LONGINT, PageSetupDlg))
+		Kernel32.GetProcAddress(mod, "CommDlgExtendedError", SYSTEM.VAL(LONGINT, CommDlgExtendedError));
+		Kernel32.GetProcAddress(mod, "FindTextA", SYSTEM.VAL(LONGINT, FindText));
+		Kernel32.GetProcAddress(mod, "GetOpenFileNameA", SYSTEM.VAL(LONGINT, GetOpenFileName));
+		Kernel32.GetProcAddress(mod, "GetSaveFileNameA", SYSTEM.VAL(LONGINT, GetSaveFileName));
+		Kernel32.GetProcAddress(mod, "PageSetupDlgA", SYSTEM.VAL(LONGINT, PageSetupDlg));
+		Kernel32.GetProcAddress(mod, "PrintDlgA", SYSTEM.VAL(LONGINT, PrintDlg));
+		Kernel32.GetProcAddress(mod, "ReplaceTextA", SYSTEM.VAL(LONGINT,ReplaceText))
 	END InitAPI;
 
+	PROCEDURE *FreeAPI();
+	BEGIN
+		Kernel32.FreeLibrary(mod); mod := Kernel32.NULL
+	END FreeAPI;
+
 BEGIN
-	InitAPI()
+	InitAPI(); Modules.InstallTermHandler(FreeAPI)
 END COMDLG32.

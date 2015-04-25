@@ -1,19 +1,6 @@
-﻿(* OBERON System 3, Release 2.3.
+﻿(* Copyright (c) 1994 - 2000 Emil J. Zeller *)
 
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
-
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
-
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
-
-MODULE HTMLDocs; (** portable *)	(* ejz, Greek & Math support by afi *)
+MODULE HTMLDocs; (** portable *)	(* ejz , Greek & Math support by afi *)
 	IMPORT Objects, Input, Strings, Display, Display3, Fonts, HyperDocs, Texts, Gadgets, Documents, HTTPDocs0, TextDocs,
 		Oberon, TextGadgets, Lists, Attributes, Desktops, Links, Streams, TextStreams;
 
@@ -24,10 +11,11 @@ MODULE HTMLDocs; (** portable *)	(* ejz, Greek & Math support by afi *)
 		TextPlain* = 1; TextHtml* = 2; InTag* = 3; End* = 4;
 		(* list types *)
 		DefList = 0; DescList = 1; OrderedList = 2;
-		DefStyle = {TextGadgets.left};
 		Menu = "Desktops.Copy[Copy] HyperDocs.Back[Back] HyperDocs.Reload[Reload] TextDocs.Search[Search] Desktops.StoreDoc[Store]";
 		GreekCap = "0013143516173415192134222324252728202931323337372636180000000000";
 		GreekMin = "004546674849664751536654555657596052616364656969586850";
+
+		ASCIIBullets = TRUE;
 
 	TYPE
 		DocURL* = POINTER TO DocURLDesc;
@@ -157,6 +145,15 @@ MODULE HTMLDocs; (** portable *)	(* ejz, Greek & Math support by afi *)
 		END
 	END InitTabs;
 
+	PROCEDURE NewStyle(): TextGadgets.Style;
+		VAR style: TextGadgets.Style;
+	BEGIN
+		style := TextGadgets.newStyle();
+		InitTabs(style);
+		Attributes.SetBool(style, "FrameW", TRUE);
+		RETURN style
+	END NewStyle;
+
 	PROCEDURE Syntax(size: INTEGER; attr: CHAR): Fonts.Font;
 		VAR
 			name: ARRAY 32 OF CHAR;
@@ -212,7 +209,7 @@ MODULE HTMLDocs; (** portable *)	(* ejz, Greek & Math support by afi *)
 			Texts.SetFont(P.W, Syntax(12, 0X));
 			Texts.SetColor(P.W, SHORT(P.textC));
 			Texts.SetOffset(P.W, 0);
-			style := TextGadgets.newStyle(); InitTabs(style); style.mode := DefStyle;
+			style := NewStyle();
 			IF (P.style.mode # style.mode) OR (P.style.leftM # style.leftM) OR (P.style.width # style.width) THEN
 				P.style := style; WriteObj(P, style)
 			END
@@ -359,24 +356,21 @@ MODULE HTMLDocs; (** portable *)	(* ejz, Greek & Math support by afi *)
 	PROCEDURE TextAlign*(VAR align: ARRAY OF CHAR): TextGadgets.Style;
 		VAR style: TextGadgets.Style;
 	BEGIN
-		style := TextGadgets.newStyle(); style.mode := {}; InitTabs(style);
+		style := NewStyle(); EXCL(style.mode, TextGadgets.left);
 		CASE CAP(align[0]) OF
 			|"L": INCL(style.mode, TextGadgets.left)
 			|"R": INCL(style.mode, TextGadgets.right)
 			|"C", "J": INCL(style.mode, TextGadgets.middle)
 		ELSE (* BLEED... *)
 			CASE CAP(align[5]) OF
-				"L":  INCL(style.mode, TextGadgets.left)
+				"L": INCL(style.mode, TextGadgets.left)
 				|"R": INCL(style.mode, TextGadgets.right)
 				|"C", "J": INCL(style.mode, TextGadgets.middle)
 			ELSE
+				RETURN NIL
 			END
 		END;
-		IF style.mode # {} THEN
-			RETURN style
-		ELSE
-			RETURN NIL
-		END
+		RETURN style
 	END TextAlign;
 
 	PROCEDURE CloseA*(P: Page);
@@ -395,7 +389,7 @@ MODULE HTMLDocs; (** portable *)	(* ejz, Greek & Math support by afi *)
 	BEGIN
 		PushTextAttrs(P);
 		NEW(list); list.itemNr := 0;
-		list.style := TextGadgets.newStyle(); InitTabs(list.style); list.style.mode := DefStyle;
+		list.style := NewStyle();
 		IF P.lists = NIL THEN
 			list.nesting := 0;
 			WriteLn(P); WriteLn(P)
@@ -1632,7 +1626,7 @@ END
 		END
 	END B;
 
-	PROCEDURE SplitHostPort(VAR url, host: ARRAY OF CHAR; VAR port: INTEGER);
+	PROCEDURE SplitHostPort*(VAR url, host: ARRAY OF CHAR; VAR port: INTEGER);
 		VAR
 			i, j: INTEGER;
 			val: LONGINT;
@@ -1715,7 +1709,17 @@ END
 			r, g, b, rr, gg, bb, i, bestC: INTEGER;
 			diff, mdiff: REAL;
 	BEGIN
-		IF val[0] = "#" THEN
+		IF val = "white" THEN
+			col := 0; RETURN
+		ELSIF val = "red" THEN
+			col := 1; RETURN
+		ELSIF val = "green" THEN
+			col := 2; RETURN
+		ELSIF val = "blue" THEN
+			col := 3; RETURN
+		ELSIF val = "black" THEN
+			col := 15; RETURN
+		ELSIF val[0] = "#" THEN
 			r := 16*HexVal(val[1])+HexVal(val[2]);
 			g := 16*HexVal(val[3])+HexVal(val[4]);
 			b := 16*HexVal(val[5])+HexVal(val[6])
@@ -1809,7 +1813,7 @@ END
 		P := S.page;
 		IF on THEN
 			PushTextAttrs(P);
-			P.style := TextGadgets.newStyle(); InitTabs(P.style); P.style.mode := DefStyle;
+			P.style := NewStyle();
 			WriteObj(P, P.style);
 			Texts.SetFont(P.W, Syntax(12, "i"))
 		ELSE
@@ -1941,7 +1945,8 @@ END
 		P := S.page;
 		IF on THEN
 			PushTextAttrs(P);
-			P.style := TextGadgets.newStyle(); InitTabs(P.style); P.style.mode := {TextGadgets.middle};
+			P.style := NewStyle();
+			EXCL(P.style.mode, TextGadgets.left); INCL(P.style.mode, TextGadgets.middle);
 			WriteObj(P, P.style)
 		ELSE
 			PopTextAttrs(P)
@@ -2942,7 +2947,7 @@ ELSIF ~on THEN
 						e := e.next
 					END;
 					IF e = NIL THEN
-						gen := "HTMLTags.";  Strings.Append(gen, S.value);
+						gen := "HTMLTags."; Strings.Append(gen, S.value);
 						Oberon.OpenScanner(Ss, gen);
 						IF Ss.class IN {Texts.Name, Texts.String} THEN
 							COPY(Ss.s, gen);
@@ -2979,7 +2984,15 @@ ELSIF ~on THEN
 	PROCEDURE *DocHandler(D: Objects.Object; VAR M: Objects.ObjMsg);
 	BEGIN
 		WITH D: Documents.Document DO
-			IF M IS Objects.LinkMsg THEN
+			IF M IS Objects.AttrMsg THEN
+				WITH M: Objects.AttrMsg DO
+					IF (M.id = Objects.get) & (M.name = "Gen") THEN
+						M.class := Objects.String; M.s := "HTMLDocs.NewDoc"; M.res := 0
+					ELSE
+						TextDocs.DocHandler(D, M)
+					END
+				END
+			ELSIF M IS Objects.LinkMsg THEN
 				WITH M: Objects.LinkMsg DO
 					IF M.id = Objects.get THEN
 						IF M.name = "DeskMenu" THEN
@@ -3073,9 +3086,7 @@ ELSIF ~on THEN
 		WITH me: Task DO
 			P := me.S.page;
 			IF me.S.state # End THEN
-				i := Input.Time();
-				IF me.time = 0 THEN timeOut := i + 10*Input.TimeUnit ELSE timeOut := i + Input.TimeUnit END;
-				me.time := i;
+				i := Input.Time(); timeOut := i + Input.TimeUnit; me.time := i;
 				St := me.S.S; app := FALSE;
 				me.S.avail := St.Available(St); minSize := 64;
 				IF (me.S.avail < minSize) & (me.S.avail > 0) THEN
@@ -3135,7 +3146,7 @@ ELSIF ~on THEN
 
 (* Query a string setting in the NetSystem section in Registry. *)
 	PROCEDURE QueryString(key: ARRAY OF CHAR; VAR s: ARRAY OF CHAR): BOOLEAN;
-	VAR lKey: ARRAY 32 OF CHAR;  S: Texts.Scanner;
+	VAR lKey: ARRAY 32 OF CHAR; S: Texts.Scanner;
 	BEGIN
 		lKey := "NetSystem."; Strings.Append(lKey, key);
 		Oberon.OpenScanner(S, lKey);
@@ -3184,7 +3195,7 @@ ELSIF ~on THEN
 		Attributes.SetInt(me.P.D.dsc, "OldLinkColor", me.P.oldLinkC);
 		me.S.page := me.P; me.P.lists := NIL;
 		NEW(me.P.base); me.P.base.key := basekey; me.P.base.dockey := me.P.base.key;
-		me.P.style := TextGadgets.newStyle(); InitTabs(me.P.style); me.P.style.mode := DefStyle;
+		me.P.style := NewStyle();
 		WriteObj(me.P, me.P.style); PopTextAttrs(me.P); me.P.orgPos := 0; me.P.head := head;
 		OpenScanner(me.S, S);
 		IF head THEN
@@ -3255,7 +3266,7 @@ ELSIF ~on THEN
 		Attributes.SetInt(me.P.D.dsc, "Color", me.P.textbackC);
 		Texts.Append(me.P.T, me.P.W.buf); Read(me.S); Next(me.S);
 		me.P.headerLen := me.P.T.len;
-		me.time := 0; me.safe := FALSE; me.handle := ParseNext; Oberon.Install(me);
+		me.time := Oberon.Time(); me.safe := FALSE; me.handle := ParseNext; Oberon.Install(me);
 		IF blocking THEN
 			WHILE me.P.task = me DO
 				me.handle(me)
@@ -3372,7 +3383,7 @@ HALT(99)
 
 	PROCEDURE InitEntities();
 	BEGIN
-		entityEncoding := "AAAAAAÄCDEEEEIIIINOOOOOÖPUUUÜYáâaà&aaäçéêèdë>iîìï<ñoôòooö puûùüyy";
+		entityEncoding := "AAAAAAÄCDEEEEIIIINOOOOOÖPUUUÜYáâaà&aaäçéêèdë>iîìï<ñoôòooö ßpuûùüyy";
 		entityEncoding[57] := 22X;
 		entityEncoding[66] := 22X;
 		entityEncoding[67] := Strings.Tab;
@@ -3512,7 +3523,7 @@ BEGIN
 	Oberon.OpenScanner(S, "HTMLTags");
 	IF S.class = Texts.Inval THEN
 		Texts.WriteString(Wr, "Oberon.Text - HTMLTags not found");
-		Texts.WriteLn(Wr);  Texts.Append(Oberon.Log, Wr.buf)
+		Texts.WriteLn(Wr); Texts.Append(Oberon.Log, Wr.buf)
 	END
 END Check;
 
@@ -3520,8 +3531,13 @@ BEGIN
 	COPY(GreekCap, GreekTab);
 	Strings.Append(GreekTab, GreekMin);
 	InitEntities(); mono := Fonts.This("Courier10.Scn.Fnt");
-	bullets[0].f := Fonts.This("Default10.Scn.Fnt"); bullets[0].c := CHR(29);
-	bullets[1].f := bullets[0].f; bullets[1].c := CHR(28);
+	IF ASCIIBullets THEN
+		bullets[0].f := Fonts.This("Default12.Scn.Fnt"); bullets[0].c := "*";
+		bullets[1].f := bullets[0].f; bullets[1].c := "o"
+	ELSE
+		bullets[0].f := Fonts.This("Default10.Scn.Fnt"); bullets[0].c := CHR(29);
+		bullets[1].f := bullets[0].f; bullets[1].c := CHR(28)
+	END;
 	Texts.OpenWriter(Wr); Texts.OpenWriter(Wq);
 	imgs := TRUE; extTags := NIL; newTag := NIL;
 	pages := NIL; dispW := Display.Width;

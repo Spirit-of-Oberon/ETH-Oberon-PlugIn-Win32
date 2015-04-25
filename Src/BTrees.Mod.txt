@@ -1,23 +1,9 @@
-﻿(* OBERON System 3, Release 2.3.
-
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
-
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
-
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
+﻿(* Copyright (c) 1994 - 2000 Emil J. Zeller *)
 
 MODULE BTrees; (** portable *)	(* ejz,  *)
 	IMPORT Files;
 
-(** BTrees is a utility module that manages b-trees with string (64 characters) or longint keys. Each key is linked to
-		a longint value (org) which normaly is an offset to where the data for that key is stored. *)
+(** BTrees is a utility module that manages b-trees with string (64 characters) or longint keys. Each key is linked to a longint value (org) which normaly is an offset to where the data for that key is stored. *)
 
 	CONST
 		Done* = 0; NotFound* = 1; EntryChanged* = 2; (** res codes *)
@@ -1030,7 +1016,7 @@ MODULE BTrees; (** portable *)	(* ejz,  *)
 	PROCEDURE MinStrKey*(T: Tree; VAR key: ARRAY OF CHAR; VAR res: INTEGER);
 		VAR r: StrPage;
 	BEGIN
-		ASSERT(T.class = LInt);
+		ASSERT(T.class = Str);
 		ReadStrPage(T, T.root, r);
 		IF r.m > 0 THEN
 			minStrKey(T, r, key); res := Done
@@ -1052,7 +1038,7 @@ MODULE BTrees; (** portable *)	(* ejz,  *)
 	PROCEDURE MaxStrKey*(T: Tree; VAR key: ARRAY OF CHAR; VAR res: INTEGER);
 		VAR r: StrPage;
 	BEGIN
-		ASSERT(T.class = LInt);
+		ASSERT(T.class = Str);
 		ReadStrPage(T, T.root, r);
 		IF r.m > 0 THEN
 			maxStrKey(T, r, key); res := Done

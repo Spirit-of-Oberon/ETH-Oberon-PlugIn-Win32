@@ -1,17 +1,5 @@
-﻿(* OBERON System 3, Release 2.3.
-
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
-
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
-
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
+﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE AsciiCoder; (** portable *)	(* Wolfgang Weck 14 Dec 93, compression due to Stefan Ludwig/ jm modified for System 3 *)
 	
@@ -46,7 +34,7 @@ MODULE AsciiCoder; (** portable *)	(* Wolfgang Weck 14 Dec 93, compression due t
 					INC(bit); IF bit = 8 THEN Files.Write(to, CHR(byte)); byte := 0; bit := 0 END
 				ELSE	(* Incorrect prediction -> 1'xxxx'xxxx bits where x = ch[0..7] *)
 					table[hash] := ch; INC(byte, ASH(1, bit)); INC(bit);
-					IF bit = 8 THEN Files.Write(to, CHR(byte)); Files.Write(to, ch);  byte := 0; bit := 0
+					IF bit = 8 THEN Files.Write(to, CHR(byte)); Files.Write(to, ch); byte := 0; bit := 0
 					ELSE Files.Write(to, CHR(byte+ASH(ORD(ch), bit) MOD 256)); byte := ASH(ORD(ch), bit) DIV 256
 					END
 				END;
@@ -82,10 +70,10 @@ MODULE AsciiCoder; (** portable *)	(* Wolfgang Weck 14 Dec 93, compression due t
 
 	PROCEDURE Code*(from: Files.File; to: Texts.Text);
 		VAR byte, rest, div, factor, packs: INTEGER; ch: CHAR; r: Files.Rider;
-	BEGIN Files.Set(r, from, 0); Files.Read(r, ch); byte := ORD(ch); rest := 0; div := 64; factor  := 1; packs := 0;
+	BEGIN Files.Set(r, from, 0); Files.Read(r, ch); byte := ORD(ch); rest := 0; div := 64; factor := 1; packs := 0;
 		WHILE ~r.eof DO Texts.Write(w, CHR(Base + rest + (byte MOD div) * factor)); rest := byte DIV div;
 			IF div = 4 THEN Texts.Write(w, CHR(Base + rest));
-				rest := 0; div := 64; factor  := 1; INC(packs);
+				rest := 0; div := 64; factor := 1; INC(packs);
 				IF packs = 19 THEN Texts.WriteLn(w); packs := 0 END
 			ELSE factor := factor * 4; div := div DIV 4
 			END;
@@ -134,8 +122,8 @@ MODULE AsciiCoder; (** portable *)	(* Wolfgang Weck 14 Dec 93, compression due t
 			f, f1: Files.File; text: Texts.Text; s: Texts.Scanner; 
 	BEGIN pos := Oberon.Par.pos; compress := FALSE;
 		Texts.OpenScanner(s, Oberon.Par.text, pos); Texts.Scan(s);
-		IF (s.line = 0) & (s.class = Texts.Char)  & (s.c = "%") THEN compress := TRUE; pos := Texts.Pos(s); Texts.Scan(s) END;
-		IF (s.line = 0) & (s.class = Texts.Char)  & (s.c = "^") THEN Oberon.GetSelection(text, beg, end, time);
+		IF (s.line = 0) & (s.class = Texts.Char) & (s.c = "%") THEN compress := TRUE; pos := Texts.Pos(s); Texts.Scan(s) END;
+		IF (s.line = 0) & (s.class = Texts.Char) & (s.c = "^") THEN Oberon.GetSelection(text, beg, end, time);
 			IF time >= 0 THEN ReadFileNames(text, beg, end, names, time) ELSE names := NIL END
 		ELSE ReadFileNames(Oberon.Par.text, pos, Oberon.Par.text.len, names, time)
 		END;
@@ -149,6 +137,14 @@ MODULE AsciiCoder; (** portable *)	(* Wolfgang Weck 14 Dec 93, compression due t
 				END;
 				Texts.WriteLn(w); Texts.Append(Oberon.Log, w.buf); n := n.next
 			UNTIL n = NIL;
+			Texts.WriteString(w,"To: "); Texts.WriteLn(w);
+			Texts.WriteString(w,"Subject:");
+			n := names;
+			WHILE n # NIL DO
+				IF n.name # "" THEN Texts.Write(w, " "); Texts.WriteString(w, n.name) END;
+				n := n.next
+			END;
+			Texts.WriteLn(w); Texts.WriteLn(w);
 			Texts.WriteString(w,"AsciiCoder.DecodeFiles ");
 			IF compress THEN Texts.WriteString(w, "% ") END;
 			REPEAT
@@ -167,8 +163,8 @@ MODULE AsciiCoder; (** portable *)	(* Wolfgang Weck 14 Dec 93, compression due t
 			f, f1: Files.File; text: Texts.Text; s: Texts.Scanner; names: NameList; bakname: ARRAY 256 OF CHAR;
 	BEGIN text := Oberon.Par.text; pos := Oberon.Par.pos; compress := FALSE;
 		Texts.OpenScanner(s, text, pos); Texts.Scan(s);
-		IF (s.line = 0) & (s.class = Texts.Char)  & (s.c = "%") THEN compress := TRUE; pos := Texts.Pos(s); Texts.Scan(s) END;
-		IF (s.line = 0) & (s.class = Texts.Char)  & (s.c = "@") THEN Oberon.GetSelection(text, beg, end, time);
+		IF (s.line = 0) & (s.class = Texts.Char) & (s.c = "%") THEN compress := TRUE; pos := Texts.Pos(s); Texts.Scan(s) END;
+		IF (s.line = 0) & (s.class = Texts.Char) & (s.c = "@") THEN Oberon.GetSelection(text, beg, end, time);
 			IF time >= 0 THEN ReadFileNames(text, beg, end, names, pos) ELSE names := NIL END
 		ELSE ReadFileNames(text, pos, text.len, names, pos)
 		END;
@@ -193,7 +189,7 @@ MODULE AsciiCoder; (** portable *)	(* Wolfgang Weck 14 Dec 93, compression due t
 			f, f1: Files.File; t, text: Texts.Text; s: Texts.Scanner; len: LONGINT;
 	BEGIN compress := FALSE;
 		Texts.OpenScanner(s, Oberon.Par.text, Oberon.Par.pos); Texts.Scan(s);
-		IF (s.line = 0) & (s.class = Texts.Char)  & (s.c = "%") THEN compress := TRUE; Texts.Scan(s) END;
+		IF (s.line = 0) & (s.class = Texts.Char) & (s.c = "%") THEN compress := TRUE; Texts.Scan(s) END;
 		IF (s.line = 0) & (s.class = Texts.Char) THEN t := NIL;
 			IF s.c = "*" THEN t := Oberon.MarkedText()
 			ELSIF s.c = "@" THEN Oberon.GetSelection(text, beg, end, time);
@@ -203,6 +199,8 @@ MODULE AsciiCoder; (** portable *)	(* Wolfgang Weck 14 Dec 93, compression due t
 				Files.Write(r, 0F0X); Files.Write(r, 01X); Texts.Store(r, t); *)
 				Texts.Store(t, f, 0, len);
 				NEW(text); Texts.Open(text, "");
+				Texts.WriteString(w,"To: "); Texts.WriteLn(w);
+				Texts.WriteString(w,"Subject: "); Texts.WriteLn(w); Texts.WriteLn(w);
 				Texts.WriteString(w, "AsciiCoder.DecodeText");
 				IF compress THEN Texts.WriteString(w, " %") END;
 				Texts.WriteLn(w); Texts.WriteLn(w); Texts.Append(text, w.buf);
@@ -219,8 +217,8 @@ MODULE AsciiCoder; (** portable *)	(* Wolfgang Weck 14 Dec 93, compression due t
 			f, f1: Files.File; text: Texts.Text; s: Texts.Scanner; len: LONGINT;
 	BEGIN compress := FALSE; pos := Oberon.Par.pos; f := Files.New("");
 		Texts.OpenScanner(s, Oberon.Par.text, Oberon.Par.pos); Texts.Scan(s);
-		IF (s.line = 0) & (s.class = Texts.Char)  & (s.c = "%") THEN compress := TRUE; pos := Texts.Pos(s); Texts.Scan(s) END;
-		IF (s.line = 0) & (s.class = Texts.Char)  & (s.c = "@") THEN Oberon.GetSelection(text, beg, end, time);
+		IF (s.line = 0) & (s.class = Texts.Char) & (s.c = "%") THEN compress := TRUE; pos := Texts.Pos(s); Texts.Scan(s) END;
+		IF (s.line = 0) & (s.class = Texts.Char) & (s.c = "@") THEN Oberon.GetSelection(text, beg, end, time);
 			IF time >= 0 THEN Decode(text, beg, f, ok) ELSE ok := FALSE END
 		ELSE Decode(Oberon.Par.text, pos, f, ok)
 		END;

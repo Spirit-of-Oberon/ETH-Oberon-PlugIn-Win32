@@ -1,19 +1,6 @@
-﻿(* OBERON System 3, Release 2.3.
+﻿(* Copyright (c) 1994 - 2000 Emil J. Zeller *)
 
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
-
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
-
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
-
-MODULE PrinterInfo; (** portable *)
+MODULE PrinterInfo; (** portable *)	(* ejz  *)
 	IMPORT Objects, Display, Fonts, Printer, Pictures, Strings, Texts, Oberon, Attributes, Gadgets;
 
 	VAR
@@ -149,8 +136,8 @@ MODULE PrinterInfo; (** portable *)
 		VAR
 			S: Texts.Scanner;
 			fnt: Fonts.Font;
-			str: ARRAY 64 OF CHAR;
-			text: ARRAY 256 OF CHAR;
+			str: ARRAY 256 OF CHAR;
+			printer: ARRAY 64 OF CHAR;
 			P: Printer.Printer;
 			t, d: LONGINT;
 			pict: Pictures.Picture;
@@ -160,15 +147,15 @@ MODULE PrinterInfo; (** portable *)
 		Texts.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos);
 		Texts.Scan(S);
 		IF S.class IN {Texts.Name, Texts.String} THEN
-			COPY(S.s, str); Texts.Scan(S);
+			COPY(S.s, printer); Texts.Scan(S);
 			IF S.class IN {Texts.Name, Texts.String} THEN
-				COPY(S.s, text)
+				COPY(S.s, str)
 			ELSE
-				text := ""
+				str := ""
 			END;
-			Strings.AppendCh(text, Oberon.OptionChar);
-			Strings.Append(text, "Oberon System 3 Printer Test Page");
-			Printer.Open(str, text);
+			Strings.AppendCh(str, Oberon.OptionChar);
+			Strings.Append(str, "ETH Oberon Printer Test Page");
+			Printer.Open(printer, str);
 			IF Printer.res = 0 THEN
 				P := Printer.current; unit(cm);
 				Texts.WriteString(W, "Printing test page on "); Texts.WriteString(W, str);
@@ -187,164 +174,141 @@ MODULE PrinterInfo; (** portable *)
 				left := SHORT(ENTIER(P.FrameX+0.5*cm1+0.5));
 				left1 := SHORT(ENTIER(left+0.5*cm1+0.5)); left2 := SHORT(ENTIER(left+3.0*cm1+0.5));
 
-				fnt := Fonts.This("Syntax24.Scn.Fnt"); text := "Oberon System 3 Printer Test Page";
-				Printer.String(left, SHORT(ENTIER(FrameTop-1.25*cm1+0.5)), text, fnt);
+				fnt := Fonts.This("Default24.Scn.Fnt");
+				Printer.String(left, SHORT(ENTIER(FrameTop-1.25*cm1+0.5)), "ETH Oberon Printer Test Page", fnt);
 				Printer.ReplConst(P.FrameX, SHORT(ENTIER(FrameTop-2.0*cm1+0.5)), P.FrameW, 1);
 
 				y := SHORT(ENTIER(FrameTop-3.0*cm1+0.5)); dy := SHORT(ENTIER(0.5*cm1+0.5));
-				fnt := Fonts.This("Syntax12m.Scn.Fnt"); text := "Printer Information";
-				Printer.String(left, y, text, fnt); DEC(y, dy);
+				fnt := Fonts.This("Default12m.Scn.Fnt");
+				Printer.String(left, y, "Printer Information", fnt); DEC(y, dy);
 
-				fnt := Fonts.This("Syntax12.Scn.Fnt"); text := "Printer Driver:";
-				Printer.String(left1, y, text, fnt);
+				fnt := Fonts.This("Default12.Scn.Fnt");
+				Printer.String(left1, y, "Printer Driver:", fnt);
 				Printer.String(left2, y, P.gen, fnt); DEC(y, dy);
 
-				text := "Resolution:";
-				Printer.String(left1, y, text, fnt);
-				Strings.IntToStr(914400 DIV P.Unit, text); Strings.Append(text, " dpi");
-				Printer.String(left2, y, text, fnt); DEC(y, dy);
+				Printer.String(left1, y, "Resolution:", fnt);
+				Strings.IntToStr(914400 DIV P.Unit, str); Strings.Append(str, " dpi");
+				Printer.String(left2, y, str, fnt); DEC(y, dy);
 
 				IF cm THEN
-					text := "Page Width:";
-					Printer.String(left1, y, text, fnt);
-					FixedStr(P.Unit*P.Width / 360000.0, text); Strings.Append(text, " cm");
-					Printer.String(left2, y, text, fnt); DEC(y, dy);
+					Printer.String(left1, y, "Page Width:", fnt);
+					FixedStr(P.Unit*P.Width / 360000.0, str); Strings.Append(str, " cm");
+					Printer.String(left2, y, str, fnt); DEC(y, dy);
 	
-					text := "Page Height:";
-					Printer.String(left1, y, text, fnt);
-					FixedStr(P.Unit*P.Height / 360000.0, text); Strings.Append(text, " cm");
-					Printer.String(left2, y, text, fnt); DEC(y, dy);
+					Printer.String(left1, y, "Page Height:", fnt);
+					FixedStr(P.Unit*P.Height / 360000.0, str); Strings.Append(str, " cm");
+					Printer.String(left2, y, str, fnt); DEC(y, dy);
 				ELSE
-					text := "Page Width:";
-					Printer.String(left1, y, text, fnt);
-					FixedStr(P.Unit*P.Width / 36000.0 / 25.4, text); Strings.Append(text, " inch");
-					Printer.String(left2, y, text, fnt); DEC(y, dy);
+					Printer.String(left1, y, "Page Width:", fnt);
+					FixedStr(P.Unit*P.Width / 36000.0 / 25.4, str); Strings.Append(str, " inch");
+					Printer.String(left2, y, str, fnt); DEC(y, dy);
 	
-					text := "Page Height:";
-					Printer.String(left1, y, text, fnt);
-					FixedStr(P.Unit*P.Height / 36000.0, text); Strings.Append(text, " inch");
-					Printer.String(left2, y, text, fnt); DEC(y, dy)
+					Printer.String(left1, y, "Page Height:", fnt);
+					FixedStr(P.Unit*P.Height / 36000.0, str); Strings.Append(str, " inch");
+					Printer.String(left2, y, str, fnt); DEC(y, dy)
 				END;
 
 				y := SHORT(ENTIER(FrameTop-3.0*cm1+0.5)); left := SHORT(ENTIER(P.FrameX+P.FrameW/2.0+0.5));
 				left1 := SHORT(ENTIER(left+0.5*cm1+0.5)); left2 := SHORT(ENTIER(left+3.0*cm1+0.5));
-				fnt := Fonts.This("Syntax12m.Scn.Fnt"); text := "Page Setup";
-				Printer.String(left, y, text, fnt);
-				fnt := Fonts.This("Syntax12.Scn.Fnt"); DEC(y, dy);
+				fnt := Fonts.This("Default12m.Scn.Fnt");
+				Printer.String(left, y, "Page Setup", fnt);
+				fnt := Fonts.This("Default12.Scn.Fnt"); DEC(y, dy);
 
 				IF cm THEN
-					text := "Left Margin:";
-					Printer.String(left1, y, text, fnt);
-					FixedStr(P.Unit*P.FrameX / 360000.0, text); Strings.Append(text, " cm");
-					Printer.String(left2, y, text, fnt); DEC(y, dy);
+					Printer.String(left1, y, "Left Margin:", fnt);
+					FixedStr(P.Unit*P.FrameX / 360000.0, str); Strings.Append(str, " cm");
+					Printer.String(left2, y, str, fnt); DEC(y, dy);
 
-					text := "Right Margin:";
-					Printer.String(left1, y, text, fnt);
-					FixedStr(P.Unit*(P.Width-P.FrameW-P.FrameX) / 360000.0, text); Strings.Append(text, " cm");
-					Printer.String(left2, y, text, fnt); DEC(y, dy);
+					Printer.String(left1, y, "Right Margin:", fnt);
+					FixedStr(P.Unit*(P.Width-P.FrameW-P.FrameX) / 360000.0, str); Strings.Append(str, " cm");
+					Printer.String(left2, y, str, fnt); DEC(y, dy);
 
-					text := "Bottom Margin:";
-					Printer.String(left1, y, text, fnt);
-					FixedStr(P.Unit*P.FrameY / 360000.0, text); Strings.Append(text, " cm");
-					Printer.String(left2, y, text, fnt); DEC(y, dy);
+					Printer.String(left1, y, "Bottom Margin:", fnt);
+					FixedStr(P.Unit*P.FrameY / 360000.0, str); Strings.Append(str, " cm");
+					Printer.String(left2, y, str, fnt); DEC(y, dy);
 
-					text := "Top Margin:";
-					Printer.String(left1, y, text, fnt);
-					FixedStr(P.Unit*(P.Height-P.FrameH-P.FrameY) / 360000.0, text); Strings.Append(text, " cm");
-					Printer.String(left2, y, text, fnt); DEC(y, dy)
+					Printer.String(left1, y, "Top Margin:", fnt);
+					FixedStr(P.Unit*(P.Height-P.FrameH-P.FrameY) / 360000.0, str); Strings.Append(str, " cm");
+					Printer.String(left2, y, str, fnt); DEC(y, dy)
 				ELSE
-					text := "Left Margin:";
-					Printer.String(left1, y, text, fnt);
-					FixedStr(P.Unit*P.FrameX / 36000.0 / 25.4, text); Strings.Append(text, " inch");
-					Printer.String(left2, y, text, fnt); DEC(y, dy);
+					Printer.String(left1, y, "Left Margin:", fnt);
+					FixedStr(P.Unit*P.FrameX / 36000.0 / 25.4, str); Strings.Append(str, " inch");
+					Printer.String(left2, y, str, fnt); DEC(y, dy);
 
-					text := "Right Margin:";
-					Printer.String(left1, y, text, fnt);
-					FixedStr(P.Unit*(P.Width-P.FrameW-P.FrameX) / 36000.0 / 25.4, text); Strings.Append(text, " inch");
-					Printer.String(left2, y, text, fnt); DEC(y, dy);
+					Printer.String(left1, y, "Right Margin:", fnt);
+					FixedStr(P.Unit*(P.Width-P.FrameW-P.FrameX) / 36000.0 / 25.4, str); Strings.Append(str, " inch");
+					Printer.String(left2, y, str, fnt); DEC(y, dy);
 
-					text := "Bottom Margin:";
-					Printer.String(left1, y, text, fnt);
-					FixedStr(P.Unit*P.FrameY / 36000.0 / 25.4, text); Strings.Append(text, " inch");
-					Printer.String(left2, y, text, fnt); DEC(y, dy);
+					Printer.String(left1, y, "Bottom Margin:", fnt);
+					FixedStr(P.Unit*P.FrameY / 36000.0 / 25.4, str); Strings.Append(str, " inch");
+					Printer.String(left2, y, str, fnt); DEC(y, dy);
 
-					text := "Top Margin:";
-					Printer.String(left1, y, text, fnt);
-					FixedStr(P.Unit*(P.Height-P.FrameH-P.FrameY) / 36000.0 / 25.4, text); Strings.Append(text, " inch");
-					Printer.String(left2, y, text, fnt); DEC(y, dy)
+					Printer.String(left1, y, "Top Margin:", fnt);
+					FixedStr(P.Unit*(P.Height-P.FrameH-P.FrameY) / 36000.0 / 25.4, str); Strings.Append(str, " inch");
+					Printer.String(left2, y, str, fnt); DEC(y, dy)
 				END;
 
 				left := SHORT(ENTIER(P.FrameX+0.5*cm1+0.5));
-				DEC(y, dy); fnt := Fonts.This("Syntax12m.Scn.Fnt"); text := "Font Test";
-				Printer.String(left, y, text, fnt);
+				DEC(y, dy); fnt := Fonts.This("Default12m.Scn.Fnt");
+				Printer.String(left, y, "Font Test", fnt);
 				DEC(y, dy); DEC(y, dy);
 
-				fnt := Fonts.This("Syntax10.Scn.Fnt"); text := "Syntax10 "; Printer.String(left, y, text, fnt);
-				fnt := Fonts.This("Syntax12.Scn.Fnt"); text := "Syntax12 "; Printer.ContString(text, fnt);
-				fnt := Fonts.This("Syntax14.Scn.Fnt"); text := "Syntax14 "; Printer.ContString(text, fnt);
-				fnt := Fonts.This("Syntax16.Scn.Fnt"); text := "Syntax16 "; Printer.ContString(text, fnt);
-				fnt := Fonts.This("Syntax20.Scn.Fnt"); text := "Syntax20 "; Printer.ContString(text, fnt);
-				fnt := Fonts.This("Syntax24.Scn.Fnt"); text := "Syntax24 "; Printer.ContString(text, fnt);
+				fnt := Fonts.This("Default10.Scn.Fnt"); Printer.String(left, y, "Default10", fnt);
+				fnt := Fonts.This("Default12.Scn.Fnt"); Printer.ContString("Default12", fnt);
+				fnt := Fonts.This("Default14.Scn.Fnt"); Printer.ContString("Default14", fnt);
+				fnt := Fonts.This("Default16.Scn.Fnt"); Printer.ContString("Default16", fnt);
+				fnt := Fonts.This("Default20.Scn.Fnt"); Printer.ContString("Default20", fnt);
+				fnt := Fonts.This("Default24.Scn.Fnt"); Printer.ContString("Default24", fnt);
 				DEC(y, dy); DEC(y, dy);
 
-				fnt := Fonts.This("Syntax10i.Scn.Fnt"); text := "Syntax10i "; Printer.String(left, y, text, fnt);
-				fnt := Fonts.This("Syntax12i.Scn.Fnt"); text := "Syntax12i "; Printer.ContString(text, fnt);
-				fnt := Fonts.This("Syntax14i.Scn.Fnt"); text := "Syntax14i "; Printer.ContString(text, fnt);
-				fnt := Fonts.This("Syntax16i.Scn.Fnt"); text := "Syntax16i "; Printer.ContString(text, fnt);
-				fnt := Fonts.This("Syntax20i.Scn.Fnt"); text := "Syntax20i "; Printer.ContString(text, fnt);
-				fnt := Fonts.This("Syntax24i.Scn.Fnt"); text := "Syntax24i "; Printer.ContString(text, fnt);
+				fnt := Fonts.This("Default10i.Scn.Fnt"); Printer.String(left, y, "Default10i", fnt);
+				fnt := Fonts.This("Default12i.Scn.Fnt"); Printer.ContString("Default12", fnt);
+				fnt := Fonts.This("Default14i.Scn.Fnt"); Printer.ContString("Default14i", fnt);
+				fnt := Fonts.This("Default16i.Scn.Fnt"); Printer.ContString("Default16i", fnt);
+				fnt := Fonts.This("Default20i.Scn.Fnt"); Printer.ContString("Default20i", fnt);
+				fnt := Fonts.This("Default24i.Scn.Fnt"); Printer.ContString("Default24i", fnt);
 				DEC(y, dy); DEC(y, dy);
 
-				fnt := Fonts.This("Syntax10m.Scn.Fnt"); text := "Syntax10m "; Printer.String(left, y, text, fnt);
-				fnt := Fonts.This("Syntax12m.Scn.Fnt"); text := "Syntax12m "; Printer.ContString(text, fnt);
-				fnt := Fonts.This("Syntax14m.Scn.Fnt"); text := "Syntax14m "; Printer.ContString(text, fnt);
-				fnt := Fonts.This("Syntax16m.Scn.Fnt"); text := "Syntax16m "; Printer.ContString(text, fnt);
-				fnt := Fonts.This("Syntax20m.Scn.Fnt"); text := "Syntax20m "; Printer.ContString(text, fnt);
-				fnt := Fonts.This("Syntax24m.Scn.Fnt"); text := "Syntax24m "; Printer.ContString(text, fnt);
+				fnt := Fonts.This("Default10m.Scn.Fnt"); Printer.String(left, y, "Default10m", fnt);
+				fnt := Fonts.This("Default12m.Scn.Fnt"); Printer.ContString("Default12m", fnt);
+				fnt := Fonts.This("Default14m.Scn.Fnt"); Printer.ContString("Default14m", fnt);
+				fnt := Fonts.This("Default16m.Scn.Fnt"); Printer.ContString("Default16m", fnt);
+				fnt := Fonts.This("Default20m.Scn.Fnt"); Printer.ContString("Default20m", fnt);
+				fnt := Fonts.This("Default24m.Scn.Fnt"); Printer.ContString("Default24m", fnt);
 				DEC(y, dy); DEC(y, dy);
 
-				fnt := Fonts.This("Syntax10b.Scn.Fnt"); text := "Syntax10b "; Printer.String(left, y, text, fnt);
-				fnt := Fonts.This("Syntax12b.Scn.Fnt"); text := "Syntax12b "; Printer.ContString(text, fnt);
-				fnt := Fonts.This("Syntax14b.Scn.Fnt"); text := "Syntax14b "; Printer.ContString(text, fnt);
-				fnt := Fonts.This("Syntax16b.Scn.Fnt"); text := "Syntax16b "; Printer.ContString(text, fnt);
-				fnt := Fonts.This("Syntax20b.Scn.Fnt"); text := "Syntax20b "; Printer.ContString(text, fnt);
-				fnt := Fonts.This("Syntax24b.Scn.Fnt"); text := "Syntax24b "; Printer.ContString(text, fnt);
-				DEC(y, dy); DEC(y, dy);
-
-				fnt := Fonts.This("Oberon10.Scn.Fnt"); text := "Oberon10 "; Printer.String(left, y, text, fnt);
-				fnt := Fonts.This("Oberon12.Scn.Fnt"); text := "Oberon12 "; Printer.ContString(text, fnt);
-				fnt := Fonts.This("Oberon14.Scn.Fnt"); text := "Oberon14 "; Printer.ContString(text, fnt);
-				fnt := Fonts.This("Oberon16.Scn.Fnt"); text := "Oberon16 "; Printer.ContString(text, fnt);
-				fnt := Fonts.This("Oberon20.Scn.Fnt"); text := "Oberon20 "; Printer.ContString(text, fnt);
-				fnt := Fonts.This("Oberon24.Scn.Fnt"); text := "Oberon24 "; Printer.ContString(text, fnt);
-				DEC(y, dy); DEC(y, dy);
-
-				fnt := Fonts.This("Oberon10i.Scn.Fnt"); text := "Oberon10i "; Printer.String(left, y, text, fnt);
-				fnt := Fonts.This("Oberon12i.Scn.Fnt"); text := "Oberon12i "; Printer.ContString(text, fnt);
-				fnt := Fonts.This("Oberon14i.Scn.Fnt"); text := "Oberon14i "; Printer.ContString(text, fnt);
-				fnt := Fonts.This("Oberon16i.Scn.Fnt"); text := "Oberon16i "; Printer.ContString(text, fnt);
-				fnt := Fonts.This("Oberon20i.Scn.Fnt"); text := "Oberon20i "; Printer.ContString(text, fnt);
-				fnt := Fonts.This("Oberon24i.Scn.Fnt"); text := "Oberon24i "; Printer.ContString(text, fnt);
-				DEC(y, dy); DEC(y, dy);
-
-				fnt := Fonts.This("Oberon10b.Scn.Fnt"); text := "Oberon10b "; Printer.String(left, y, text, fnt);
-				fnt := Fonts.This("Oberon12b.Scn.Fnt"); text := "Oberon12b "; Printer.ContString(text, fnt);
-				fnt := Fonts.This("Oberon14b.Scn.Fnt"); text := "Oberon14b "; Printer.ContString(text, fnt);
-				fnt := Fonts.This("Oberon16b.Scn.Fnt"); text := "Oberon16b "; Printer.ContString(text, fnt);
-				fnt := Fonts.This("Oberon20b.Scn.Fnt"); text := "Oberon20b "; Printer.ContString(text, fnt);
-				fnt := Fonts.This("Oberon24b.Scn.Fnt"); text := "Oberon24b "; Printer.ContString(text, fnt);
+				fnt := Fonts.This("Default10b.Scn.Fnt"); Printer.String(left, y, "Default10b", fnt);
+				fnt := Fonts.This("Default12b.Scn.Fnt"); Printer.ContString("Default12b", fnt);
+				fnt := Fonts.This("Default14b.Scn.Fnt"); Printer.ContString("Default14b", fnt);
+				fnt := Fonts.This("Default16b.Scn.Fnt"); Printer.ContString("Default16b", fnt);
+				fnt := Fonts.This("Default20b.Scn.Fnt"); Printer.ContString("Default20b", fnt);
+				fnt := Fonts.This("Default24b.Scn.Fnt"); Printer.ContString("Default24b", fnt);
 				DEC(y, dy);
 
-				DEC(y, dy); fnt := Fonts.This("Syntax12m.Scn.Fnt"); text := "Pattern Test";
-				Printer.String(left, y, text, fnt);
+				DEC(y, dy); fnt := Fonts.This("Default12m.Scn.Fnt");
+				Printer.String(left, y, "Font Color Test", fnt);
+				DEC(y, dy); DEC(y, dy);
+				fnt := Fonts.This("Default12.Scn.Fnt");
+				Printer.String(left, y, "", fnt);
+				FOR i := 0 TO 15 DO
+					Display.GetColor(i, r, g, b);
+					Printer.UseColor(r, g, b);
+					Strings.IntToStr(i, str); Strings.AppendCh(str, " ");
+					Printer.ContString(str, fnt)
+				END;
+				Printer.UseColor(0, 0, 0);
+				DEC(y, dy);
+
+				DEC(y, dy); fnt := Fonts.This("Default12m.Scn.Fnt");
+				Printer.String(left, y, "Pattern Test", fnt);
 				DEC(y, dy); DEC(y, dy); DEC(y, dy);
 				left1 := SHORT(ENTIER(P.FrameX+(P.FrameW-16*cm1)/2.0+0.5));
 				FOR i := 0 TO 15 DO
 					Printer.ReplPattern(left1+i*cm1, y, cm1, cm1, i)
 				END; DEC(y, dy);
 
-				DEC(y, dy); fnt := Fonts.This("Syntax12m.Scn.Fnt"); text := "Color Test";
-				Printer.String(left, y, text, fnt); DEC(y, dy); DEC(y, cm1);
+				DEC(y, dy); fnt := Fonts.This("Default12m.Scn.Fnt");
+				Printer.String(left, y, "Color Test", fnt); DEC(y, dy); DEC(y, cm1);
 				cm4 := SHORT(ENTIER((360000.0 / P.Unit / 4.0)+0.5));
 
 				FOR i := 0 TO 255 DO
@@ -354,11 +318,11 @@ MODULE PrinterInfo; (** portable *)
 				END;
 				Printer.UseColor(0, 0, 0);
 
-				DEC(y, dy); DEC(y, dy); fnt := Fonts.This("Syntax12m.Scn.Fnt"); text := "Miscellaneous Test";
-				Printer.String(left, y, text, fnt); DEC(y, dy);
+				DEC(y, dy); DEC(y, dy); fnt := Fonts.This("Default12m.Scn.Fnt");
+				Printer.String(left, y, "Miscellaneous Test", fnt); DEC(y, dy);
 
 				Printer.Line(left1, y-cm1, left1, y); Printer.Line(left1+16*cm1, y-cm1,left1+16*cm1, y);
-				Printer.Line(left1, y-cm1, left1+16*cm1, y);  Printer.Line(left1, y, left1+16*cm1, y-cm1);
+				Printer.Line(left1, y-cm1, left1+16*cm1, y); Printer.Line(left1, y, left1+16*cm1, y-cm1);
 				Printer.Line(left1, y, left1+16*cm1, y); Printer.Line(left1, y-cm1, left1+16*cm1, y-cm1);
 				Printer.Circle(left1+8*cm1, SHORT(ENTIER(y-cm1/2.0+0.5)), SHORT(ENTIER(cm1/2.0+0.5)));
 				FOR i := 1 TO 8 DO
@@ -369,18 +333,16 @@ MODULE PrinterInfo; (** portable *)
 				Printer.Picture(pict, 0, 0, pict.width, pict.height, left1, SHORT(ENTIER(P.FrameY+1.5*cm1+0.5)), 16*cm1, y-P.FrameY-3*cm1, Display.replace);
 
 				Printer.ReplConst(P.FrameX, P.FrameY+cm1, P.FrameW, 1);
-				fnt := Fonts.This("Syntax12.Scn.Fnt"); text := "Printed on ";
-				Strings.Append(text, str);
+				fnt := Fonts.This("Default12.Scn.Fnt"); str := "Printed on ";
+				Strings.Append(str, printer);
 				IF S.s # "" THEN
-					Strings.Append(text, ", options: "); Strings.Append(text, S.s)
+					Strings.Append(str, ", options: "); Strings.Append(str, S.s)
 				END;
-				Printer.String(left, SHORT(ENTIER(P.FrameY+0.3*cm1+0.5)), text, fnt);
+				Printer.String(left, SHORT(ENTIER(P.FrameY+0.3*cm1+0.5)), str, fnt);
 				Oberon.GetClock(t, d);
-				Strings.TimeToStr(t, text); Strings.DateToStr(d, str);
-				Strings.AppendCh(text, " "); Strings.Append(text, str);
-				Printer.String(SHORT(ENTIER(Printer.FrameX+P.FrameW-3.5*cm1+0.5)), SHORT(ENTIER(P.FrameY+0.3*cm1+0.5)),
-					text, fnt);
-	
+				Strings.TimeToStr(t, str); Strings.DateToStr(d, printer);
+				Strings.AppendCh(str, " "); Strings.Append(str, printer);
+				Printer.String(SHORT(ENTIER(Printer.FrameX+P.FrameW-3.5*cm1+0.5)), SHORT(ENTIER(P.FrameY+0.3*cm1+0.5)), str, fnt);
 				Printer.Page(1); Printer.Close()
 			ELSE
 				Texts.WriteString(W, "Printer.Open failed")

@@ -1,105 +1,98 @@
-﻿(* OBERON System 3, Release 2.2.
+﻿(* Copyright (c) 1994 - 2000 Emil J. Zeller *)
 
-Copyright 1996, 1997 Team of the Institute of Computer Systems of ETH Zürich, ETH Center, CH-8092 Zürich,
-e-mail: oberon@inf.ethz.ch.
+(** Module Bitmaps provide a portable way to save and restore areas of the display. *)
 
-This module may be used under the conditions of the general Oberon System 3 license contract.
-The full text can be downloaded from
+MODULE Bitmaps; (** non-portable / source: Win32.Bitmaps.Mod *)	(* ejz  *)
+	IMPORT SYSTEM, Kernel32, Kernel, User32, GDI32, Displays, Display;
 
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+	TYPE
+		Bitmap* = POINTER TO RECORD (Displays.Display)
+			hBm-, hOldBm: GDI32.HBitmap
+		END;
 
-or requested from the above mentioned address.
+	PROCEDURE *Finalize(bitmap: PTR);
+	BEGIN
+		WITH bitmap: Bitmap DO
+			bitmap.releaseDC(bitmap);
+			IF bitmap.hBm # Kernel32.NULL THEN
+				GDI32.DeleteObject(bitmap.hBm); bitmap.hBm := Kernel32.NULL
+			END
+		END	
+	END Finalize;
 
-Under the license terms stated it is in particular (a) prohibited to modify the interface of this module
-in any way that disagrees with style or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
+	PROCEDURE *GetDC(disp: Displays.Display);
+		VAR hDC: User32.HDC;
+	BEGIN
+		WITH disp: Bitmap DO
+			Displays.GetDC(disp);
+			hDC := GDI32.CreateDC("DISPLAY", NIL, NIL, NIL);
+			disp.hDC := GDI32.CreateCompatibleDC(hDC);
+			GDI32.DeleteDC(hDC);
+			disp.hOldBm := GDI32.SelectObject(disp.hDC, disp.hBm);
+			Displays.BeginClip(disp)
+		END
+	END GetDC;
 
-MODULE Bitmaps;
+	PROCEDURE *ReleaseDC(disp: Displays.Display);
+	BEGIN
+		WITH disp: Bitmap DO
+			IF disp.hDC # Kernel32.NULL THEN
+				disp.hOldBm := GDI32.SelectObject(disp.hDC, disp.hOldBm); disp.hOldBm := Kernel32.NULL;
+				Displays.ReleaseDC(disp);
+				GDI32.DeleteDC(disp.hDC); disp.hDC := Kernel32.NULL
+			END
+		END
+	END ReleaseDC;
 
-(**
-Module Bitmaps provide a portable way to save and restore areas of the display.
-*)
+	(** Allocate a bitmap of width w and height h. NIL is returned when not enough memory is available. *)
+	PROCEDURE New*(w, h: LONGINT): Bitmap;
+		VAR bitmap: Bitmap; hDC: User32.HDC;
+	BEGIN
+		NEW(bitmap); Displays.Init(bitmap);
+		bitmap.getDC := GetDC; bitmap.releaseDC := ReleaseDC;
+		bitmap.hOldBm := Kernel32.NULL; bitmap.width := w; bitmap.height := h;
+		hDC := GDI32.CreateDC("DISPLAY", NIL, NIL, NIL);
+		bitmap.hBm := GDI32.CreateCompatibleBitmap(hDC, w, h);
+		GDI32.DeleteDC(hDC);
+		IF bitmap.hBm # Kernel32.NULL THEN
+			bitmap.clipL := 0; bitmap.clipB := 0;
+			bitmap.clipR := MAX(INTEGER); bitmap.clipT := MAX(INTEGER);
+			Kernel.RegisterObject(bitmap, Finalize, FALSE);
+			RETURN bitmap
+		END
+	END New;
 
-IMPORT S := SYSTEM, Kernel, Win32;
+	PROCEDURE Open(disp: Displays.Display);
+		VAR cur: Displays.Display;
+	BEGIN
+		Displays.FlushCharacterCache(disp);
+		IF disp.updateDC THEN
+			cur := Display.cur; Display.SetCurrent(NIL);
+			disp.getDC(disp); Display.SetCurrent(cur)
+		END
+	END Open;
 
-CONST
-	SRCCOPY = 0CC0020H;
+	PROCEDURE Close(disp: Displays.Display);
+		VAR cur: Displays.Display;
+	BEGIN
+		IF disp IS Bitmap THEN
+			cur := Display.cur; Display.SetCurrent(NIL);
+			disp.releaseDC(disp); Display.SetCurrent(cur)
+		END
+	END Close;
 
-TYPE
-	Bitmap* = POINTER TO BitmapDesc;
-	BitmapDesc* = RECORD
-		w-, h-: LONGINT;	(** Size (in screen pixels) of the bitmap. *)
-		dc: LONGINT;
-		bm: LONGINT; (*HBITMAP*)
-	END;
+	(** Copies a part (sx, sy, w, h) of a source bitmap (sB) to a destination bitmap (dB) at position (dx, dy, w, h). *)
+	PROCEDURE CopyBlock*(src, dest: Displays.Display; sx, sy, w, h, dx, dy: LONGINT);
+	BEGIN
+		Open(src); Open(dest);
+		IF (sx+w) > src.width THEN w := src.width-sx END;
+		IF (sy+h) > src.height THEN h := src.height-sy END;
+		GDI32.BitBlt(dest.hDC, dx, dest.height-dy, w, -h, src.hDC, sx, src.height-sy, GDI32.SrcCopy);
+		Close(dest); Close(src)
+	END CopyBlock;
 
-VAR
-	Disp-: Bitmap;	(** Bitmap representing the Oberon display. *)
-	CreateCompatibleBitmap: PROCEDURE (hdc, w, h: LONGINT): LONGINT (*HBITMAP*);
-
-PROCEDURE Finalize (B: PTR);
-BEGIN
-	WITH B: Bitmap DO
-		IF B = Disp THEN RETURN END;
-		IF B.bm # 0 THEN Win32.DeleteObject(B.bm); B.bm := 0 END;
-	END
-END Finalize;
-
-(** Allocate a bitmap of width w and height h. NIL is returned when not enough memory is available. *)
-PROCEDURE New* (w, h: LONGINT): Bitmap;
-	VAR B: Bitmap;
-BEGIN
-	NEW(B); Kernel.RegisterObject(B, Finalize, TRUE);
-	B.w := w; B.h := h; B.dc := 0;
-	B.bm := CreateCompatibleBitmap(Win32.hdcDisp, w, h);
-	IF B.bm # 0 THEN RETURN B (* jm *)
-	ELSE RETURN NIL
-	END
-END New;
-
-PROCEDURE OpenDC (B: Bitmap);
-	VAR dmmy: LONGINT;
-BEGIN
-	IF B # Disp THEN
-		B.dc := Win32.CreateCompatibleDC(Win32.hdcDisp);
-		IF B.dc = 0 THEN HALT(101) END;
-		dmmy := Win32.SelectObject(B.dc, B.bm);
-	ELSE
-		Win32.SetClippingArea(0, 0, Win32.DispW, Win32.DispH);
-	END
-END OpenDC;
-
-PROCEDURE CloseDC (B: Bitmap);
-BEGIN
-	IF B # Disp THEN
-		Win32.DeleteDC(B.dc); B.dc := 0;
-	END
-END CloseDC;
-
-(** Copies a part (sx, sy, w, h) of a source bitmap (sB) to a destination bitmap (dB) at position (dx, dy, w, h). *)
-PROCEDURE CopyBlock* (sB, dB: Bitmap; sx, sy, w, h, dx, dy, mode: INTEGER);
-BEGIN
-	OpenDC(sB); OpenDC(dB);
-	IF Win32.lc.len > 0 THEN Win32.FlushCache END;
-	Win32.BitBlt(dB.dc, dx, dB.h-dy, w, -h, sB.dc, sx, sB.h-sy, SRCCOPY);
-	CloseDC(sB); CloseDC(dB);
-END CopyBlock;
-
-PROCEDURE Init;
-	VAR mod: LONGINT;
-BEGIN
-	mod := Kernel.LoadLibrary("GDI32");
-	Kernel.GetAdr(mod, "CreateCompatibleBitmap", S.VAL(LONGINT, CreateCompatibleBitmap));
-	NEW(Disp); Kernel.RegisterObject(Disp, Finalize, TRUE);
-	Disp.w := Win32.DispW; Disp.h := Win32.DispH;
-	Disp.bm := 0; Disp.dc := Win32.hdcDisp;
-END Init;
-
-BEGIN Init;
 END Bitmaps.
 
 (** Remarks:
 
-1. Coordinates are measured vertically from bottom (0) to top (bitmap height minus one), and from left (0) to right (bitmap width minus 1).
-
-*)
+1. Coordinates are measured vertically from bottom (0) to top (bitmap height minus one), and from left (0) to right (bitmap width minus 1). *)

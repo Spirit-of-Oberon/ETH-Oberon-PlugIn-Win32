@@ -1,17 +1,5 @@
-﻿(* OBERON System 3, Release 2.3.
-
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
-
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
-
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
+﻿(* ETH Oberon, Copyright 2001 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE TextDocs; (** portable *)	(** jm 1.2.95 / tk 1.6.95 *)
 
@@ -23,7 +11,7 @@ MODULE TextDocs; (** portable *)	(** jm 1.2.95 / tk 1.6.95 *)
 	27.5.94 - Added Search "string" option
 	18.2.95 - Made Locate text viewer independant
 	9.5.95 - fixed ChangeFont
-	1.6.95 - tk  SearchDiff new supports WhiteSpaces
+	1.6.95 - tk SearchDiff new supports WhiteSpaces
 	26.10.95 - Fixed Locate
 	1.11.95 - Converted to attachments
 	15.12.95 - Support for short menubars/SearchCol
@@ -34,11 +22,11 @@ MODULE TextDocs; (** portable *)	(** jm 1.2.95 / tk 1.6.95 *)
 *)
 
 IMPORT
-	Files, Objects, Display, Oberon, Gadgets, Texts, TextGadgets0, TextGadgets, Documents, Desktops, Attributes, Links,
-	Fonts, Printer;
-	
+	Files, Objects, Display, Oberon, Gadgets, Texts, TextGadgets0, TextGadgets, Documents, Desktops, Attributes,
+	Links, Fonts, Printer;
+
 CONST
-	MaxPatLen = 128;
+	MaxPatLen = 128; dirty = 16;
 	UserMenu = "Desktops.Copy[Copy] TextDocs.Search[Search] TextDocs.Replace[Rep] TextDocs.ReplaceAll[RepAll] Desktops.StoreDoc[Store]";
 	Menu = "Desktops.Copy[Copy] TextDocs.Search[Search] TextDocs.Replace[Rep] Desktops.StoreDoc[Store]";
 	LogMenu = "Desktops.Copy[Copy] TextDocs.Locate[Locate] System.Clear[Clear]";
@@ -48,7 +36,7 @@ TYPE
 	StoreMsg = RECORD (Display.FrameMsg)
 		text: Texts.Text;
 	END;
-	
+
 VAR
 	sPat: ARRAY MaxPatLen OF CHAR;	(* search pattern [read only] *)
 	sDv: ARRAY MaxPatLen + 1 OF INTEGER;	(* displacement vector for search pattern *)
@@ -100,18 +88,50 @@ BEGIN
 	END
 END open;
 
+PROCEDURE LoadAttrs(D: Documents.Document; main: TextGadgets.Frame);
+	VAR M: Objects.AttrMsg;
+BEGIN
+	M.id := Objects.get; M.name := "Color"; M.res := -1; D.handle(D, M);
+	IF M.res = 0 THEN
+		M.id := Objects.set; main.handle(main, M)
+	END;
+	M.id := Objects.get; M.name := "Flat"; M.res := -1; D.handle(D, M);
+	IF M.res = 0 THEN
+		M.id := Objects.set; main.handle(main, M)
+	END;
+	M.id := Objects.get; M.name := "Locked"; M.res := -1; D.handle(D, M);
+	IF M.res = 0 THEN
+		M.id := Objects.set; main.handle(main, M)
+	END;
+	M.id := Objects.get; M.name := "Controls"; M.res := -1; D.handle(D, M);
+	IF (M.res = 0) & (M.b) THEN
+		EXCL(main.control, TextGadgets.nocontrol)
+	END
+END LoadAttrs;
+
 PROCEDURE LoadTextDocument(D: Documents.Document);
-VAR w, h: INTEGER; T: Texts.Text; main: TextGadgets.Frame;
+	VAR w, h: INTEGER; T: Texts.Text; main: TextGadgets.Frame;
 BEGIN
 	NEW(T); open(D, T, D.name, w, h);
 	NEW(main); TextGadgets.Init(main, T, FALSE);
 	D.W := w; D.H := h;
-	Documents.Init(D, main);
+	LoadAttrs(D, main);
+	Documents.Init(D, main)
 END LoadTextDocument;
 
+PROCEDURE StoreAttrs(D: Documents.Document; main: TextGadgets.Frame);
+	VAR col: Display.Color; b: BOOLEAN;
+BEGIN
+	Attributes.GetInt(main, "Color", col); Attributes.SetInt(D, "Color", col);
+	Attributes.GetBool(main, "Flat", b); Attributes.SetBool(D, "Flat", b);
+	Attributes.GetBool(main, "Locked", b); Attributes.SetBool(D, "Locked", b);
+	Attributes.SetBool(D, "Controls", ~(TextGadgets.nocontrol IN main.control));
+	Attributes.SetInt(D, "Org", main.org)
+END StoreAttrs;
+
 PROCEDURE StoreTextDocument(D: Documents.Document);
-VAR new: ARRAY 128 OF CHAR; i: INTEGER; f: Files.File; len: LONGINT; F: Display.Frame; R: Files.Rider;
-	M: StoreMsg;
+	VAR new: ARRAY 128 OF CHAR; i: INTEGER; f: Files.File; len: LONGINT; F: Display.Frame; R: Files.Rider;
+		M: StoreMsg;
 BEGIN
 	F := D.dsc;
 	WITH F: TextGadgets.Frame DO
@@ -126,6 +146,7 @@ BEGIN
 				Files.Set(R, f, 0); Files.WriteInt(R, Documents.Id); Files.WriteString(R, "TextDocs.NewDoc");
 				Files.WriteInt(R, 0); Files.WriteInt(R, 0); Files.WriteInt(R, F.W); Files.WriteInt(R, F.H);
 
+				StoreAttrs(D, F);
 				IF (D.attr # NIL) OR (D.link # NIL) THEN (* attachments *)
 					Documents.StoreAttachments(R, D.attr, D.link)
 				END;
@@ -152,7 +173,7 @@ BEGIN
 			A.id := Objects.get; A.name := "Caption"; A.res := -1; A.s := ""; f.handle(f, A);
 			IF (A.s = "Store!") OR (A.s = "Store") THEN
 				A.id := Objects.set; A.name := "Caption"; A.res := -1; A.class := Objects.String;
-				IF 16 IN D.state THEN A.s := "Store!" ELSE A.s := "Store" END;
+				IF dirty IN D.state THEN A.s := "Store!" ELSE A.s := "Store" END;
 				f.handle(f, A);
 				Gadgets.Update(f); f := NIL
 			ELSE f := f.next
@@ -166,8 +187,8 @@ PROCEDURE HandleUpdate(D: Documents.Document; VAR M: Texts.UpdateMsg);
 	VAR F: TextGadgets.Frame;
 BEGIN
 	F := D.dsc(TextGadgets.Frame);
-	IF (M.text = F.text) & ~(16 IN D.state) THEN
-		INCL(D.state, 16); UpdateChangeCheck(D, M.dlink)
+	IF (M.text = F.text) & ~(dirty IN D.state) THEN
+		INCL(D.state, dirty); UpdateChangeCheck(D, M.dlink)
 	END
 END HandleUpdate;
 
@@ -175,54 +196,41 @@ PROCEDURE HandleStoreMsg(D: Documents.Document; T: Texts.Text; dlink: Objects.Ob
 	VAR F: TextGadgets.Frame;
 BEGIN
 	F := D.dsc(TextGadgets.Frame);
-	IF (T = F.text) & (16 IN D.state) THEN
-		EXCL(D.state, 16); UpdateChangeCheck(D, dlink)
+	IF (T = F.text) & (dirty IN D.state) THEN
+		EXCL(D.state, dirty); UpdateChangeCheck(D, dlink)
 	END
 END HandleStoreMsg;
 
-PROCEDURE DocHandler*(D: Objects.Object; VAR M: Objects.ObjMsg);
+PROCEDURE *Handler(D: Objects.Object; VAR M: Objects.ObjMsg);
 VAR obj: Display.Frame;
 BEGIN
 	WITH D: Documents.Document DO
-		IF M IS Objects.AttrMsg THEN
+		IF M IS Texts.UpdateMsg THEN
+			HandleUpdate(D, M(Texts.UpdateMsg));
+			Documents.Handler(D, M)
+		ELSIF M IS StoreMsg THEN
+			WITH M: StoreMsg DO
+				HandleStoreMsg(D, M.text, M.dlink);
+				Documents.Handler(D, M)
+			END
+		ELSIF M IS Display.ControlMsg THEN
+			WITH M: Display.ControlMsg DO
+				IF ((M.F = D) OR (M.F = NIL)) & (M.id = Display.restore) THEN
+					UpdateChangeCheck(D, M.dlink)
+				END;
+				Documents.Handler(D, M)
+			END
+		ELSIF M IS Objects.AttrMsg THEN
 			WITH M: Objects.AttrMsg DO
 				IF M.id = Objects.get THEN
 					IF M.name = "Gen" THEN M.class := Objects.String; M.s := "TextDocs.NewDoc"; M.res := 0
 					ELSIF M.name = "Adaptive" THEN M.class := Objects.Bool; M.b := TRUE; M.res := 0
 					ELSIF M.name = "Icon" THEN M.class := Objects.String; M.s := "Icons.Text"; M.res := 0
-					ELSIF M.name = "ChangeCheck" THEN M.class := Objects.Bool; M.b := 16 IN D.state; M.res := 0
+					ELSIF M.name = "ChangeCheck" THEN M.class := Objects.Bool; M.b := dirty IN D.state; M.res := 0
 					ELSE Documents.Handler(D, M)
 					END
 				ELSE Documents.Handler(D, M)
 				END
-			END
-		ELSIF M IS Texts.UpdateMsg THEN
-			HandleUpdate(D, M(Texts.UpdateMsg));
-			Documents.Handler(D, M)
-		ELSIF M IS Objects.LinkMsg THEN
-			WITH M: Objects.LinkMsg DO
-				IF (M.id = Objects.get) & (M.name = "DeskMenu") THEN
-					IF Display.Width < 1000 THEN M.obj := Gadgets.CopyPublicObject("TextDocs.DeskMenuS", TRUE)	
-					ELSE M.obj := Gadgets.CopyPublicObject("TextDocs.DeskMenu", TRUE) END;
-					IF M.obj = NIL THEN M.obj := Desktops.NewMenu(Menu) END;
-					M.res := 0
-				ELSIF (M.id = Objects.get) & (M.name = "SystemMenu") THEN
-					IF Display.Width < 1000 THEN M.obj := Gadgets.CopyPublicObject("TextDocs.SystemMenuS", TRUE)	
-					ELSE M.obj := Gadgets.CopyPublicObject("TextDocs.SystemMenu", TRUE) END;
-					IF M.obj = NIL THEN M.obj := Desktops.NewMenu(Menu) END;
-					M.res := 0
-				ELSIF (M.id = Objects.get) & (M.name = "UserMenu") THEN
-					IF Display.Width < 1000 THEN M.obj := Gadgets.CopyPublicObject("TextDocs.UserMenuS", TRUE)	
-					ELSE M.obj := Gadgets.CopyPublicObject("TextDocs.UserMenu", TRUE) END;
-					IF M.obj = NIL THEN M.obj := Desktops.NewMenu(UserMenu) END;
-					M.res := 0
-				ELSE Documents.Handler(D, M)
-				END
-			END
-		ELSIF M IS StoreMsg THEN
-			WITH M: StoreMsg DO
-				HandleStoreMsg(D, M.text, M.dlink);
-				Documents.Handler(D, M)
 			END
 		ELSIF M IS Display.DisplayMsg THEN
 			WITH M: Display.DisplayMsg DO
@@ -231,15 +239,34 @@ BEGIN
 				ELSE Documents.Handler(D, M)
 				END
 			END
-		ELSIF M IS Display.ControlMsg THEN
-			WITH M: Display.ControlMsg DO
-				IF ((M.F = D) OR (M.F = NIL)) & (M.id = Display.restore) THEN
-					UpdateChangeCheck(D, M.dlink)
-				ELSE Documents.Handler(D, M)
-				END
-			END
 		ELSE Documents.Handler(D, M)
 		END
+	END
+END Handler;
+
+PROCEDURE DocHandler*(D: Objects.Object; VAR M: Objects.ObjMsg);
+BEGIN
+	IF M IS Objects.LinkMsg THEN
+		WITH M: Objects.LinkMsg DO
+			IF (M.id = Objects.get) & (M.name = "DeskMenu") THEN
+				IF Display.Width < 1000 THEN M.obj := Gadgets.CopyPublicObject("TextDocs.DeskMenuS", TRUE)	
+				ELSE M.obj := Gadgets.CopyPublicObject("TextDocs.DeskMenu", TRUE) END;
+				IF M.obj = NIL THEN M.obj := Desktops.NewMenu(Menu) END;
+				M.res := 0
+			ELSIF (M.id = Objects.get) & (M.name = "SystemMenu") THEN
+				IF Display.Width < 1000 THEN M.obj := Gadgets.CopyPublicObject("TextDocs.SystemMenuS", TRUE)	
+				ELSE M.obj := Gadgets.CopyPublicObject("TextDocs.SystemMenu", TRUE) END;
+				IF M.obj = NIL THEN M.obj := Desktops.NewMenu(Menu) END;
+				M.res := 0
+			ELSIF (M.id = Objects.get) & (M.name = "UserMenu") THEN
+				IF Display.Width < 1000 THEN M.obj := Gadgets.CopyPublicObject("TextDocs.UserMenuS", TRUE)	
+				ELSE M.obj := Gadgets.CopyPublicObject("TextDocs.UserMenu", TRUE) END;
+				IF M.obj = NIL THEN M.obj := Desktops.NewMenu(UserMenu) END;
+				M.res := 0
+			ELSE Handler(D, M)
+			END
+		END
+	ELSE Handler(D, M)
 	END
 END DocHandler;
 
@@ -259,50 +286,37 @@ END NewDoc;
 (* ------------- Oberon Log ---------------- *)
 
 PROCEDURE LogHandler*(D: Objects.Object; VAR M: Objects.ObjMsg);
-VAR obj: Display.Frame;
 BEGIN
-	WITH D: Documents.Document DO
-		IF M IS Objects.AttrMsg THEN
-			WITH M: Objects.AttrMsg DO
-				IF M.id = Objects.get THEN
-					IF M.name = "Gen" THEN M.class := Objects.String; M.s := "TextDocs.NewLog"; M.res := 0
-					ELSIF M.name = "Adaptive" THEN M.class := Objects.Bool; M.b := TRUE; M.res := 0
-					ELSIF M.name = "Icon" THEN M.class := Objects.String; M.s := "Icons.Text"; M.res := 0
-					ELSIF M.name = "ChangeCheck" THEN M.class := Objects.Bool; M.b := 16 IN D.state; M.res := 0
-					ELSE Documents.Handler(D, M)
-					END
-				ELSE Documents.Handler(D, M)
+	IF M IS Objects.AttrMsg THEN
+		WITH M: Objects.AttrMsg DO
+			IF M.id = Objects.get THEN
+				IF M.name = "Gen" THEN M.class := Objects.String; M.s := "TextDocs.NewLog"; M.res := 0
+				ELSE Handler(D, M)
 				END
+			ELSE Handler(D, M)
 			END
-		ELSIF M IS Objects.LinkMsg THEN
-			WITH M: Objects.LinkMsg DO
-				IF (M.id = Objects.get) & (M.name = "DeskMenu") THEN
-					IF Display.Width < 1000 THEN M.obj := Gadgets.CopyPublicObject("TextDocs.LogDeskMenuS", TRUE)
-					ELSE M.obj := Gadgets.CopyPublicObject("TextDocs.LogDeskMenu", TRUE) END;
-					IF M.obj = NIL THEN M.obj := Desktops.NewMenu(LogMenu) END;
-					M.res := 0
-				ELSIF (M.id = Objects.get) & (M.name = "SystemMenu") THEN
-					IF Display.Width < 1000 THEN M.obj := Gadgets.CopyPublicObject("TextDocs.LogSystemMenuS", TRUE)
-					ELSE M.obj := Gadgets.CopyPublicObject("TextDocs.LogSystemMenu", TRUE) END;
-					IF M.obj = NIL THEN M.obj := Desktops.NewMenu(LogMenu) END;
-					M.res := 0
-				ELSIF (M.id = Objects.get) & (M.name = "UserMenu") THEN
-					IF Display.Width < 1000 THEN M.obj := Gadgets.CopyPublicObject("TextDocs.LogUserMenuS", TRUE)
-					ELSE M.obj := Gadgets.CopyPublicObject("TextDocs.LogUserMenu", TRUE) END;
-					IF M.obj = NIL THEN M.obj := Desktops.NewMenu(LogMenu) END;
-					M.res := 0
-				ELSE Documents.Handler(D, M)
-				END
-			END
-		ELSIF M IS Display.DisplayMsg THEN
-			WITH M: Display.DisplayMsg DO
-				IF (M.device = Display.printer) & (M.id = Display.contents) & (D.dsc # NIL) THEN
-					obj := D.dsc; TextGadgets0.PrintText(obj(TextGadgets0.Frame), D.name)
-				ELSE Documents.Handler(D, M)
-				END
-			END
-		ELSE Documents.Handler(D, M)
 		END
+	ELSIF M IS Objects.LinkMsg THEN
+		WITH M: Objects.LinkMsg DO
+			IF (M.id = Objects.get) & (M.name = "DeskMenu") THEN
+				IF Display.Width < 1000 THEN M.obj := Gadgets.CopyPublicObject("TextDocs.LogDeskMenuS", TRUE)
+				ELSE M.obj := Gadgets.CopyPublicObject("TextDocs.LogDeskMenu", TRUE) END;
+				IF M.obj = NIL THEN M.obj := Desktops.NewMenu(LogMenu) END;
+				M.res := 0
+			ELSIF (M.id = Objects.get) & (M.name = "SystemMenu") THEN
+				IF Display.Width < 1000 THEN M.obj := Gadgets.CopyPublicObject("TextDocs.LogSystemMenuS", TRUE)
+				ELSE M.obj := Gadgets.CopyPublicObject("TextDocs.LogSystemMenu", TRUE) END;
+				IF M.obj = NIL THEN M.obj := Desktops.NewMenu(LogMenu) END;
+				M.res := 0
+			ELSIF (M.id = Objects.get) & (M.name = "UserMenu") THEN
+				IF Display.Width < 1000 THEN M.obj := Gadgets.CopyPublicObject("TextDocs.LogUserMenuS", TRUE)
+				ELSE M.obj := Gadgets.CopyPublicObject("TextDocs.LogUserMenu", TRUE) END;
+				IF M.obj = NIL THEN M.obj := Desktops.NewMenu(LogMenu) END;
+				M.res := 0
+			ELSE Handler(D, M)
+			END
+		END
+	ELSE Handler(D, M)
 	END
 END LogHandler;
 
@@ -337,6 +351,7 @@ BEGIN
 	IF D.name = "" THEN D.name := "System.Log" END;
 	NEW(main); TextGadgets.Init(main, Oberon.Log, FALSE);
 	D.W := w; D.H := h; INCL(main.state0, TextGadgets0.autoscroll);
+	LoadAttrs(D, main);
 	Documents.Init(D, main)
 END LoadLog;
 
@@ -351,6 +366,7 @@ BEGIN
 		Files.Set(R, F, 0);
 		Files.WriteInt(R, Documents.Id); Files.WriteString(R, "TextDocs.NewLog");
 		Files.WriteInt(R, 0); Files.WriteInt(R, 0); Files.WriteInt(R, main.W); Files.WriteInt(R, main.H);
+		StoreAttrs(D, main(TextGadgets.Frame));
 		IF (D.attr # NIL) OR (D.link # NIL) THEN (* attachments *)
 			Documents.StoreAttachments(R, D.attr, D.link)
 		END;
@@ -389,35 +405,14 @@ BEGIN
 	M.id := Oberon.set; M.F := F; M.car := F; M.text := T; M.pos := pos; Display.Broadcast(M)
 END SetCaret;
 
-(** Open a text in a TextDoc. W, H is used to determine the original size of the document. *)
-PROCEDURE ShowText*(title: ARRAY OF CHAR; T: Texts.Text; W, H: INTEGER);
-VAR D: Documents.Document; f: TextGadgets.Frame; i: INTEGER; log: BOOLEAN;
-BEGIN
-	i := 0;  WHILE (title[i] # 0X) & (title[i] # "|") DO INC(i) END; title[i] := 0X;
-	WHILE (i > 0) & ((title[i] = " ") OR (title[i] = 0X)) DO DEC(i) END;
-	log := (i > 3) & (title[i-3] = ".") & (title[i-2] = "L") & (title[i-1] = "o") & (title[i] = "g");
-	NEW(D); 
-	NEW(f); TextGadgets.Init(f, T, FALSE);	(* create content *)
-	IF T = Oberon.Log THEN
-		InitLog(D)
-	ELSE
-		InitDoc(D)
-	END;	(* make document wrapper *)
-	IF log OR (T = Oberon.Log) THEN INCL(f.state0, TextGadgets0.autoscroll) END;
-	COPY(title, D.name);
-	Documents.Init(D, f); (* and merge together *)
-	D.W := W; D.H := H;
-	Desktops.ShowDoc(D)
-END ShowText;
-
 (** Same function as Edit.Locate *)
 PROCEDURE Locate*;
-VAR T, text: Texts.Text; S: Texts.Scanner; beg, end, time: LONGINT; F: Display.Frame;
+VAR T, text: Texts.Text; S: Texts.Scanner; beg, end, time: LONGINT; F: Display.Frame; D: Documents.Document;
 BEGIN
 	text := GetText(F);
 	IF text # NIL THEN
 		Oberon.GetSelection(T, beg, end, time);
-		IF time >= 0 THEN
+		IF time # -1 THEN
 			Texts.OpenScanner(S, T, beg);
 			REPEAT Texts.Scan(S) UNTIL S.eot OR (S.class >= Texts.Int); (*skip names*)
 			IF (S.class = Texts.Int) THEN
@@ -425,6 +420,12 @@ BEGIN
 				ELSIF S.i > text.len THEN S.i := text.len
 				END;
 				SetCaret(F, text, S.i)
+			END
+		ELSE
+			D := Documents.MarkedDoc();
+			IF (D # NIL) & (D.dsc = F) THEN
+				Attributes.GetInt(D, "Org", beg);
+				SetCaret(F, text, beg)
 			END
 		END
 	END
@@ -460,7 +461,7 @@ BEGIN
 		IF F # NIL THEN controls(F) END
 	ELSE (* try on the selection *)
 		M.id := Display.get; M.F := NIL; M.obj := NIL; M.sel := NIL; M.time := -1; Display.Broadcast(M);
-		IF (M.time > 0) THEN
+		IF M.time # -1 THEN
 			obj := M.obj;
 			WHILE obj # NIL DO
 				IF obj IS TextGadgets.Frame THEN F := obj(TextGadgets.Frame); controls(F) END;
@@ -517,14 +518,10 @@ END Controls;
 		RETURN i = sPatLen	(* pattern found *)
 	END SPatFound;
 
-	PROCEDURE search(tF: TextGadgets.Frame);
-		VAR
-			R: Texts.Reader;	text: Texts.Text; S: Attributes.Scanner;
-			pos, beg, end, time: LONGINT; 	i: INTEGER;
+	PROCEDURE search(VAR S: Attributes.Scanner; tF: TextGadgets.Frame);
+		VAR R: Texts.Reader; text: Texts.Text; pos, beg, end, time: LONGINT; i: INTEGER;
 	BEGIN
-		Attributes.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos);
-		Attributes.Scan(S);
-		IF S.class = Attributes.String THEN
+		IF S.class IN {Attributes.Name, Attributes.String} THEN
 			COPY(S.s, sPat); sPatLen := S.len; CalcDispVec(Oberon.Time())	(* calculate displacement vector *)
 		ELSE
 			text := NIL; Oberon.GetSelection(text, beg, end, time);
@@ -541,31 +538,68 @@ END Controls;
 		END
 	END search;
 
-	(** Same as Edit.Search. Also can be used in the form: TextDocs.Search "string" to search for the specified string
-	in the current document *)
-	PROCEDURE Search*; (* [ "string" ] *)
-		VAR tF: TextGadgets.Frame; doc: Documents.Document;
+	(** Same as Edit.Search. Also can be used in the form: TextDocs.Search "string" to search for the
+		specified string in the current or marked document. *)
+	PROCEDURE Search*; (* [ [ "*" ] "string" ] *)
+		VAR tF: TextGadgets.Frame; doc: Documents.Document; S: Attributes.Scanner;
 	BEGIN
-		doc := Desktops.CurDoc(Gadgets.context);
+		Attributes.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos);
+		Attributes.Scan(S);
+		IF (S.class = Attributes.Char) & (S.c = "*") THEN
+			doc := Documents.MarkedDoc();
+			Attributes.Scan(S)
+		ELSE
+			doc := Desktops.CurDoc(Gadgets.context)
+		END;
 		IF (doc # NIL) & (doc.dsc IS TextGadgets.Frame) THEN
 			tF := doc.dsc(TextGadgets.Frame);
-			search(tF)
+			search(S, tF)
 		END
 	END Search;
 
 	PROCEDURE replace(all: BOOLEAN);
 	VAR tF: TextGadgets.Frame; R: Texts.Reader; tBuf: Texts.Buffer; T, text: Texts.Text;
-		pos, beg, end, time, p, len: LONGINT;  i: INTEGER; ch: CHAR; M: Oberon.CaretMsg;
+		pos, beg, end, time, p, len: LONGINT; i: INTEGER; ch: CHAR; M: Oberon.CaretMsg;
+		S: Attributes.Scanner; doc: Documents.Document;
 	BEGIN
 		tF := NIL;
-		M.id := Oberon.get; M.F := NIL; M.car := NIL; M.text := NIL; M.pos := -1; Display.Broadcast(M);
-		IF (M.car # NIL) & (M.car IS TextGadgets.Frame) THEN tF := M.car(TextGadgets.Frame) END;
+		Attributes.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos);
+		Attributes.Scan(S);
+		IF (S.class = Attributes.Char) & (S.c = "*") OR (S.class IN {Attributes.Name, Attributes.String}) THEN
+			IF (S.class = Attributes.Char) & (S.c = "*") THEN
+				doc := Documents.MarkedDoc();
+				Attributes.Scan(S)
+			ELSE
+				doc := Desktops.CurDoc(Gadgets.context)
+			END;
+			COPY(S.s, sPat); sPatLen := S.len; CalcDispVec(Oberon.Time());	(* calculate displacement vector *)
+			Attributes.Scan(S);
+			IF S.class IN {Attributes.Name, Attributes.String} THEN
+				Texts.WriteString(W, S.s);
+				NEW(text); Texts.Open(text, ""); Texts.Append(text, W.buf);
+				time := Oberon.Time(); beg := 0; end := text.len;
+				lTime := time; NEW(rBuf); Texts.OpenBuf(rBuf); Texts.Save(text, beg, end, rBuf);
+				IF (doc # NIL) & (doc.dsc IS TextGadgets.Frame) THEN
+					tF := doc.dsc(TextGadgets.Frame);
+					IF ~tF.car THEN
+						M.id := Oberon.set; M.F := tF; M.car := tF; M.text := tF.text;
+						IF tF.org < sPatLen THEN M.pos := sPatLen ELSE M.pos := tF.org END;
+						Display.Broadcast(M)
+					END
+				END
+			END
+		ELSE
+			M.id := Oberon.get; M.F := NIL; M.car := NIL; M.text := NIL; M.pos := -1; Display.Broadcast(M);
+			IF (M.car # NIL) & (M.car IS TextGadgets.Frame) THEN
+				tF := M.car(TextGadgets.Frame);
+				text := NIL; Oberon.GetSelection(text, beg, end, time);
+				IF (text # NIL) & (time - lTime > 0) THEN	(* set replace buffer *)
+					lTime := time; NEW(rBuf); Texts.OpenBuf(rBuf); Texts.Save(text, beg, end, rBuf)
+				END
+			END
+		END;
 		IF tF # NIL THEN
 			T := tF.text;
-			text := NIL; Oberon.GetSelection(text, beg, end, time);
-			IF (text # NIL) & (time - lTime > 0) THEN	(* set replace buffer *)
-				lTime := time; NEW(rBuf); Texts.OpenBuf(rBuf); Texts.Save(text, beg, end, rBuf)
-			END;
 			IF ~tF.car OR ~(sPatLen > 0) OR (rBuf = NIL) THEN RETURN END;	(*###*)
 			pos := tF.carpos.pos; p := pos - sPatLen;
 			IF p < 0 THEN RETURN END;	(*###*)
@@ -578,7 +612,7 @@ END Controls;
 					Texts.Copy(rBuf, tBuf); len := tBuf.len;
 					Texts.Insert(T, pos, tBuf); pos := pos + len
 				END;
-				IF SPatFound(tF.text, pos) THEN
+				IF SPatFound(T, pos) THEN
 					IF all THEN p := pos-sPatLen ELSE MarkPatPos(tF, pos); RETURN END
 				ELSIF all THEN
 					i := sPatLen; sPatLen := SHORT(len);
@@ -591,13 +625,13 @@ END Controls;
 	END replace;
 
 	(** Replace the last searched for string with the current selection *)
-	PROCEDURE Replace*;
+	PROCEDURE Replace*; (* [ [ "*" ] "old string" "new string" ] *)
 	BEGIN
 		replace(FALSE)
 	END Replace;
 	
 	(** Replace all occurances of the last searched for string with the current selection *)
-	PROCEDURE ReplaceAll*;
+	PROCEDURE ReplaceAll*; (* [ [ "*" ] "old string" "new string" ] *)
 	BEGIN
 		replace(TRUE)
 	END ReplaceAll;
@@ -611,28 +645,34 @@ END Controls;
 (** Used in the form: TextDocs.Show M.P
 	Shows the module M at the position where P occurs for the first time *)
 PROCEDURE Show*;
-VAR S: Attributes.Scanner; name: ARRAY 35 OF CHAR; i, j, M: INTEGER; pos: LONGINT; D: Documents.Document;
+VAR S: Attributes.Scanner; name: ARRAY 86 OF CHAR; i, j, k, M: INTEGER; pos: LONGINT; D: Documents.Document;
 	F: TextGadgets0.Frame;
 BEGIN
 	Attributes.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos);
 	Attributes.Scan(S);
 	IF S.class = Attributes.Name THEN
-		i := -1; j := 0;
+		i := -1; k := -1; j := 0;
 		WHILE S.s[j] # 0X DO
-			IF S.s[j] = "." THEN i := j END;
+			IF S.s[j] = "." THEN
+				i := j;	(* name[i] is last "." found *)
+				IF k = -1 THEN k := j END	(* name[k] is first "." found *)
+			END;
 			name[j] := S.s[j]; INC(j)
 		END;
-		IF i = -1 THEN
-			IF name[j-1] = ":" THEN DEC(j) END;
+		IF i = -1 THEN	(* no "." found *)
+			IF name[j-1] = ":" THEN DEC(j) END;	(* e.g. trace module name in log *)
 			name[j] := ".";  i := j
 		END;
 		name[i+1] := "M"; name[i+2] := "o"; name[i+3] := "d"; name[i+4] := 0X;
+		IF Files.Old(name) = NIL THEN
+			name[k+1] := "M"; name[k+2] := "o"; name[k+3] := "d"; name[k+4] := 0X
+		END;
 		D := Documents.Open(name);
 		IF (D # NIL) & (D.dsc # NIL) & (D.dsc IS TextGadgets0.Frame) THEN
 			F := D.dsc(TextGadgets0.Frame);
 			j := i+1; M := 0;
 			WHILE (M # MaxPatLen) & (S.s[j] # 0X) DO sPat[M] := S.s[j]; INC(j); INC(M) END;
-			sPatLen := M;  CalcDispVec(Oberon.Time());	(* calculate displacement vector *)
+			sPatLen := M; CalcDispVec(Oberon.Time());	(* calculate displacement vector *)
 			
 			Desktops.ShowDoc(D);
 			pos := 0;
@@ -649,7 +689,7 @@ VAR par: Oberon.ParList; S: Attributes.Scanner; T: Texts.Text; beg, end, time: L
 	F: Fonts.Font;
 BEGIN
 	Oberon.GetSelection(T, beg, end, time);
-	IF time >= 0 THEN par := Oberon.Par;
+	IF time # -1 THEN par := Oberon.Par;
 		Attributes.OpenScanner(S, par.text, par.pos); Attributes.Scan(S);
 		IF S.class IN {Attributes.Name, Attributes.String} THEN
 			F := Fonts.This(S.s);
@@ -671,7 +711,7 @@ BEGIN par := Oberon.Par;
 	Attributes.OpenScanner(S, par.text, par.pos); Attributes.Scan(S);
 	IF S.class # Texts.Int THEN col := Display.FG ELSE col := SHORT(SHORT(S.i)) END;
 	Oberon.GetSelection(T, beg, end, time);
-	IF time >= 0 THEN Texts.ChangeLooks(T, beg, end, {1}, NIL, col, 0) END
+	IF time # -1 THEN Texts.ChangeLooks(T, beg, end, {1}, NIL, col, 0) END
 END ChangeColor;
 
 (** Used in the form: TextDocs.ChangeOffset <offset>
@@ -683,12 +723,12 @@ BEGIN par := Oberon.Par;
 	Attributes.OpenScanner(S, par.text, par.pos); Attributes.Scan(S);
 	IF S.class # Texts.Int THEN off := 0 ELSE off := SHORT(SHORT(S.i)) END;
 	Oberon.GetSelection(T, beg, end, time);
-	IF time >= 0 THEN Texts.ChangeLooks(T, beg, end, {2}, NIL, 0, off) END
+	IF time # -1 THEN Texts.ChangeLooks(T, beg, end, {2}, NIL, 0, off) END
 END ChangeOffset;
 
 (** Starts searching for textual differences starting at the selection positions of the last two selected texts
-		Call: TextDocs.SearchDiff			exact comparison 
-				TextDocs.SearchDiff \w	  compare with 'white spaces'	
+		Call: TextDocs.SearchDiff [text1 text2]			exact comparison 
+				TextDocs.SearchDiff \w [text1 text2]		compare ignoring 'white space'	
 *)
 PROCEDURE SearchDiff*;
 VAR F1, F2: Display.Frame; T1, T2: Texts.Text; S: Texts.Scanner; pos1, pos2: LONGINT;
@@ -699,7 +739,7 @@ VAR F1, F2: Display.Frame; T1, T2: Texts.Text; S: Texts.Scanner; pos1, pos2: LON
 	VAR M: Oberon.SelectMsg;
 	BEGIN
 		M.id := Oberon.get; M.F := NIL; M.time := -1; M.text := NIL; M.sel := NIL; Display.Broadcast(M);
-		IF (M.time > 0) & (M.text # NIL) & (M.sel # NIL) THEN
+		IF (M.time # -1) & (M.text # NIL) & (M.sel # NIL) THEN
 			F := M.sel; T := M.text; pos := M.beg
 		ELSE F := NIL
 		END
@@ -721,16 +761,40 @@ VAR F1, F2: Display.Frame; T1, T2: Texts.Text; S: Texts.Scanner; pos1, pos2: LON
 		REPEAT Texts.Read(R, ch); INC(pos); UNTIL R.eot OR ((ch > " ") & (R.lib IS Fonts.Font))
 	END ReadNonWhiteSp;
 
+	PROCEDURE OpenDoc(name: ARRAY OF CHAR; VAR f: Display.Frame; VAR t: Texts.Text);
+		VAR d: Documents.Document;
+	BEGIN
+		NEW(d); InitDoc(d); COPY(name, d.name); d.Load(d);
+		IF d # NIL THEN
+			Desktops.ShowDoc(d); f := d.dsc; t := f(TextGadgets0.Frame).text
+		END
+	END OpenDoc;
+
 BEGIN
-	whiteSp := TRUE;
+	whiteSp := TRUE; F1 := NIL; T1 := NIL; F2 := NIL; T2 := NIL;
 	Texts.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos); Texts.Scan(S);
-	IF (S.line = 0) & (S.class = Texts.Char) & ((S.c = Oberon.OptionChar) OR (S.c = "%")) THEN Texts.Scan(S);
-		IF (S.class = Texts.Name) & (CAP(S.s[0]) = "W") THEN whiteSp := FALSE END;
+	IF (S.line = 0) & (S.class = Texts.Char) & ((S.c = Oberon.OptionChar) OR (S.c = "%")) THEN
+		Texts.Scan(S);
+		IF S.class = Texts.Name THEN
+			IF (CAP(S.s[0]) = "W") THEN whiteSp := FALSE END;
+			Texts.Scan(S)
+		END
 	END;
-	GetSelFrame(F1, T1, pos1);
-	IF F1 # NIL THEN RemoveMarks(F1, T1) END;
-	GetSelFrame(F2, T2, pos2);
-	IF F2 # NIL THEN RemoveMarks(F2, T1) END;
+	IF S.class = Texts.Name THEN
+		COPY(S.s, gen1); Texts.Scan(S);
+		IF S.class = Texts.Name THEN
+			COPY(S.s, gen2);
+			OpenDoc(gen1, F1, T1); OpenDoc(gen2, F2, T2)
+		END
+	END;
+	IF F1 = NIL THEN
+		GetSelFrame(F1, T1, pos1);
+		IF F1 # NIL THEN RemoveMarks(F1, T1) END
+	END;
+	IF F2 = NIL THEN
+		GetSelFrame(F2, T2, pos2);
+		IF F2 # NIL THEN RemoveMarks(F2, T1) END
+	END;
 	IF (F1 # NIL) & (F2 # NIL) & (T1 # T2) THEN
 		Texts.OpenReader(R1, T1, pos1); 
 		Texts.OpenReader(R2, T2, pos2); 
@@ -776,7 +840,7 @@ BEGIN
 	IF (C.res = 0) & (C.car # NIL) & (C.car IS TextGadgets.Frame) THEN
 		tF := C.car(TextGadgets.Frame);
 		text := NIL; Oberon.GetSelection(text, beg, end, time);
-		IF  text # NIL THEN	(* set search pattern *)
+		IF text # NIL THEN	(* set search pattern *)
 			Texts.OpenReader(R, text, beg); Texts.Read(R, ch); sCol := R.col;
 		END;
 		pos := tF.carpos.pos;
@@ -799,7 +863,7 @@ PROCEDURE AdjustStyles*;
 			f: Texts.Finder; W: INTEGER; A: Display.ModifyMsg;
 BEGIN
 	D := Documents.MarkedDoc();
-	IF (D # NIL) &  (D.dsc # NIL) & (D.dsc IS TextGadgets.Frame) THEN
+	IF (D # NIL) & (D.dsc # NIL) & (D.dsc IS TextGadgets.Frame) THEN
 		W := SHORT(Printer.Unit * Printer.FrameW DIV Display.Unit);
 		F := D.dsc(TextGadgets.Frame);
 		Texts.OpenFinder(f, F.text, 0);
@@ -863,6 +927,39 @@ BEGIN
 	Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
 END PrintSetup;
 
+(** Open a text in a TextDoc. W, H is used to determine the original size of the document. *)
+PROCEDURE ShowText*(title: ARRAY OF CHAR; T: Texts.Text; W, H: INTEGER);
+VAR D: Documents.Document; menu: ARRAY 128 OF CHAR; mf: Display.Frame; f: TextGadgets.Frame; i, j: LONGINT; log: BOOLEAN;
+BEGIN
+	i := 0; WHILE (title[i] # 0X) & (title[i] # "|") DO INC(i) END;
+	IF title[i] = "|" THEN j := i+1 ELSE j := i END; title[i] := 0X;
+	WHILE (i > 0) & (title[i] <= " ") DO DEC(i) END;
+	log := (i > 3) & (title[i-3] = ".") & (title[i-2] = "L") & (title[i-1] = "o") & (title[i] = "g");
+	i := j;
+	WHILE (title[i] # 0X) & (title[i] <= " ") DO INC(i) END;
+	j := 0;
+	WHILE title[i] # 0X DO menu[j] := title[i]; INC(i); INC(j) END;
+	menu[j] := 0X;
+	NEW(D); 
+	NEW(f); TextGadgets.Init(f, T, FALSE);	(* create content *)
+	IF T = Oberon.Log THEN
+		InitLog(D)
+	ELSIF menu # "" THEN
+		InitDoc(D); D.handle := Handler;
+		mf := Desktops.NewMenu(menu);
+		Links.SetLink(D, "DeskMenu", mf);
+		Links.SetLink(D, "SystemMenu", mf);
+		Links.SetLink(D, "UserMenu", mf)
+	ELSE
+		InitDoc(D)
+	END;	(* make document wrapper *)
+	IF log OR (T = Oberon.Log) THEN INCL(f.state0, TextGadgets0.autoscroll) END;
+	COPY(title, D.name);
+	Documents.Init(D, f); (* and merge together *)
+	D.W := W; D.H := H;
+	Desktops.ShowDoc(D)
+END ShowText;
+
 (** Replace the default system editor with a textdoc. *)
 PROCEDURE ReplaceSystemEditor*;
 BEGIN
@@ -872,6 +969,7 @@ END ReplaceSystemEditor;
 PROCEDURE Init;
 VAR s: Texts.Scanner;
 BEGIN
+	lTime := Oberon.Time()-1;
 	IF Oberon.OpenText = NIL THEN
 		Oberon.OpenText := ShowText
 	END;
@@ -888,10 +986,47 @@ BEGIN
 	END
 END Init;
 
+PROCEDURE GetFrame(): TextGadgets0.Frame;
+	VAR S: Texts.Scanner; M: Oberon.SelectMsg; doc: Documents.Document;
+BEGIN
+	Texts.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos);
+	Texts.Scan(S);
+	IF (S.class = Texts.Char) & (S.c = "^") THEN
+		M.F := NIL; M.sel := NIL; M.id := Oberon.get; M.time := -1;
+		Display.Broadcast(M);
+		IF (M.time # -1) & (M.sel IS TextGadgets0.Frame) THEN
+			RETURN M.sel(TextGadgets0.Frame)
+		END
+	ELSE
+		doc := Desktops.CurDoc(Gadgets.context);
+		IF (doc # NIL) & (doc.dsc IS TextGadgets0.Frame) THEN
+			RETURN doc.dsc(TextGadgets0.Frame)
+		END
+	END;
+	RETURN NIL
+END GetFrame;
+
+PROCEDURE Left*;
+	VAR F: TextGadgets0.Frame;
+BEGIN
+	F := GetFrame();
+	IF (F # NIL) & F.sel THEN
+		TextGadgets0.Left(F, 1)
+	END
+END Left;
+
+PROCEDURE Right*;
+	VAR F: TextGadgets0.Frame;
+BEGIN
+	F := GetFrame();
+	IF (F # NIL) & F.sel THEN
+		TextGadgets0.Right(F, 1)
+	END
+END Right;
+
 BEGIN Texts.OpenWriter(W); Init
 END TextDocs.
 
 TextDocs.PrintSetup \Hon \Pon
 
 TextDocs.PrintSetup \Hoff \Poff
-

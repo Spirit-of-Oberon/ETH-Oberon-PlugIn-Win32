@@ -1,17 +1,5 @@
-﻿(* OBERON System 3, Release 2.3.
-
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
-
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
-
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
+﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE Reals; (** portable / source: Win32.Reals.Mod *)
 
@@ -72,7 +60,7 @@ PROCEDURE SetExpo* (e: LONGINT; VAR x: REAL);
 	VAR i: LONGINT;
 BEGIN
 	SYSTEM.GET(SYSTEM.ADR(x), i);
-	i:= ASH(ASH(ASH(i, -31), 8) + e MOD 256, 23) + i MOD ASH(1, 23);
+	i := ASH(ASH(ASH(i, -31), 8) + e MOD 256, 23) + i MOD ASH(1, 23);
 	SYSTEM.PUT(SYSTEM.ADR(x), i)
 END SetExpo;
 
@@ -81,7 +69,7 @@ PROCEDURE SetExpoL* (e: LONGINT; VAR x: LONGREAL);
 	VAR i: LONGINT;
 BEGIN
 	SYSTEM.GET(SYSTEM.ADR(x) + H, i);
-	i:= ASH(ASH(ASH(i, -31), 11) + e MOD 2048, 20) + i MOD ASH(1, 20);
+	i := ASH(ASH(ASH(i, -31), 11) + e MOD 2048, 20) + i MOD ASH(1, 20);
 	SYSTEM.PUT(SYSTEM.ADR(x) + H, i)
 END SetExpoL;
 
@@ -108,11 +96,11 @@ PROCEDURE IntL* (x: LONGREAL; VAR h, l: LONGINT);
 BEGIN SYSTEM.GET(SYSTEM.ADR(x) + H, h); SYSTEM.GET(SYSTEM.ADR(x) + L, l)
 END IntL;
 
-(** Returns 10^e (e <= 308, 308 < e delivers NaN). *)
+(** Returns 10^e (e <= 308, 308 < e delivers IEEE-code +INF). *)
 PROCEDURE Ten* (e: LONGINT): LONGREAL;
 	VAR E: LONGINT; r: LONGREAL;
 BEGIN
-	IF e < -307 THEN RETURN 0 ELSIF 308 < e THEN RETURN RealL(-1, -1) END;
+	IF e < -307 THEN RETURN 0 ELSIF 308 < e THEN RETURN RealL(2146435072, 0) END;
 	INC(e, 307); r:= ten[e DIV 23] * tene[e MOD 23];
 	IF e MOD 32 IN eq[e DIV 32] THEN RETURN r
 	ELSE
@@ -133,13 +121,13 @@ BEGIN
 END NaNCode;
 
 (** Returns the NaN code (0 <= h < 1048576, MIN(LONGINT) <= l <= MAX(LONGINT)) or (-1,-1) if not NaN/Infinite. *)
-PROCEDURE NaNCodeL* (x: LONGREAL;  VAR h, l: LONGINT);
+PROCEDURE NaNCodeL* (x: LONGREAL; VAR h, l: LONGINT);
 BEGIN
 	SYSTEM.GET(SYSTEM.ADR(x) + H, h); SYSTEM.GET(SYSTEM.ADR(x) + L, l);
 	IF ASH(h, -20) MOD 2048 = 2047 THEN	(* Infinite or NaN *)
 		h := h MOD 100000H	(* lowest 20 bits *)
 	ELSE
-		h := -1;  l := -1
+		h := -1; l := -1
 	END
 END NaNCodeL;
 
@@ -175,11 +163,13 @@ BEGIN
 	RETURN x
 END NaNL;
 
-PROCEDURE -fcr(): SET
-	6AH, 00H,	(* PUSH 0 *)
-	9BH, 0D9H, 3CH, 24H,	(* FSTCW [ESP] *)
-	9BH,	(* WAIT *)
-	58H;	(* POP EAX *)
+PROCEDURE fcr(): SET;
+CODE {SYSTEM.i386, SYSTEM.FPU}
+	PUSH 0
+	FSTCW [ESP]
+	FWAIT
+	POP EAX
+END fcr;
 
 (** Return state of the floating-point control register. *)
 PROCEDURE FCR*(): SET;
@@ -187,13 +177,15 @@ BEGIN
 	RETURN fcr()
 END FCR;
 
-PROCEDURE -setFCR(s: SET)
-	0D9H, 2CH, 24H;	(* FLDCW [ESP] *)
+PROCEDURE setfcr(s: SET);
+CODE {SYSTEM.i386, SYSTEM.FPU}
+	FLDCW s[EBP]
+END setfcr;
 
-(** Set state of floating-point control register.  Traps reset this to the default & ENTIER resets the rounding mode. *)
+(** Set state of floating-point control register. Traps reset this to the default & ENTIER resets the rounding mode. *)
 PROCEDURE SetFCR*(s: SET);
 BEGIN
-	setFCR(s)
+	setfcr(s)
 END SetFCR;
 
 PROCEDURE RealX (h, l: LONGINT; adr: LONGINT);

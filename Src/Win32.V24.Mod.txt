@@ -1,20 +1,7 @@
-﻿(* OBERON System 3, Release 2.3.
+﻿(* Copyright (c) 1994 - 2000 Emil J. Zeller *)
 
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
-
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
-
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
-
-MODULE V24; (** portable / source: Win32.V24.Mod *)
-	IMPORT S := SYSTEM, Kernel, Kernel32;
+MODULE V24; (** portable / source: Win32.V24.Mod *)	(* ejz  *)
+	IMPORT S := SYSTEM, Kernel32, Kernel, Modules;
 
 (** V24/RS232 serial communications interface. *)
 
@@ -44,24 +31,23 @@ MODULE V24; (** portable / source: Win32.V24.Mod *)
 
 	TYPE
 		DCB32 = RECORD (* DCB structure for Win32 *)
-			DCBlength: LONGINT; (* sizeof(DCB)  *)
+			DCBlength: LONGINT; (* sizeof(DCB) *)
 			BaudRate: LONGINT; (* current baud rate*)
-			flags: SET; (* bits in flags:  
-				DWORD fBinary: 1; (* binary mode, no EOF check  *)
-				DWORD fParity: 1; (* enable parity checking     *)
-				DWORD fOutxCtsFlow:1; (* CTS output flow control    *)
-				DWORD fOutxDsrFlow:1; (* DSR output flow control    *)
-				DWORD fDtrControl:2; (* DTR flow control type      *)
-				DWORD fDsrSensitivity:1; (* DSR sensitivity  *)
-				DWORD fTXContinueOnXoff:1; (* XOFF continues Tx          *)
-				DWORD fOutX: 1; (* XON/XOFF out flow control      *)
-				DWORD fInX: 1; (* XON/XOFF in flow control       *)
-				DWORD fErrorChar: 1; (* enable error replacement       *)
-				DWORD fNull: 1; (* enable null stripping          *)
-				DWORD fRtsControl:2; (* RTS flow control               *)
-				DWORD fAbortOnError:1; (* abort reads/writes on error    *)
-				DWORD fDummy2:17; (* reserved      *)
-				  *)
+			flags: SET; (* bits in flags:
+				DWORD fBinary: 1; (* binary mode, no EOF check *)
+				DWORD fParity: 1; (* enable parity checking *)
+				DWORD fOutxCtsFlow:1; (* CTS output flow control *)
+				DWORD fOutxDsrFlow:1; (* DSR output flow control *)
+				DWORD fDtrControl:2; (* DTR flow control type *)
+				DWORD fDsrSensitivity:1; (* DSR sensitivity *)
+				DWORD fTXContinueOnXoff:1; (* XOFF continues Tx *)
+				DWORD fOutX: 1; (* XON/XOFF out flow control *)
+				DWORD fInX: 1; (* XON/XOFF in flow control *)
+				DWORD fErrorChar: 1; (* enable error replacement *)
+				DWORD fNull: 1; (* enable null stripping *)
+				DWORD fRtsControl:2; (* RTS flow control *)
+				DWORD fAbortOnError:1; (* abort reads/writes on error *)
+				DWORD fDummy2:17; (* reserved *) *)
 			wReserved: INTEGER; (* not currently used *)
 			XonLim: INTEGER; (* transmit XON threshold *)
 			XoffLim: INTEGER; (* transmit XOFF threshold *)
@@ -69,7 +55,7 @@ MODULE V24; (** portable / source: Win32.V24.Mod *)
 			Parity: SHORTINT; (* 0-4=no,odd,even,mark,space *)
 			StopBits: SHORTINT; (* 0, 1, 2 = 1, 1.5, 2 *)
 			XonChar: CHAR; (* Tx and Rx XON character *)
-			XoffChar: CHAR; (* Tx and Rx XOFF character  *)
+			XoffChar: CHAR; (* Tx and Rx XOFF character *)
 			ErrorChar: CHAR; (* error replacement character *)
 			EofChar: CHAR; (* end of input character *)
 			EvtChar: CHAR (* received event character *)
@@ -82,7 +68,7 @@ MODULE V24; (** portable / source: Win32.V24.Mod *)
 			WriteTotalConstant: LONGINT
 		END;
 		COMSTAT32 = RECORD (* COMSTAT for Win32 *)
-			status: SET; (* fields in status:  
+			status: SET; (* fields in status:
 				DWORD fCtsHold : 1; (* Tx waiting for CTS signal *)
 				DWORD fDsrHold : 1; (* Tx waiting for DSR signal *)
 				DWORD fRlsdHold : 1; (* Tx waiting for RLSD signal *)
@@ -90,39 +76,43 @@ MODULE V24; (** portable / source: Win32.V24.Mod *)
 				DWORD fXoffSent : 1; (* Tx waiting, XOFF char sent *)
 				DWORD fEof : 1; (* EOF character sent *)
 				DWORD fTxim : 1; (* character waiting for Tx *)
-				DWORD fReserved : 25; (* reserved *)
-				  *)
+				DWORD fReserved : 25; (* reserved *) *)
 			cbInQueue: LONGINT; (* bytes in input buffer *)		
 			cbOutQueue: LONGINT (* bytes in output buffer *)
 		END;
 
-		Handle = POINTER TO HandleDesc;
-		HandleDesc = RECORD (Kernel32.ObjectDesc)
+		Handle = POINTER TO RECORD (Kernel32.Object)
 			recBuf: ARRAY BufSize OF S.BYTE;
 			recBufSize, recBufPos: LONGINT;
 			port: LONGINT
 		END;
 
 	VAR
-		ClearCommBreak: PROCEDURE (comDev: LONGINT): LONGINT;
-		ClearCommError: PROCEDURE (comDev, pErrors, pcst: LONGINT): LONGINT;
-		EscapeCommFunction: PROCEDURE (comDev, func: LONGINT): LONGINT;
-		GetCommModemStatus: PROCEDURE (comDev: LONGINT; VAR status: LONGINT): LONGINT;
-		GetCommState: PROCEDURE (comDev, pdcb: LONGINT): LONGINT;
-		PurgeComm: PROCEDURE (comDev, action: LONGINT): LONGINT;
-		SetCommBreak: PROCEDURE (comDev: LONGINT): LONGINT;
-		SetCommMask: PROCEDURE (comDev, mask: LONGINT): LONGINT;
-		SetCommState: PROCEDURE (comDev, pdcb: LONGINT): LONGINT;
-		SetCommTimeouts: PROCEDURE (comDev, pctmo: LONGINT): LONGINT;
-		SetupComm: PROCEDURE (comDev, NInQueue, NOutQueue: LONGINT): LONGINT;
+		ClearCommBreak: PROCEDURE [WINAPI] (comDev: LONGINT): LONGINT;
+		ClearCommError: PROCEDURE [WINAPI] (comDev, pErrors, pcst: LONGINT): LONGINT;
+		EscapeCommFunction: PROCEDURE [WINAPI] (comDev, func: LONGINT): LONGINT;
+		GetCommModemStatus: PROCEDURE [WINAPI] (comDev: LONGINT; VAR status: LONGINT): LONGINT;
+		GetCommState: PROCEDURE [WINAPI] (comDev, pdcb: LONGINT): LONGINT;
+		PurgeComm: PROCEDURE [WINAPI] (comDev, action: LONGINT): LONGINT;
+		SetCommBreak: PROCEDURE [WINAPI] (comDev: LONGINT): LONGINT;
+		SetCommMask: PROCEDURE [WINAPI] (comDev, mask: LONGINT): LONGINT;
+		SetCommState: PROCEDURE [WINAPI] (comDev, pdcb: LONGINT): LONGINT;
+		SetCommTimeouts: PROCEDURE [WINAPI] (comDev, pctmo: LONGINT): LONGINT;
+		SetupComm: PROCEDURE [WINAPI] (comDev, NInQueue, NOutQueue: LONGINT): LONGINT;
 		ports: ARRAY NPorts OF Handle;
+		mod: Kernel32.HMODULE;
 
-	PROCEDURE Finalize(handle: PTR);
-		VAR ret: LONGINT;
+(** NumberOfPorts - Return number of ports available. *)
+	PROCEDURE NumberOfPorts*(): LONGINT;
+	BEGIN
+		RETURN 4
+	END NumberOfPorts;
+
+	PROCEDURE *Finalize(handle: PTR);
 	BEGIN
 		WITH handle: Handle DO
 			IF handle.handle # Kernel32.InvalidHandleValue THEN
-				ret := Kernel32.CloseHandle(handle.handle);
+				Kernel32.CloseHandle(handle.handle);
 				handle.handle := Kernel32.InvalidHandleValue
 			END;
 			IF handle.port >= 0 THEN
@@ -131,11 +121,10 @@ MODULE V24; (** portable / source: Win32.V24.Mod *)
 		END
 	END Finalize;
 
-(** NumberOfPorts - Return number of ports available. *)
-	PROCEDURE NumberOfPorts*(): LONGINT;
+	PROCEDURE LongOr(a, b: LONGINT): LONGINT;
 	BEGIN
-		RETURN 4
-	END NumberOfPorts;
+		RETURN S.VAL(LONGINT, S.VAL(SET, a) + S.VAL(SET, b))
+	END LongOr;
 
 (** Start - Open a serial port (numbered from 0). bps is the required bits per second.
 	data is the number of bits per communication unit. parity is the parity mode (Par 
@@ -150,11 +139,9 @@ MODULE V24; (** portable / source: Win32.V24.Mod *)
 		6	bad stop *)
 	PROCEDURE Start*(port, bps, data, parity, stop: LONGINT; VAR res: LONGINT);
 		VAR
-			device: ARRAY 8 OF CHAR;
-			handle: Handle;
+			device: ARRAY 8 OF CHAR; handle: Handle;
+			dcb32: DCB32; to: COMMTIMEOUTS;
 			ret: LONGINT;
-			dcb32: DCB32;
-			to: COMMTIMEOUTS;
 	BEGIN
 		IF (port < 0) OR (port >= NPorts) THEN
 			res := NoSuchPort
@@ -164,12 +151,12 @@ MODULE V24; (** portable / source: Win32.V24.Mod *)
 			NEW(ports[port]); handle := ports[port];
 			handle.port := port; handle.handle := Kernel32.InvalidHandleValue;
 			handle.recBufSize := 0; handle.recBufPos := 0;
-			handle.handle := Kernel32.CreateFile(S.ADR(device), Kernel32.LongOr(Kernel32.GenericRead, Kernel32.GenericWrite), 0, Kernel32.NULL, Kernel32.OpenExisting, 0, Kernel32.NULL);
+			handle.handle := Kernel32.CreateFile(device, {Kernel32.GenericRead, Kernel32.GenericWrite}, {}, NIL, Kernel32.OpenExisting, {}, Kernel32.InvalidHandleValue);
 			IF handle.handle # Kernel32.InvalidHandleValue THEN
 				ret := GetCommState(handle.handle, S.ADR(dcb32));
-				IF ret # Kernel32.False THEN
+				IF ret # 0 THEN
 					ret := SetupComm(handle.handle, 1024, TxQueueSize);
-					IF ret # Kernel32.False THEN
+					IF ret # 0 THEN
 						dcb32.BaudRate := bps; res := Failed;
 						IF (data >= 4) & (data <= 8) THEN
 							dcb32.ByteSize := SHORT(SHORT(data))
@@ -190,15 +177,23 @@ MODULE V24; (** portable / source: Win32.V24.Mod *)
 						END;
 						IF res = Failed THEN
 							ret := SetCommState(handle.handle, S.ADR(dcb32));
-							IF ret # Kernel32.False THEN
-								ret := PurgeComm(handle.handle, Kernel32.LongOr(TXClear, RXClear));
-								IF ret # Kernel32.False THEN
+							IF ret # 0 THEN
+								ret := PurgeComm(handle.handle, LongOr(TXClear, RXClear));
+								IF ret # 0 THEN
 									to.ReadInterval := MAXDWORD;
 									to.ReadTotalMultiplier := 0; to.ReadTotalConstant := 0;
 									to.WriteTotalMultiplier := 0; to.WriteTotalConstant := 0;
 									ret := SetCommTimeouts(handle.handle, S.ADR(to));
-									IF ret # Kernel32.False THEN
-										res := Ok
+									IF ret # 0 THEN
+										ret := LongOr(EVBreak, EVRing);
+										ret := LongOr(ret, EVCTS);
+										ret := LongOr(ret, EVDSR);
+										ret := LongOr(ret, EVRLSD);
+										ret := SetCommMask(handle.handle, ret);
+										IF ret # 0 THEN
+											Kernel.RegisterObject(handle, Finalize, TRUE);
+											res := Ok
+										END
 									END
 								END
 							END
@@ -206,21 +201,7 @@ MODULE V24; (** portable / source: Win32.V24.Mod *)
 					END
 				END
 			END;
-			IF res # Ok THEN
-				ret := Kernel32.CloseHandle(handle.handle)
-			ELSE
-				ret := Kernel32.LongOr(EVBreak, EVRing);
-				ret := Kernel32.LongOr(ret, EVCTS);
-				ret := Kernel32.LongOr(ret, EVDSR);
-				ret := Kernel32.LongOr(ret, EVRLSD);
-				ret := SetCommMask(handle.handle, ret)
-			END;
-			IF res # Ok THEN
-				ports[port] := NIL;
-				handle.port := -1; handle.handle := Kernel32.InvalidHandleValue
-			ELSE
-				Kernel.RegisterObject(handle, Finalize, TRUE)
-			END
+			IF res # Ok THEN Finalize(handle) END
 		ELSE
 			res := PortInUse
 		END
@@ -228,29 +209,23 @@ MODULE V24; (** portable / source: Win32.V24.Mod *)
 
 (** Stop - Close the specified port. Effect on Modem Control lines is undefined. *)
 	PROCEDURE Stop*(port: LONGINT);
-		VAR
-			handle: Handle;
-			ret: LONGINT;
+		VAR handle: Handle;
 	BEGIN
 		handle := ports[port];
 		IF handle # NIL THEN
 			IF handle.handle # Kernel32.InvalidHandleValue THEN
-				ret := Kernel32.CloseHandle(handle.handle);
+				Kernel32.CloseHandle(handle.handle);
 				handle.handle := Kernel32.InvalidHandleValue
 			END;
-			IF handle.port >= 0 THEN
-				handle.port := -1
-			END;
+			IF handle.port >= 0 THEN handle.port := -1 END;
 			ports[port] := NIL
 		END
 	END Stop;
 
 	PROCEDURE AvailableH(handle: Handle): LONGINT;
-		VAR
-			ret, errors: LONGINT;
-			stat32: COMSTAT32;
+		VAR errors: LONGINT; stat32: COMSTAT32;
 	BEGIN
-		ret := ClearCommError(handle.handle, S.ADR(errors), S.ADR(stat32));
+		ClearCommError(handle.handle, S.ADR(errors), S.ADR(stat32));
 		RETURN stat32.cbInQueue
 	END AvailableH;
 
@@ -277,44 +252,30 @@ MODULE V24; (** portable / source: Win32.V24.Mod *)
 		6	parity error + framing error
 		7	overrun + parity error + framing error *)
 	PROCEDURE Send*(port: LONGINT; x: S.BYTE; VAR res: LONGINT);
-		VAR
-			handle: Handle;
-			written, ret: LONGINT;
+		VAR handle: Handle; written: LONGINT; ret: Kernel32.BOOL;
 	BEGIN
 		handle := ports[port]; res := Failed;
 		IF (handle # NIL) & (handle.handle # Kernel32.InvalidHandleValue) THEN
-			ret := Kernel32.WriteFile(handle.handle, S.ADR(x), 1, written, 0);
-			IF (ret # Kernel32.False) & (written = 1) THEN
-				res := Ok
-			ELSE
-				(* ??? *)
-			END
+			ret := Kernel32.WriteFile(handle.handle, x, 1, written, NIL);
+			IF (ret # Kernel32.False) & (written = 1) THEN res := Ok END
 		END
 	END Send;
 
 (** SendBytes - Send n bytes to the specified port. Waits until buffer space is available. res values see Send *)
 	PROCEDURE SendBytes*(port: LONGINT; VAR x: ARRAY OF S.BYTE; n: LONGINT; VAR res: LONGINT);
-		VAR
-			handle: Handle;
-			written, ret: LONGINT;
+		VAR handle: Handle; written: LONGINT; ret: Kernel32.BOOL;
 	BEGIN
 		ASSERT(LEN(x) >= n);
 		handle := ports[port]; res := Failed;
 		IF (handle # NIL) & (handle.handle # Kernel32.InvalidHandleValue) THEN
-			ret := Kernel32.WriteFile(handle.handle, S.ADR(x), n, written, 0);
-			IF (ret # Kernel32.False) & (written = n) THEN
-				res := Ok
-			ELSE
-				(* ??? *)
-			END
+			ret := Kernel32.WriteFile(handle.handle, x, n, written, NIL);
+			IF (ret # Kernel32.False) & (written = n) THEN res := Ok END
 		END
 	END SendBytes;
 
 (** Receive - Read one byte from the specified port. Waits until a byte is available. res values see Send *)
 	PROCEDURE Receive*(port: LONGINT; VAR x: S.BYTE; VAR res: LONGINT);
-		VAR
-			handle: Handle;
-			l, ret: LONGINT;
+		VAR handle: Handle; l: LONGINT;
 	BEGIN
 		handle := ports[port]; res := Failed;
 		IF (handle # NIL) & (handle.handle # Kernel32.InvalidHandleValue) THEN
@@ -323,10 +284,8 @@ MODULE V24; (** portable / source: Win32.V24.Mod *)
 				REPEAT
 					l := AvailableH(handle)
 				UNTIL l > 0;
-				IF l > BufSize THEN
-					l := BufSize
-				END;
-				ret := Kernel32.ReadFile(handle.handle, S.ADR(handle.recBuf), l, handle.recBufSize, 0)
+				IF l > BufSize THEN l := BufSize END;
+				Kernel32.ReadFile(handle.handle, handle.recBuf, l, handle.recBufSize, NIL)
 			END;
 			IF handle.recBufSize > 0 THEN
 				x := handle.recBuf[handle.recBufPos];
@@ -338,13 +297,11 @@ MODULE V24; (** portable / source: Win32.V24.Mod *)
 
 (** ReceiveBytes - Read n bytes from the specified port. Waits until n bytes are available. res values see Send *)
 	PROCEDURE ReceiveBytes*(port: LONGINT; VAR x: ARRAY OF S.BYTE; n: LONGINT; VAR res: LONGINT);
-		VAR
-			handle: Handle;
-			ret, p, l: LONGINT;
+		VAR handle: Handle; i, l: LONGINT;
 	BEGIN
 		handle := ports[port]; res := Failed;
 		IF (handle # NIL) & (handle.handle # Kernel32.InvalidHandleValue) THEN
-			p := 0;
+			i := 0;
 			WHILE n > 0 DO
 				IF handle.recBufSize > 0 THEN
 					IF handle.recBufSize > n THEN
@@ -352,109 +309,121 @@ MODULE V24; (** portable / source: Win32.V24.Mod *)
 					ELSE
 						l := handle.recBufSize
 					END;
-					S.MOVE(S.ADR(handle.recBuf[handle.recBufPos]), S.ADR(x[p]), l);
-					DEC(n, l); INC(p, l)
+					S.MOVE(S.ADR(handle.recBuf[handle.recBufPos]), S.ADR(x[i]), l);
+					DEC(n, l); INC(i, l)
 				ELSE
 					handle.recBufPos := 0; handle.recBufSize := 0;
 					l := AvailableH(handle);
-					IF l > BufSize THEN
-						l := BufSize
-					END;
+					IF l > BufSize THEN l := BufSize END;
 					IF l > 0 THEN
-						ret := Kernel32.ReadFile(handle.handle, S.ADR(handle.recBuf), l, handle.recBufSize, 0)
+						Kernel32.ReadFile(handle.handle, handle.recBuf, l, handle.recBufSize, NIL)
 					END
 				END
 			END;
-			IF n <= 0 THEN
-				res := 0
-			END
+			IF n = 0 THEN res := Ok END
 		END
 	END ReceiveBytes;
 
 (** ClearMC - Clear the specified Modem Control lines of the specified port. s may contain DTR, RTS & Break. *)
 	PROCEDURE ClearMC*(port: LONGINT; s: SET);
-		VAR
-			handle: Handle;
-			ret: LONGINT;
+		VAR handle: Handle;
 	BEGIN
 		handle := ports[port];
 		IF (handle # NIL) & (handle.handle # Kernel32.InvalidHandleValue) THEN
 			IF Break IN s THEN
-				ret := ClearCommBreak(handle.handle)
+				ClearCommBreak(handle.handle)
 			END;
 			IF DTR IN s THEN
-				ret := EscapeCommFunction(handle.handle, CLRDTR)
+				EscapeCommFunction(handle.handle, CLRDTR)
 			END;
 			IF RTS IN s THEN
-				ret := EscapeCommFunction(handle.handle, CLRRTS)
+				EscapeCommFunction(handle.handle, CLRRTS)
 			END
 		END
 	END ClearMC;
 
+	PROCEDURE Includes(flags, option: LONGINT): BOOLEAN;
+		VAR fl, op: SET;
+	BEGIN
+		fl := S.VAL(SET, flags); op := S.VAL(SET, option);
+		RETURN (op * fl) = op
+	END Includes;
+
 (** GetMC - Return the state of the specified Modem Control lines of the specified port. s contains the current state
 		of DSR, CTS, RI, DCD & Break. *)
 	PROCEDURE GetMC*(port: LONGINT; VAR s: SET);
-		VAR
-			handle: Handle;
-			ret, state: LONGINT;
+		VAR handle: Handle; state: LONGINT;
 	BEGIN
 		handle := ports[port]; s:= {};
 		IF (handle # NIL) & (handle.handle # Kernel32.InvalidHandleValue) THEN
-			ret := GetCommModemStatus(handle.handle, state);
-			IF Kernel32.Includes(state, MSCTSON) THEN
+			GetCommModemStatus(handle.handle, state);
+			IF Includes(state, MSCTSON) THEN
 				INCL(s, CTS)
 			END;
-			IF Kernel32.Includes(state, MSDSRON) THEN
+			IF Includes(state, MSDSRON) THEN
 				INCL(s, DSR)
 			END;
-			IF Kernel32.Includes(state, MSRINGON) THEN
+			IF Includes(state, MSRINGON) THEN
 				INCL(s, RI)
 			END;
-			IF Kernel32.Includes(state, MSRLSDON) THEN
+			IF Includes(state, MSRLSDON) THEN
 				INCL(s, DCD)
-			END;
-			(* Break? *)
+			END
 		END
 	END GetMC;
 
 (** SetMC - Set the specified Modem Control lines of the specified port. s may contain DTR, RTS & Break. *)
 	PROCEDURE SetMC*(port: LONGINT; s: SET);
-		VAR
-			handle: Handle;
-			ret: LONGINT;
+		VAR handle: Handle;
 	BEGIN
 		handle := ports[port];
 		IF (handle # NIL) & (handle.handle # Kernel32.InvalidHandleValue) THEN
 			IF Break IN s THEN
-				ret := SetCommBreak(handle.handle)
+				SetCommBreak(handle.handle)
 			END;
 			IF DTR IN s THEN
-				ret := EscapeCommFunction(handle.handle, SETDTR)
+				EscapeCommFunction(handle.handle, SETDTR)
 			END;
 			IF RTS IN s THEN
-				ret := EscapeCommFunction(handle.handle, SETRTS)
+				EscapeCommFunction(handle.handle, SETRTS)
 			END
 		END	
 	END SetMC;
 
-	PROCEDURE Init;
-		VAR mod: LONGINT;
+	PROCEDURE *TermMod();
+		VAR i: LONGINT;
 	BEGIN
-		FOR mod := 0 TO NPorts-1 DO
-			ports[mod] := NIL
+		FOR i := 0 TO NPorts-1 DO
+			IF ports[i] # NIL THEN
+				Finalize(ports[i]);
+				ports[i] := NIL
+			END
+		END;
+		IF mod # Kernel32.NULL THEN
+			Kernel32.FreeLibrary(mod);
+			mod := Kernel32.NULL
+		END
+	END TermMod;
+
+	PROCEDURE Init();
+		VAR i: LONGINT;
+	BEGIN
+		FOR i := 0 TO NPorts-1 DO
+			ports[i] := NIL
 		END;
 		mod := Kernel32.LoadLibrary("Kernel32");
-		Kernel32.GetAdr(mod, "ClearCommBreak", S.VAL(LONGINT, ClearCommBreak));
-		Kernel32.GetAdr(mod, "ClearCommError", S.VAL(LONGINT, ClearCommError));
-		Kernel32.GetAdr(mod, "EscapeCommFunction", S.VAL(LONGINT, EscapeCommFunction));
-		Kernel32.GetAdr(mod, "GetCommModemStatus", S.VAL(LONGINT, GetCommModemStatus));
-		Kernel32.GetAdr(mod, "GetCommState", S.VAL(LONGINT, GetCommState));
-		Kernel32.GetAdr(mod, "PurgeComm", S.VAL(LONGINT, PurgeComm));
-		Kernel32.GetAdr(mod, "SetCommBreak", S.VAL(LONGINT, SetCommBreak));
-		Kernel32.GetAdr(mod, "SetCommMask", S.VAL(LONGINT, SetCommMask));
-		Kernel32.GetAdr(mod, "SetCommState", S.VAL(LONGINT, SetCommState));
-		Kernel32.GetAdr(mod, "SetCommTimeouts", S.VAL(LONGINT, SetCommTimeouts));
-		Kernel32.GetAdr(mod, "SetupComm", S.VAL(LONGINT, SetupComm))
+		Kernel32.GetProcAddress(mod, "ClearCommBreak", S.VAL(LONGINT, ClearCommBreak));
+		Kernel32.GetProcAddress(mod, "ClearCommError", S.VAL(LONGINT, ClearCommError));
+		Kernel32.GetProcAddress(mod, "EscapeCommFunction", S.VAL(LONGINT, EscapeCommFunction));
+		Kernel32.GetProcAddress(mod, "GetCommModemStatus", S.VAL(LONGINT, GetCommModemStatus));
+		Kernel32.GetProcAddress(mod, "GetCommState", S.VAL(LONGINT, GetCommState));
+		Kernel32.GetProcAddress(mod, "PurgeComm", S.VAL(LONGINT, PurgeComm));
+		Kernel32.GetProcAddress(mod, "SetCommBreak", S.VAL(LONGINT, SetCommBreak));
+		Kernel32.GetProcAddress(mod, "SetCommMask", S.VAL(LONGINT, SetCommMask));
+		Kernel32.GetProcAddress(mod, "SetCommState", S.VAL(LONGINT, SetCommState));
+		Kernel32.GetProcAddress(mod, "SetCommTimeouts", S.VAL(LONGINT, SetCommTimeouts));
+		Kernel32.GetProcAddress(mod, "SetupComm", S.VAL(LONGINT, SetupComm));
+		Modules.InstallTermHandler(TermMod)
 	END Init;
 
 BEGIN

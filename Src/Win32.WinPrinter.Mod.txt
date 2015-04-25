@@ -1,541 +1,89 @@
-﻿(* OBERON System 3, Release 2.3.
-
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
-
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
-
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
+﻿(* Copyright (c) 1994 - 2000 Emil J. Zeller *)
 
 MODULE WinPrinter; (** non-portable / source: Win32.WinPrinter.Mod *)	(* ejz  *)
-	IMPORT SYSTEM, Kernel32, Kernel, Registry, User32, GDI32, COMDLG32, Win32, FileDir, Files, Objects, Display, Fonts,
-		Pictures, Printers := Printer, Strings, Texts, Oberon;
+	IMPORT SYSTEM, Kernel32, Kernel, Registry, User32, GDI32, COMDLG32, Displays, FileDir, Objects, Display, Fonts,
+		Pictures, Printers := Printer, Strings, Texts, Oberon, WinFonts, WinMenus;
 
-	(** Installable printer for Windows GDI printing.
-		21.9.98 new implementation *)
-
-	CONST
-		Bold = 0; Italics = 1; Medium = 2; Underline = 3; Strikeout = 4; Thin = 5; Light = 6;
-		FontCacheSize = 8;
+(** Installable printer (see: Printer) for Windows GDI printing. *)
 
 	TYPE
 		Printer* = POINTER TO PrinterDesc;
 		PrinterDesc* = RECORD (Printers.PrinterDesc)
-			job, hDC, hdcMem: LONGINT;
-			devMode, devNames: LONGINT;
-			margin: User32.Rect;
-			dpi, psdUnit: LONGINT;
-			color, bkColor, textColor: LONGINT;
-			page, from, to: LONGINT;
+			hDC, hdcMem: User32.HDC;
+			dpi, mode: LONGINT;
+			color, bkColor, textColor: GDI32.ColorRef;
 			textX, textY: LONGINT;
-			pageW, pageH: INTEGER;
-			offsX, offsY: INTEGER;
-			newPage, showPage, setup: BOOLEAN
+			pageW, pageH: LONGINT;
+			offsX, offsY: LONGINT;
+			page, from, to: LONGINT;
+			newPage, showPage: BOOLEAN
 		END;
 
-		Font = POINTER TO FontDesc;
-		FontDesc = RECORD (Fonts.FontDesc)
-			printer: BOOLEAN
+		ExtPrinter = POINTER TO ExtPrinterDesc;
+		ExtPrinterDesc = RECORD (PrinterDesc)
+			oldP: Printers.Printer; nSavedDC: LONGINT
+		END;
+
+		DocPrinter = POINTER TO DocPrinterDesc;
+		DocPrinterDesc = RECORD (PrinterDesc)
+			job: LONGINT;
+			hDevMode, hDevNames: Kernel32.HGLOBAL;
+			margin: User32.Rect;
+			psdUnit: LONGINT;
+			setup: BOOLEAN
 		END;
 
 	VAR
 		W: Texts.Writer;
-		default: FileDir.FileName;
-		curUnit, curType: LONGINT;
-		fontCache: ARRAY FontCacheSize OF Fonts.Font;
-		curCache: LONGINT;
-		printer: BOOLEAN;
 
-	PROCEDURE ^ Finalize(F: PTR);
-
-	PROCEDURE ClearFontCache(reload: BOOLEAN);
-		VAR
-			F: Fonts.Font;
-			i: LONGINT;
+	PROCEDURE PrintDlg(P: DocPrinter; flags: SET): WinMenus.PrintDialog;
+		VAR dialog: WinMenus.PrintDialog; i: LONGINT;
 	BEGIN
-		curCache := 0; i := 0;
-		WHILE i < FontCacheSize DO
-			F := fontCache[i];
-			IF reload & (F # NIL) & F(Font).printer THEN
-				Finalize(F); F.Load(F)
-			END;
-			fontCache[i] := NIL; INC(i)
-		END;
-		Kernel.GC()
-	END ClearFontCache;
-
-	PROCEDURE CacheFont(F: Fonts.Font);
-	BEGIN
-		fontCache[curCache] := F;
-		curCache := (curCache+1) MOD FontCacheSize
-	END CacheFont;
-
-	PROCEDURE ParseName(VAR name, family: ARRAY OF CHAR; VAR size: LONGINT; VAR style: SET; VAR class: ARRAY OF CHAR);
-		VAR i, j: LONGINT;
-	BEGIN
-		size := 0; style := {};
-		i := Strings.Length(name)-7; j := 0;
-		WHILE j < 3 DO
-			class[j] := name[i]; INC(i); INC(j)
-		END;
-		class[j] := 0X; i := i-5;
-		LOOP
-			CASE CAP(name[i]) OF
-				"B": INCL(style, Bold); name[i] := "b"; DEC(i)
-				|"M": INCL(style, Medium); name[i] := "m"; DEC(i)
-				|"L": INCL(style, Light); name[i] := "l"; DEC(i)
-				|"T": INCL(style, Thin); name[i] := "t"; DEC(i)
-				|"I": INCL(style, Italics); name[i] := "i"; DEC(i)
-				|"U": INCL(style, Underline); name[i] := "u"; DEC(i)
-				|"S": INCL(style, Strikeout); name[i] := "s"; DEC(i)
-			ELSE
-				EXIT
-			END
-		END;
-		WHILE (name[i] >= "0") & (name[i] <= "9") DO
-			DEC(i)
-		END;
-		j := i+1;
-		WHILE (name[j] >= "0") & (name[j] <= "9") DO
-			size := 10*size + (ORD(name[j])-ORD("0")); INC(j)
-		END;
-		j := i; i := 0;
-		WHILE i <= j DO
-			family[i] := name[i]; INC(i)
-		END;
-		family[i] := 0X
-	END ParseName;
-
-	PROCEDURE BuildName(VAR name: ARRAY OF CHAR; family: ARRAY OF CHAR; size: LONGINT; style: SET; class: ARRAY OF CHAR);
-		VAR str: ARRAY 8 OF CHAR;
-	BEGIN
-		COPY(family, name);
-		IF size > 0 THEN
-			Strings.IntToStr(size, str);
-			Strings.Append(name, str)
-		END;
-		IF Bold IN style THEN
-			Strings.AppendCh(name, "b")
-		ELSIF Medium IN style THEN
-			Strings.AppendCh(name, "m")
-		ELSIF Light IN style THEN
-			Strings.AppendCh(name, "l")
-		ELSIF Thin IN style THEN
-			Strings.AppendCh(name, "t")
-		END;
-		IF Italics IN style THEN
-			Strings.AppendCh(name, "i")
-		END;
-		IF Underline IN style THEN
-			Strings.AppendCh(name, "u")
-		END;
-		IF Strikeout IN style THEN
-			Strings.AppendCh(name, "s")
-		END;
-		Strings.AppendCh(name, ".");
-		Strings.Append(name, class);
-		Strings.Append(name, ".Fnt")
-	END BuildName;
-
-	PROCEDURE FontInstaller(VAR lf: GDI32.LOGFONT; font: Win32.Font);
-		VAR style: SET;
-	BEGIN
-		style := SYSTEM.VAL(SET, font.style);
-		IF Bold IN style THEN
-			lf.weight := GDI32.FWBold
-		ELSIF Medium IN style THEN
-			lf.weight := GDI32.FWMedium
-		ELSIF Light IN style THEN
-			lf.weight := GDI32.FWLight
-		ELSIF Thin IN style THEN
-			lf.weight := GDI32.FWThin
-		ELSE
-			lf.weight := GDI32.FWNormal
-		END;
-		IF Italics IN style THEN
-			lf.italic := Kernel32.True
-		ELSE
-			lf.italic := Kernel32.False
-		END;
-		IF Underline IN style THEN
-			lf.underline := Kernel32.True
-		ELSE
-			lf.underline := Kernel32.False
-		END;
-		IF Strikeout IN style THEN
-			lf.strikeout := Kernel32.True
-		ELSE
-			lf.strikeout := Kernel32.False
-		END;
-		lf.height := -ENTIER(0.5 + font.size*curUnit / 91.4); lf.width := 0
-	END FontInstaller;
-
-	PROCEDURE [stdcall] *WinTTFontInstaller(lpelf, lpntm, type, data: LONGINT): LONGINT;
-		VAR
-			font: Win32.Font; F: Fonts.Font;
-			lf: GDI32.ENUMLOGFONT;
-			res: LONGINT;
-	BEGIN
-		res := 1;
-		IF Kernel32.Includes(type, GDI32.TrueTypeFontType) THEN
-			F := SYSTEM.VAL(Fonts.Font, data); font := SYSTEM.VAL(Win32.Font, F.ind);
-			SYSTEM.MOVE(lpelf, SYSTEM.ADR(lf), SIZE(GDI32.ENUMLOGFONT));
-			IF FileDir.SameName(font.family, lf.facename) THEN
-				FontInstaller(lf, font);
-				SYSTEM.MOVE(SYSTEM.ADR(lf), lpelf, SIZE(GDI32.ENUMLOGFONT));
-				font.hfont := GDI32.CreateFontIndirect(lpelf);
-				IF font.hfont # Kernel32.NULL THEN
-					curType := GDI32.TrueTypeFontType; res := 0
-				END
-			END
-		END;
-		RETURN res
-	END WinTTFontInstaller;
-
-	PROCEDURE [stdcall] *WinRasterFontInstaller(lplf, lptm, type, data: LONGINT): LONGINT;
-		VAR
-			font: Win32.Font; F: Fonts.Font;
-			lf: GDI32.LOGFONT;
-			res: LONGINT;
-	BEGIN
-		res := 1;
-		F := SYSTEM.VAL(Fonts.Font, data); font := SYSTEM.VAL(Win32.Font, F.ind);
-		SYSTEM.MOVE(lplf, SYSTEM.ADR(lf), SIZE(GDI32.LOGFONT));
-		IF FileDir.SameName(font.family, lf.facename) THEN
-			FontInstaller(lf, font);
-			SYSTEM.MOVE(SYSTEM.ADR(lf), lplf, SIZE(GDI32.LOGFONT));
-			font.hfont := GDI32.CreateFontIndirect(lplf);
-			IF font.hfont # Kernel32.NULL THEN
-				curType := GDI32.RasterFontType; res := 0
-			END
-		END;
-		RETURN res
-	END WinRasterFontInstaller;
-
-	PROCEDURE InitPrintDlg(P: Printer; VAR print: COMDLG32.PRINTDLG; flags: LONGINT);
-		VAR i: LONGINT;
-	BEGIN
-		print.size := 66 (*SIZE(COMDLG32.PRINTDLG)*);
-		print.hwndOwner := Win32.Display;
+		NEW(dialog); dialog.context := P;
+		dialog.print.lStructSize := 66 (*SIZE(COMDLG32.PRINTDLG)*);
 		IF P # NIL THEN
-			print.devMode := P.devMode; print.devNames := P.devNames
+			dialog.print.hDevNames := P.hDevNames; dialog.print.hDevMode := P.hDevMode
 		ELSE
-			print.devMode := Kernel32.NULL; print.devNames := Kernel32.NULL
+			dialog.print.hDevNames := Kernel32.NULL; dialog.print.hDevMode := Kernel32.NULL
 		END;
-		print.hDC := Kernel32.NULL; print.flags := flags;
-		print.from := 1; print.to := 1;
-		print.min := 1; print.max := MAX(INTEGER);
-		FOR i := 0 TO 2+8*4-1 DO
-			print.fill[i] := 0X
-		END;
-		SYSTEM.PUT(SYSTEM.ADR(print.fill[2]), Kernel.hInstance)
-	END InitPrintDlg;
-
-	PROCEDURE PrinterDC(P: Printer): LONGINT;
-		VAR
-			print: COMDLG32.PRINTDLG;
-			adrMode, adrNames: LONGINT;
-			device, driver, hdc: LONGINT;
-			offs: INTEGER;
-	BEGIN
-		IF (P # NIL) & (P.devMode # Kernel32.NULL) & (P.devNames # Kernel32.NULL) THEN
-			adrNames := Kernel32.GlobalLock(P.devNames);
-			adrMode := Kernel32.GlobalLock(P.devMode);
-			SYSTEM.GET(adrNames, offs);
-			driver := adrNames+offs;
-			SYSTEM.GET(adrNames+2, offs);
-			device := adrNames+offs;
-			hdc := GDI32.CreateDC(driver, device, Kernel32.NULL, adrMode);
-			Kernel32.GlobalUnlock(P.devMode);
-			Kernel32.GlobalUnlock(P.devNames);
-			RETURN hdc
+		dialog.print.hDC := Kernel32.NULL; dialog.print.Flags := flags;
+		dialog.print.nFromPage := 1; dialog.print.nToPage := 1;
+		dialog.print.nMinPage := 1; dialog.print.nMaxPage := MAX(INTEGER);
+		SYSTEM.PUT(SYSTEM.ADR(dialog.print.fill[0]), LONG(1)); (* dialog.print.nCopies *)
+		SYSTEM.PUT(SYSTEM.ADR(dialog.print.fill[2]), Kernel.hInstance); (* dialog.print.hInstance *)
+		FOR i := 6 TO 8*4-1 DO dialog.print.fill[i] := 0X END;
+		WinMenus.ShowDialog(dialog, TRUE);
+		IF dialog.done THEN
+			RETURN dialog
 		ELSE
-			InitPrintDlg(NIL, print, Kernel32.LongOr(COMDLG32.PDReturnDC, COMDLG32.PDReturnDefault));
-			COMDLG32.PrintDlg(SYSTEM.ADR(print));
-			RETURN print.hDC
+			RETURN NIL
 		END
+	END PrintDlg;
+
+	PROCEDURE PrinterDC(P: DocPrinter): User32.HDC;
+		VAR
+			adrNames: Kernel32.ADDRESS;
+			hDC: User32.HDC;
+			device, driver: FileDir.FileName;
+			dialog: WinMenus.PrintDialog; offs: INTEGER;
+	BEGIN
+		IF (P # NIL) & (P.hDevNames # Kernel32.NULL) THEN
+			adrNames := Kernel32.GlobalLock(P.hDevNames);
+			SYSTEM.GET(adrNames, offs);
+			Kernel32.CopyString(adrNames+offs, driver);
+			SYSTEM.GET(adrNames+2, offs);
+			Kernel32.CopyString(adrNames+offs, device);
+			hDC := GDI32.CreateDC(driver, device, NIL, SYSTEM.VAL(PTR, Kernel32.GlobalLock(P.hDevMode)));
+			Kernel32.GlobalUnlock(P.hDevMode); Kernel32.GlobalUnlock(P.hDevNames);
+			RETURN hDC
+		ELSE
+			dialog := PrintDlg(P, {COMDLG32.PDReturnDC, COMDLG32.PDReturnDefault});
+			IF dialog # NIL THEN RETURN dialog.print.hDC END
+		END;
+		RETURN Kernel32.NULL
 	END PrinterDC;
 
-	PROCEDURE WinLoadFont(F: Fonts.Font; family: ARRAY OF CHAR; size: LONGINT; style: SET; class: ARRAY OF CHAR);
-		VAR
-			raster: Win32.Font;
-			tm: GDI32.TEXTMETRIC;
-			abc: RECORD a, b, c: LONGINT END;
-			oldFont, hDC, i: LONGINT;
-	BEGIN
-		i := 0;
-		WHILE family[i] # 0X DO
-			IF family[i] = "_" THEN family[i] := " " END; INC(i)
-		END;
-		raster := SYSTEM.VAL(Win32.Font, F.ind); raster.oberon := FALSE;
-		COPY(family, raster.family); raster.size := size; raster.style := style;
-		hDC := PrinterDC(NIL); curUnit := GDI32.GetDeviceCaps(hDC, GDI32.LOGPIXELSY); curType := -1;
-		GDI32.EnumFontFamilies(hDC, SYSTEM.ADR(family), WinTTFontInstaller, SYSTEM.VAL(LONGINT, F));
-		IF raster.hfont = Kernel32.NULL THEN
-			COPY(family, raster.file); Strings.Append(raster.file, ".FON");
-			IF GDI32.AddFontResource(SYSTEM.ADR(raster.file)) = 1 THEN
-				GDI32.EnumFonts(hDC, Kernel32.NULL, WinRasterFontInstaller, SYSTEM.VAL(LONGINT, F))
-			END
-		END;
-		IF (class[0] = "M") & (class[1] = "d") THEN F.type := Fonts.metric ELSE F.type := Fonts.font END;
-		IF raster.hfont # Kernel32.NULL THEN
-			oldFont := GDI32.SelectObject(hDC, raster.hfont);
-			GDI32.GetTextMetrics(hDC, SYSTEM.ADR(tm));
-			F.height := SHORT(tm.height-tm.extLead);
-			F.minX := MAX(INTEGER); F.maxX := MIN(INTEGER);
-			F.minY := -SHORT(tm.descent); F.maxY := SHORT(tm.ascent);
-			i := 0;
-			WHILE i < 256 DO
-				IF (i >= ORD(tm.firstCh)) & (i <= ORD(tm.lastCh)) THEN
-					IF curType = GDI32.TrueTypeFontType THEN
-						GDI32.GetCharABCWidths(hDC, i, i, SYSTEM.ADR(abc))
-					ELSE
-						GDI32.GetCharWidth32(hDC, i, i, SYSTEM.ADR(abc.b));
-						abc.a := 0; abc.c := 0
-					END
-				ELSE
-					abc.a := 0; abc.b := 0; abc.c := 0;
-				END;
-				raster.metrics[i].dx := SHORT(abc.a + abc.b + abc.c);
-				IF raster.metrics[i].dx < F.minX THEN
-					F.minX := raster.metrics[i].dx
-				END;
-				IF raster.metrics[i].dx > F.maxX THEN
-					F.maxX := raster.metrics[i].dx
-				END;
-				raster.metrics[i].x := SHORT(abc.a); raster.metrics[i].y := -SHORT(tm.descent);
-				raster.metrics[i].p.w := SHORT(abc.b); raster.metrics[i].p.h := SHORT(tm.height);
-				raster.metrics[i].p.bitmap := Kernel32.NULL;
-				INC(i)
-			END;
-			raster.metrics[9].dx := raster.metrics[32].dx * 4;
-			raster.metrics[9].x := 0; raster.metrics[9].p.w := 0;
-			GDI32.SelectObject(hDC, oldFont)
-		ELSE
-			F.type := -2
-		END;
-		GDI32.DeleteDC(hDC)
-	END WinLoadFont;
-
-	PROCEDURE Substitute(F: Fonts.Font);
-	BEGIN
-		F.type := Fonts.substitute;
-		F.height := Fonts.Default.height;
-		F.minX := Fonts.Default.minX; F.maxX := Fonts.Default.maxX;
-		F.minY := Fonts.Default.minY; F.maxY := Fonts.Default.maxY;
-		F.ind := Fonts.Default.ind
-	END Substitute;
-
-	PROCEDURE Load(F: Fonts.Font; VAR R: Files.Rider; type: SHORTINT);
-		TYPE
-			RunRec = RECORD beg, end: INTEGER END;
-			BoxRec = RECORD dx, x, y, w, h: INTEGER END;
-		VAR
-			raster: Win32.Font;
-			bitmap, bitmapX, bitmapDX, bitmapW, bitmapH, RasterBase: LONGINT;
-			b, n, a, k, l, m, w, h: LONGINT;
-			nofBoxes: LONGINT;
-			nofRuns: INTEGER;
-			ch: CHAR;
-			run: ARRAY 16 OF RunRec;
-			box: ARRAY 256 OF BoxRec;
-		PROCEDURE DummyCh(m: LONGINT);
-			VAR raster: Win32.Font;
-		BEGIN
-			raster := SYSTEM.VAL(Win32.Font, F.ind);
-			raster.metrics[m].dx := 0;
-			raster.metrics[m].x := 0; raster.metrics[m].y := 0;
-			raster.metrics[m].p.x := 0; raster.metrics[m].p.y := 0;
-			raster.metrics[m].p.w := 0; raster.metrics[m].p.h := 0
-		END DummyCh;
-	BEGIN
-		F.type := type; F(Font).printer := printer;
-		Files.Read(R, ch); (*family*) Files.Read(R, ch); (*variant*)
-		raster := SYSTEM.VAL(Win32.Font, F.ind); raster.oberon := TRUE;
-		Files.ReadInt(R, F.height);
-		Files.ReadInt(R, F.minX); Files.ReadInt(R, F.maxX);
-		Files.ReadInt(R, F.minY); Files.ReadInt(R, F.maxY);
-		Files.ReadInt(R, nofRuns);
-		nofBoxes := 0; k := 0;
-		WHILE k # nofRuns DO
-			Files.ReadInt(R, run[k].beg); Files.ReadInt(R, run[k].end);
-			nofBoxes := nofBoxes + run[k].end - run[k].beg;
-			INC(k)
-		END;
-		IF F.type # Fonts.metric THEN
-			bitmapW := 0; l := 0;
-			WHILE l # nofBoxes DO
-				Files.ReadInt(R, box[l].dx);
-				Files.ReadInt(R, box[l].x); Files.ReadInt(R, box[l].y);
-				Files.ReadInt(R, box[l].w); Files.ReadInt(R, box[l].h);
-				bitmapW := bitmapW + (box[l].w + 7) DIV 8;
-				INC(l)
-			END;
-			bitmapW := bitmapW + (-bitmapW) MOD 4; bitmapH := F.maxY - F.minY;
-			SYSTEM.NEW(SYSTEM.VAL(Fonts.Font, RasterBase), bitmapW * bitmapH); (* temporary *)
-			bitmapX := 0; k := 0; l := 0; m := 0;
-			WHILE k < nofRuns DO
-				WHILE m < run[k].beg DO DummyCh(m); INC(m) END;
-				WHILE m < run[k].end DO
-					raster.metrics[m].dx := box[l].dx;
-					raster.metrics[m].x := box[l].x;
-					raster.metrics[m].y := box[l].y;
-					raster.metrics[m].p.x := bitmapX;
-					raster.metrics[m].p.y := 0;
-					w := box[l].w;
-					raster.metrics[m].p.w := SHORT(w);
-					h := box[l].h; raster.metrics[m].p.h := SHORT(h);
-					bitmapDX := (w + 7) DIV 8;
-					n := bitmapDX * h;
-					a := RasterBase + bitmapX DIV 8;
-					b := 0;
-					WHILE b < n DO
-						Files.Read(R, ch);
-						IF ~printer THEN
-							SYSTEM.PUT(a + (h - 1 - (b DIV bitmapDX)) * bitmapW + (b MOD bitmapDX), GDI32.T[ORD(ch)])
-						ELSE
-							SYSTEM.PUT(a + (h - 1 - (b DIV bitmapDX)) * bitmapW + (b MOD bitmapDX), GDI32.iT[ORD(ch)])
-						END;
-						INC(b)
-					END;
-					INC(l); INC(m);
-					INC(bitmapX, 8*bitmapDX)
-				END;
-				INC(k)
-			END;
-			WHILE m < 256 DO DummyCh(m); INC(m) END;
-			bitmap := GDI32.CreateBitmap(8*bitmapW, bitmapH, 1, 1, RasterBase);
-			ASSERT(bitmap # Kernel32.NULL);
-			m := 0;
-			WHILE m < 256 DO raster.metrics[m].p.bitmap := bitmap; INC(m) END
-		ELSE (* metric *)
-			l := 0;
-			WHILE l # nofBoxes DO
-				Files.ReadInt(R, box[l].dx);
-				Files.ReadInt(R, box[l].x); Files.ReadInt(R, box[l].y);
-				Files.ReadInt(R, box[l].w); Files.ReadInt(R, box[l].h);
-				INC(l)
-			END;
-			k := 0; l := 0; m := 0;
-			WHILE k < nofRuns DO
-				WHILE m < run[k].beg DO DummyCh(m); INC(m) END;
-				WHILE m < run[k].end DO
-					raster.metrics[m].dx := box[l].dx;
-					raster.metrics[m].x := box[l].x;
-					raster.metrics[m].y := box[l].y;
-					raster.metrics[m].p.x := 0;
-					raster.metrics[m].p.y := 0;
-					INC(l); INC(m)
-				END;
-				INC(k)
-			END;
-			WHILE m < 256 DO DummyCh(m); INC(m) END;
-			m := 0;
-			WHILE m < 256 DO raster.metrics[m].p.bitmap := Kernel32.NULL; INC(m) END
-		END
-	END Load;
-
-	PROCEDURE *Finalize(F: PTR);
-		VAR f0: Win32.Font; bitmap: LONGINT;
-	BEGIN
-		WITH F: Fonts.Font DO
-			f0 := SYSTEM.VAL(Win32.Font, F.ind);
-			bitmap := f0.metrics[65].p.bitmap;
-			IF bitmap # Kernel32.NULL THEN
-				GDI32.DeleteObject(bitmap);
-				f0.metrics[65].p.bitmap := Kernel32.NULL
-			END;
-			IF f0.hfont # Kernel32.NULL THEN
-				GDI32.DeleteObject(f0.hfont);
-				f0.hfont := Kernel32.NULL
-			END;
-			IF f0.file # "" THEN
-				GDI32.RemoveFontResource(SYSTEM.ADR(f0.file));
-				f0.file := ""
-			END
-		END
-	END Finalize;
-
-	PROCEDURE *OpenFont(F: Objects.Library);
-		VAR
-			tmp: FileDir.FileName;
-			family: ARRAY 64 OF CHAR;
-			class: ARRAY 8 OF CHAR;
-			raster: Win32.Font;
-			size: LONGINT;
-			style: SET;
-			f: Files.File;
-			R: Files.Rider;
-			id: CHAR;
-	BEGIN
-		WITH F: Fonts.Font DO
-			NEW(raster); F.ind := SYSTEM.VAL(Objects.Index, raster);
-			raster.hfont := Kernel32.NULL; raster.file := "";
-			ParseName(F.name, family, size, style, class);
-			IF family = "Default" THEN
-				COPY(default, family)
-			END;
-			Registry.OberonPath("Fonts", tmp);
-			Registry.GetKeyValue(Registry.CurrentUser, tmp, family, tmp);
-			IF Registry.res = Registry.Done THEN
-				COPY(tmp, family)
-			END;
-			BuildName(F.name, family, size, style, class);
-			IF (class[0] = "M") & (class[1] = "d") THEN
-				class[0] := "P"; class[1] := "r";
-				BuildName(tmp, family, size, style, class);
-				class[0] := "M"; class[1] := "d";
-				f := Files.Old(tmp);
-				IF f # NIL THEN
-					Files.Set(R, f, 0); Files.Read(R, id);
-					IF id = Fonts.FontId THEN
-						Files.Read(R, F.type);
-						IF F.type = Fonts.font THEN
-							Load(F, R, Fonts.metric);
-							Kernel.RegisterObject(F, Finalize, FALSE);
-							RETURN
-						END
-					END
-				END
-			END;
-			f := Files.Old(F.name);
-			IF f # NIL THEN
-				Files.Set(R, f, 0); Files.Read(R, id);
-				IF id = Fonts.FontId THEN
-					Files.Read(R, F.type);
-					IF F.type = Fonts.metric THEN Load(F, R, F.type)
-					ELSIF F.type = Fonts.font THEN Load(F, R, F.type)
-					ELSE Substitute(F)
-					END
-				ELSE Substitute(F)
-				END
-			ELSE
-				WinLoadFont(F, family, size, style, class);
-				IF F.type = -2 THEN
-					Substitute(F)
-				END
-			END;
-			IF F.type # Fonts.substitute THEN
-				Kernel.RegisterObject(F, Finalize, FALSE)
-			END
-		END
-	END OpenFont;
-
-	PROCEDURE *NewFont(): Objects.Library;
-		VAR F: Font;
-	BEGIN
-		NEW(F); CacheFont(F);
-		F.Load := OpenFont; F.GetObj := Fonts.Default.GetObj;
-		RETURN F
-	END NewFont;
-
-	PROCEDURE SetupFrame(P: Printer);
+	PROCEDURE SetupDocFrame(P: DocPrinter);
 	BEGIN
 		IF P.margin.left < P.offsX THEN
 			P.margin.left := P.offsX
@@ -555,31 +103,30 @@ MODULE WinPrinter; (** non-portable / source: Win32.WinPrinter.Mod *)	(* ejz  *)
 			P.margin.top := P.Height-P.pageH-P.margin.bottom;
 			P.FrameH := SHORT(P.Height-P.margin.top-P.margin.bottom)
 		END
-	END SetupFrame;
+	END SetupDocFrame;
 
-	PROCEDURE InitMetrics*(P: Printers.Printer);
+	PROCEDURE InitDocMetrics*(P: Printers.Printer);
 		VAR
 			M: Display.ControlMsg; N: Oberon.ControlMsg;
-			str: ARRAY 8 OF CHAR;
-			oldDPI: LONGINT;
-			def: BOOLEAN;
+			str: ARRAY 8 OF CHAR; def: BOOLEAN;
 	BEGIN
-		WITH P: Printer DO
-			oldDPI := P.dpi;
+		WITH P: DocPrinter DO
 			IF P.hDC = Kernel32.NULL THEN
 				P.hDC := PrinterDC(P); def := P.hDC # Kernel32.NULL
 			ELSE
 				def := FALSE
 			END;
 			IF P.hDC # Kernel32.NULL THEN
-				P.Width := SHORT(GDI32.GetDeviceCaps(P.hDC, GDI32.PHYSICALWIDTH));
-				P.Height := SHORT(GDI32.GetDeviceCaps(P.hDC, GDI32.PHYSICALHEIGHT));
-				P.pageW := SHORT(GDI32.GetDeviceCaps(P.hDC, GDI32.HORZRES));
-				P.pageH := SHORT(GDI32.GetDeviceCaps(P.hDC, GDI32.VERTRES));
-				P.offsX := SHORT(GDI32.GetDeviceCaps(P.hDC, GDI32.PHYSICALOFFSETX));
-				P.offsY := SHORT(GDI32.GetDeviceCaps(P.hDC, GDI32.PHYSICALOFFSETY));
+				P.Width := SHORT(GDI32.GetDeviceCaps(P.hDC, GDI32.PhysicalWidth));
+				P.Height := SHORT(GDI32.GetDeviceCaps(P.hDC, GDI32.PhysicalHeight));
+				P.pageW := GDI32.GetDeviceCaps(P.hDC, GDI32.HorzRes);
+				P.pageH := GDI32.GetDeviceCaps(P.hDC, GDI32.VertRes);
+				P.offsX := GDI32.GetDeviceCaps(P.hDC, GDI32.PhysicalOffsetX);
+				P.offsY := GDI32.GetDeviceCaps(P.hDC, GDI32.PhysicalOffsetY);
 				P.offsY := P.Height-P.offsY-P.pageH;
-				P.dpi := GDI32.GetDeviceCaps(P.hDC, GDI32.LOGPIXELSX);
+				IF P.mode = GDI32.MMText THEN
+					P.dpi := GDI32.GetDeviceCaps(P.hDC, GDI32.LogPixelsX)
+				END;
 				P.Depth := SHORT(GDI32.GetDeviceCaps(P.hDC, GDI32.BitsPixel))
 			ELSE
 				P.Width := 2480; P.Height := 3508;
@@ -588,17 +135,39 @@ MODULE WinPrinter; (** non-portable / source: Win32.WinPrinter.Mod *)	(* ejz  *)
 				P.dpi := 300; P.Depth := 24
 			END;
 			P.Unit := 914400 DIV P.dpi;
-			SetupFrame(P);
+			SetupDocFrame(P);
 			IF def THEN
 				GDI32.DeleteDC(P.hDC); P.hDC := Kernel32.NULL
 			END;
-			IF P.dpi # oldDPI THEN
-				ClearFontCache(FALSE);
+			str := "Md?.Fnt";
+			str[2] := CHR(ORD("0") + ((P.dpi+50) DIV 100) MOD 10);
+			Objects.Register(str, WinFonts.NewFont); (* e.g. Md3.Fnt *)
+			str[0] := "P"; str[1] := "r";
+			Objects.Register(str, WinFonts.NewFont); (* e.g. Pr3.Fnt *)
+			N.id := Oberon.neutralize; M.F := NIL; Display.Broadcast(N);
+			M.id := Display.newprinter; M.F := NIL; Display.Broadcast(M);
+			M.id := Display.suspend; M.F := NIL; Display.Broadcast(M);
+			M.id := Display.restore; M.F := NIL; Display.Broadcast(M)
+		END
+	END InitDocMetrics;
+
+	PROCEDURE InitMetrics*(P: Printers.Printer);
+		VAR
+			M: Display.ControlMsg; N: Oberon.ControlMsg;
+			str: ARRAY 8 OF CHAR;
+	BEGIN
+		WITH P: Printer DO
+			P.Depth := SHORT(GDI32.GetDeviceCaps(P.hDC, GDI32.BitsPixel));
+			IF P.mode = GDI32.MMText THEN
+				P.dpi := GDI32.GetDeviceCaps(P.hDC, GDI32.LogPixelsX)
+			END;
+			P.Unit := 914400 DIV P.dpi;
+			IF (Printers.current # P) OR (Printers.Unit # P.Unit) OR (Printers.Depth # P.Depth) THEN
 				str := "Md?.Fnt";
-				str[2] := CHR(ORD("0") + P.dpi DIV 100 MOD 10);
-				Objects.Register(str, NewFont); (* e.g. Md3.Fnt *)
+				str[2] := CHR(ORD("0") + ((P.dpi+50) DIV 100) MOD 10);
+				Objects.Register(str, WinFonts.NewFont); (* e.g. Md3.Fnt *)
 				str[0] := "P"; str[1] := "r";
-				Objects.Register(str, NewFont); (* e.g. Pr3.Fnt *)
+				Objects.Register(str, WinFonts.NewFont); (* e.g. Pr3.Fnt *)
 				N.id := Oberon.neutralize; M.F := NIL; Display.Broadcast(N);
 				M.id := Display.newprinter; M.F := NIL; Display.Broadcast(M);
 				M.id := Display.suspend; M.F := NIL; Display.Broadcast(M);
@@ -607,25 +176,183 @@ MODULE WinPrinter; (** non-portable / source: Win32.WinPrinter.Mod *)	(* ejz  *)
 		END
 	END InitMetrics;
 
-	PROCEDURE ^ Setup*;
-
-	PROCEDURE Open*(P: Printers.Printer; printer, options: ARRAY OF CHAR);
-		VAR
-			ret, i, j: LONGINT;
-			docname: ARRAY 128 OF CHAR;
-			print: COMDLG32.PRINTDLG;
-			doc: GDI32.DocInfo;
+	PROCEDURE ToPixel(P: DocPrinter; value: LONGINT): LONGINT;
 	BEGIN
-		WITH P: Printer DO
-			P.res := 1; (* no such printer *) ClearFontCache(FALSE);
-			IF ~P.setup & (Printers.current = P) THEN
-				Setup();
-				IF ~P.setup THEN RETURN END
+		IF P.psdUnit = COMDLG32.PSDInThousandthsOfInches THEN
+			RETURN ENTIER(0.5 + value*P.dpi / 1000)
+		ELSIF P.psdUnit = COMDLG32.PSDInHundredthsOfMillimeters THEN
+			RETURN ENTIER(0.5 + value*P.dpi / 2540)
+		END
+	END ToPixel;
+
+	PROCEDURE FromPixel(P: DocPrinter; value: LONGINT): LONGINT;
+	BEGIN
+		IF P.psdUnit = COMDLG32.PSDInThousandthsOfInches THEN
+			RETURN ENTIER(0.5 + value*1000 / P.dpi)
+		ELSIF P.psdUnit = COMDLG32.PSDInHundredthsOfMillimeters THEN
+			RETURN ENTIER(0.5 + value*2540 / P.dpi)
+		END
+	END FromPixel;
+
+	PROCEDURE LoadConfig(P: DocPrinter);
+		VAR
+			path, str: FileDir.FileName;
+			adr: Kernel32.ADDRESS; offs: INTEGER;
+	BEGIN
+		Registry.OberonPath("Printer\WinPrinter", path);
+		Registry.GetKeyValue(Registry.CurrentUser, path, "Driver", str);
+		IF Registry.res # Registry.Done THEN RETURN END;
+		P.hDevNames := Kernel32.GlobalAlloc({Kernel32.GMemMoveable, Kernel32.GMemDDEShare}, 1024);
+		adr := Kernel32.GlobalLock(P.hDevNames);
+		SYSTEM.MOVE(SYSTEM.ADR(str), adr+8, 256);
+		offs := 8; SYSTEM.PUT(adr, offs);
+		Registry.GetKeyValue(Registry.CurrentUser, path, "Device", str);
+		SYSTEM.MOVE(SYSTEM.ADR(str), adr+8+256, 256);
+		offs := 8+256; SYSTEM.PUT(adr+2, offs);
+		offs := 0; SYSTEM.PUT(adr+4, offs);
+		offs := 0; SYSTEM.PUT(adr+6, offs);
+		Kernel32.GlobalUnlock(P.hDevNames);
+		Registry.GetKeyValue(Registry.CurrentUser, path, "Unit", str);
+		IF str = "ThousendthsOfInches" THEN
+			P.psdUnit := COMDLG32.PSDInThousandthsOfInches
+		ELSIF str = "HundredthsOfMillimeters" THEN
+			P.psdUnit := COMDLG32.PSDInHundredthsOfMillimeters
+		ELSE
+			HALT(99)
+		END;
+(* P.devMode := Kernel32.GlobalAlloc(Kernel32.GMemMoveable, ... *)
+		P.InitMetrics(P);
+		Registry.GetKeyValue(Registry.CurrentUser, path, "Left", str);
+		Strings.StrToInt(str, adr); P.margin.left := ToPixel(P, adr);
+		Registry.GetKeyValue(Registry.CurrentUser, path, "Right", str);
+		Strings.StrToInt(str, adr); P.margin.right := ToPixel(P, adr);
+		Registry.GetKeyValue(Registry.CurrentUser, path, "Top", str);
+		Strings.StrToInt(str, adr); P.margin.top := ToPixel(P, adr);
+		Registry.GetKeyValue(Registry.CurrentUser, path, "Bottom", str);
+		Strings.StrToInt(str, adr); P.margin.bottom := ToPixel(P, adr)
+	END LoadConfig;
+
+	PROCEDURE StoreConfig(P: DocPrinter);
+		VAR
+			path, str: FileDir.FileName;
+			adr: Kernel32.ADDRESS; offs: INTEGER;
+	BEGIN
+		Registry.OberonPath("Printer\WinPrinter", path);
+		adr := Kernel32.GlobalLock(P.hDevNames);
+		SYSTEM.GET(adr, offs);
+		Kernel32.CopyString(adr+offs, str);
+		Registry.SetKeyValue(Registry.CurrentUser, path, "Driver", str);
+		SYSTEM.GET(adr+2, offs);
+		Kernel32.CopyString(adr+offs, str);
+		Kernel32.GlobalUnlock(P.hDevNames);
+		Registry.SetKeyValue(Registry.CurrentUser, path, "Device", str);
+		IF P.psdUnit = COMDLG32.PSDInThousandthsOfInches THEN
+			Registry.SetKeyValue(Registry.CurrentUser, path, "Unit", "ThousendthsOfInches")
+		ELSIF P.psdUnit = COMDLG32.PSDInHundredthsOfMillimeters THEN
+			Registry.SetKeyValue(Registry.CurrentUser, path, "Unit", "HundredthsOfMillimeters")
+		ELSE
+			HALT(99)
+		END;
+		adr := FromPixel(P, P.margin.left); Strings.IntToStr(adr, str);
+		Registry.SetKeyValue(Registry.CurrentUser, path, "Left", str);
+		adr := FromPixel(P, P.margin.right); Strings.IntToStr(adr, str);
+		Registry.SetKeyValue(Registry.CurrentUser, path, "Right", str);
+		adr := FromPixel(P, P.margin.top); Strings.IntToStr(adr, str);
+		Registry.SetKeyValue(Registry.CurrentUser, path, "Top", str);
+		adr := FromPixel(P, P.margin.bottom); Strings.IntToStr(adr, str);
+		Registry.SetKeyValue(Registry.CurrentUser, path, "Bottom", str)
+(* adr := Kernel32.GlobalLock(P.devMode) *)
+	END StoreConfig;
+
+	PROCEDURE setupPrinter(P: DocPrinter; dialog: WinMenus.PageSetupDialog);
+	BEGIN
+		IF dialog.done THEN
+			P.hDevNames := dialog.page.hDevNames; P.hDevMode := dialog.page.hDevMode;
+			InitDocMetrics(P); P.setup := TRUE;
+			IF COMDLG32.PSDInThousandthsOfInches IN dialog.page.Flags THEN
+				P.psdUnit := COMDLG32.PSDInThousandthsOfInches
+			ELSIF COMDLG32.PSDInHundredthsOfMillimeters IN dialog.page.Flags THEN
+				P.psdUnit := COMDLG32.PSDInHundredthsOfMillimeters
+			ELSE
+				HALT(99)
 			END;
-			InitPrintDlg(P, print, COMDLG32.PDReturnDC);
-			ret := COMDLG32.PrintDlg(SYSTEM.ADR(print));
-			P.hDC := print.hDC;
-			IF (ret # Kernel32.False) & (P.hDC # Kernel32.NULL) THEN
+			P.margin.left := ToPixel(P, dialog.page.rtMargin.left);
+			P.margin.right := ToPixel(P, dialog.page.rtMargin.right);
+			P.margin.top := ToPixel(P, dialog.page.rtMargin.top);
+			P.margin.bottom := ToPixel(P, dialog.page.rtMargin.bottom);
+			StoreConfig(P); Printers.Install(P)
+		END
+	END setupPrinter;
+
+	PROCEDURE SetupPrinter*;
+		VAR dialog: WinMenus.PageSetupDialog; P: DocPrinter;
+	BEGIN
+		IF (Oberon.Par.obj # NIL) & (Oberon.Par.obj IS WinMenus.PageSetupDialog) THEN
+			dialog := Oberon.Par.obj(WinMenus.PageSetupDialog); P := dialog.context(DocPrinter);
+			setupPrinter(P, dialog)
+		END
+	END SetupPrinter;
+
+	PROCEDURE PageSetupDlg(P: DocPrinter; block: BOOLEAN): WinMenus.PageSetupDialog;
+		VAR dialog: WinMenus.PageSetupDialog;
+	BEGIN
+		NEW(dialog); dialog.context := P; dialog.done := TRUE;
+		IF ~block THEN dialog.cmd := "WinPrinter.SetupPrinter" END;
+		dialog.page.lStructSize := SIZE(COMDLG32.PAGESETUPDLG);
+		IF P # NIL THEN
+			dialog.page.hDevNames := P.hDevNames; dialog.page.hDevMode := P.hDevMode
+		ELSE
+			dialog.page.hDevNames := Kernel32.NULL; dialog.page.hDevMode := Kernel32.NULL
+		END;
+		dialog.page.ptPaperSize.x := 0; dialog.page.ptPaperSize.y := 0;
+		dialog.page.rtMinMargin.left := 0; dialog.page.rtMinMargin.right := 0;
+		dialog.page.rtMinMargin.top := 0; dialog.page.rtMinMargin.bottom := 0;
+		IF (P # NIL) & (P.psdUnit # 0) THEN
+			dialog.page.Flags := {P.psdUnit, COMDLG32.PSDMargins};
+			dialog.page.rtMargin.left := FromPixel(P, P.margin.left);
+			dialog.page.rtMargin.right := FromPixel(P, P.margin.right);
+			dialog.page.rtMargin.top := FromPixel(P, P.margin.top);
+			dialog.page.rtMargin.bottom := FromPixel(P, P.margin.bottom)
+		ELSE
+			dialog.page.Flags := {};
+			dialog.page.rtMargin.left := 0; dialog.page.rtMargin.right := 0;
+			dialog.page.rtMargin.top := 0; dialog.page.rtMargin.bottom := 0
+		END;
+		dialog.page.hInstance := Kernel.hInstance; dialog.page.lCustData := 0;
+		dialog.page.lpfnPageSetupHook := 0;
+		dialog.page.lpfnPagePaintHook := 0;
+		dialog.page.lpPageSetupTemplateName := 0;
+		dialog.page.hPageSetupTemplate := 0;
+		WinMenus.ShowDialog(dialog, block);
+		IF dialog.done THEN
+			IF block THEN setupPrinter(P, dialog) END;
+			RETURN dialog
+		ELSE
+			RETURN NIL
+		END
+	END PageSetupDlg;
+
+	PROCEDURE setupDoc(P: DocPrinter; block: BOOLEAN);
+		VAR dialog: WinMenus.PageSetupDialog;
+	BEGIN
+		dialog := PageSetupDlg(P, block)
+	END setupDoc;
+
+	PROCEDURE OpenDoc*(P: Printers.Printer; printer, options: ARRAY OF CHAR);
+		VAR
+			i, j: LONGINT;
+			docname: FileDir.FileName;
+			doc: GDI32.DocInfo;
+			dialog: WinMenus.PrintDialog;
+	BEGIN
+		WITH P: DocPrinter DO
+			P.res := 1; (* no such printer *)
+			IF ~P.setup & (Printers.current = P) THEN
+				setupDoc(P, TRUE); IF ~P.setup THEN RETURN END
+			END;
+			dialog := PrintDlg(P, {COMDLG32.PDReturnDC});
+			IF (dialog # NIL) & (dialog.print.hDC # Kernel32.NULL) THEN
+				P.hDC := dialog.print.hDC;
 				i := 0; j := -1;
 				WHILE options[i] # 0X DO
 					IF options[i] = Oberon.OptionChar THEN
@@ -642,16 +369,17 @@ MODULE WinPrinter; (** non-portable / source: Win32.WinPrinter.Mod *)	(* ejz  *)
 				ELSE
 					docname := "Oberon Document"
 				END;
-				doc.size := SIZE(GDI32.DocInfo); doc.output := Kernel32.NULL;
-				doc.docName := SYSTEM.ADR(docname);
-				P.job := GDI32.StartDoc(P.hDC, SYSTEM.ADR(doc));
+				doc.cbSize := SIZE(GDI32.DocInfo); doc.lpszOutput := Kernel32.NULL;
+				doc.lpszDatatype := 0; doc.fwType := 0;
+				doc.lpszDocName := SYSTEM.ADR(docname);
+				P.job := GDI32.StartDoc(P.hDC, doc);
 				IF P.job > 0 THEN
-					P.devMode := print.devMode; P.devNames := print.devNames;
-					InitMetrics(P);
+					P.hDevNames := dialog.print.hDevNames; P.hDevMode := dialog.print.hDevMode;
+					InitDocMetrics(P);
 					P.newPage := TRUE; P.showPage := FALSE;
 					P.color := 0; P.bkColor := 0FFFFFFH; P.textColor := 0; P.page := 0;
-					IF Kernel32.Includes(print.flags, COMDLG32.PDPageNums) THEN
-						P.from := print.from; P.to := print.to
+					IF COMDLG32.PDPageNums IN dialog.print.Flags THEN
+						P.from := dialog.print.nFromPage; P.to := dialog.print.nToPage
 					ELSE
 						P.from := 0; P.to := MAX(INTEGER)
 					END;
@@ -660,30 +388,28 @@ MODULE WinPrinter; (** non-portable / source: Win32.WinPrinter.Mod *)	(* ejz  *)
 				END
 			END
 		END
-	END Open;
+	END OpenDoc;
 
-	PROCEDURE Close*(P: Printers.Printer);
+	PROCEDURE CloseDoc*(P: Printers.Printer);
 	BEGIN
-		WITH P: Printer DO
+		WITH P: DocPrinter DO
 			IF P.hdcMem # Kernel32.NULL THEN
 				GDI32.DeleteDC(P.hdcMem); P.hdcMem := Kernel32.NULL
 			END;
 			IF P.hDC # Kernel32.NULL THEN
-				IF P.job > 0 THEN
-					GDI32.EndDoc(P.hDC)
-				END;
+				IF P.job > 0 THEN GDI32.EndDoc(P.hDC) END;
 				GDI32.DeleteDC(P.hDC); P.hDC := Kernel32.NULL
 			END;
-			P.res := Printers.res; ClearFontCache(TRUE)
+			P.res := Printers.res
 		END
-	END Close;
+	END CloseDoc;
 
 	PROCEDURE NewPage(P: Printer);
 	BEGIN
 		INC(P.page);
 		IF (P.page >= P.from) & (P.page <= P.to) THEN
-			GDI32.StartPage(P.hDC);
-			GDI32.SetMapMode(P.hDC, GDI32.MMText);
+			IF P IS DocPrinter THEN GDI32.StartPage(P.hDC) END;
+			IF P.mode = GDI32.MMText THEN GDI32.SetMapMode(P.hDC, GDI32.MMText) END;
 			GDI32.SetTextAlign(P.hDC, GDI32.TABaseline + GDI32.TALeft);
 			GDI32.SetBkMode(P.hDC, GDI32.Transparent);
 			GDI32.SetBkColor(P.hDC, P.bkColor); GDI32.SetTextColor(P.hDC, P.textColor);
@@ -699,24 +425,23 @@ MODULE WinPrinter; (** non-portable / source: Win32.WinPrinter.Mod *)	(* ejz  *)
 	BEGIN
 		WITH P: Printer DO
 			IF P.newPage THEN NewPage(P) END;
-			IF P.showPage THEN
-				GDI32.EndPage(P.hDC)
-			END;
+			IF P.showPage & (P IS DocPrinter) THEN GDI32.EndPage(P.hDC) END;
 			P.newPage := TRUE
 		END
 	END Page;
 
 	PROCEDURE ReplConst*(P: Printers.Printer; x, y, w, h: INTEGER);
-		VAR hBr, oldBr: LONGINT;
+		VAR hBr, hOldBr: GDI32.HBrush; px, py: LONGINT;
 	BEGIN
 		WITH P: Printer DO
 			IF P.newPage THEN NewPage(P) END;
 			IF P.showPage THEN
-				DEC(x, P.offsX); DEC(y, P.offsY);
+				px := x; py := y;
+				DEC(px, P.offsX); DEC(py, P.offsY);
 				hBr := GDI32.CreateSolidBrush(P.color);
-				oldBr := GDI32.SelectObject(P.hDC, hBr);
-				GDI32.PatBlt(P.hDC, x, P.pageH-y-h, w, h, GDI32.PATCOPY);
-				GDI32.SelectObject(P.hDC, oldBr);
+				hOldBr := GDI32.SelectObject(P.hDC, hBr);
+				GDI32.PatBlt(P.hDC, px, P.pageH-py-h, w, h, GDI32.PatCopy);
+				GDI32.SelectObject(P.hDC, hOldBr);
 				GDI32.DeleteObject(hBr)
 			END
 		END
@@ -735,12 +460,13 @@ MODULE WinPrinter; (** non-portable / source: Win32.WinPrinter.Mod *)	(* ejz  *)
 	END SetTextColor;
 
 	PROCEDURE ReplPattern*(P: Printers.Printer; x, y, w, h, patno: INTEGER);
-		VAR hPat, oldPat: LONGINT;
+		VAR hPat, hOldPat: GDI32.HBrush; px, py: LONGINT;
 	BEGIN
 		WITH P: Printer DO
 			IF P.newPage THEN NewPage(P) END;
 			IF P.showPage THEN
-				DEC(x, P.offsX); DEC(y, P.offsY);
+				px := x; py := y;
+				DEC(px, P.offsX); DEC(py, P.offsY);
 				SetTextColor(P, 0FFFFFFH, P.color);
 				CASE patno OF
 					2: hPat := GDI32.GetStockObject(1);
@@ -754,46 +480,48 @@ MODULE WinPrinter; (** non-portable / source: Win32.WinPrinter.Mod *)	(* ejz  *)
 				ELSE
 					hPat := GDI32.GetStockObject(0);
 				END;
-				oldPat := GDI32.SelectObject(P.hDC, hPat);
-				GDI32.PatBlt(P.hDC, x, P.pageH-y-h, w, h, GDI32.PATCOPY);
-				GDI32.SelectObject(P.hDC, oldPat);
+				hOldPat := GDI32.SelectObject(P.hDC, hPat);
+				GDI32.PatBlt(P.hDC, px, P.pageH-py-h, w, h, GDI32.PatCopy);
+				GDI32.SelectObject(P.hDC, hOldPat);
 				GDI32.DeleteObject(hPat)
 			END
 		END
 	END ReplPattern;
 
 	PROCEDURE Line*(P: Printers.Printer; x0, y0, x1, y1: INTEGER);
-		VAR hPen, oldPen: LONGINT;
+		VAR hPen, hOldPen: GDI32.HPen; px0, py0, px1, py1: LONGINT;
 	BEGIN
 		WITH P: Printer DO
 			IF P.newPage THEN NewPage(P) END;
 			IF P.showPage THEN
-				DEC(x0, P.offsX); DEC(y0, P.offsY);
-				DEC(x1, P.offsX); DEC(y1, P.offsY);
+				px0 := x0; py0 := y0; px1:= x1; py1 := y1;
+				DEC(px0, P.offsX); DEC(py0, P.offsY);
+				DEC(px1, P.offsX); DEC(py1, P.offsY);
 				hPen := GDI32.CreatePen(GDI32.PSSolid, 0, P.color);
-				oldPen := GDI32.SelectObject(P.hDC, hPen);
-				GDI32.MoveToEx(P.hDC, x0, P.pageH-y0, Kernel32.NULL);
-				GDI32.LineTo(P.hDC, x1, P.pageH-y1);
-				GDI32.SelectObject(P.hDC, oldPen);
+				hOldPen := GDI32.SelectObject(P.hDC, hPen);
+				GDI32.MoveToEx(P.hDC, px0, P.pageH-py0, NIL);
+				GDI32.LineTo(P.hDC, px1, P.pageH-py1);
+				GDI32.SelectObject(P.hDC, hOldPen);
 				GDI32.DeleteObject(hPen)
 			END
 		END
 	END Line;
 
 	PROCEDURE Circle*(P: Printers.Printer; x0, y0, r: INTEGER);
-		VAR hBr, oldBr, hPen, oldPen: LONGINT;
+		VAR hBr, hOldBr: GDI32.HBrush; hPen, hOldPen: GDI32.HPen; px0, py0: LONGINT;
 	BEGIN
 		WITH P: Printer DO
 			IF P.newPage THEN NewPage(P) END;
 			IF P.showPage THEN
-				DEC(x0, P.offsX); DEC(y0, P.offsY);
+				px0 := x0; py0 := y0;
+				DEC(px0, P.offsX); DEC(py0, P.offsY);
 				hPen := GDI32.CreatePen(GDI32.PSSolid, 0, P.color);
-				hBr := GDI32.GetStockObject(5);
-				oldPen := GDI32.SelectObject(P.hDC, hPen);
-				oldBr := GDI32.SelectObject(P.hDC, hBr);
-				GDI32.Ellipse(P.hDC, x0-r, P.pageH-(y0+r), x0+r, P.pageH-(y0-r));
-				GDI32.SelectObject(P.hDC, oldPen);
-				GDI32.SelectObject(P.hDC, oldBr);
+				hBr := GDI32.GetStockObject(GDI32.NullBrush);
+				hOldPen := GDI32.SelectObject(P.hDC, hPen);
+				hOldBr := GDI32.SelectObject(P.hDC, hBr);
+				GDI32.Ellipse(P.hDC, px0-r, P.pageH-(py0+r), px0+r, P.pageH-(py0-r));
+				GDI32.SelectObject(P.hDC, hOldBr);
+				GDI32.SelectObject(P.hDC, hOldPen);
 				GDI32.DeleteObject(hPen);
 				GDI32.DeleteObject(hBr)
 			END
@@ -801,19 +529,20 @@ MODULE WinPrinter; (** non-portable / source: Win32.WinPrinter.Mod *)	(* ejz  *)
 	END Circle;
 
 	PROCEDURE Ellipse*(P: Printers.Printer; x0, y0, a, b: INTEGER);
-		VAR hBr, oldBr, hPen, oldPen: LONGINT;
+		VAR hBr, hOldBr: GDI32.HBrush; hPen, hOldPen: GDI32.HPen; px0, py0: LONGINT;
 	BEGIN
 		WITH P: Printer DO
 			IF P.newPage THEN NewPage(P) END;
 			IF P.showPage THEN
-				DEC(x0, P.offsX); DEC(y0, P.offsY);
+				px0 := x0; py0 := y0;
+				DEC(px0, P.offsX); DEC(py0, P.offsY);
 				hPen := GDI32.CreatePen(GDI32.PSSolid, 0, P.color);
-				hBr := GDI32.GetStockObject(5);
-				oldPen := GDI32.SelectObject(P.hDC, hPen);
-				oldBr := GDI32.SelectObject(P.hDC, hBr);
-				GDI32.Ellipse(P.hDC, x0-a, P.pageH-(y0+b), x0+a, P.pageH-(y0-b));
-				GDI32.SelectObject(P.hDC, oldPen);
-				GDI32.SelectObject(P.hDC, oldBr);
+				hBr := GDI32.GetStockObject(GDI32.NullBrush);
+				hOldPen := GDI32.SelectObject(P.hDC, hPen);
+				hOldBr := GDI32.SelectObject(P.hDC, hBr);
+				GDI32.Ellipse(P.hDC, px0-a, P.pageH-(py0+b), px0+a, P.pageH-(py0-b));
+				GDI32.SelectObject(P.hDC, hOldBr);
+				GDI32.SelectObject(P.hDC, hOldPen);
 				GDI32.DeleteObject(hPen);
 				GDI32.DeleteObject(hBr)
 			END
@@ -826,16 +555,14 @@ HALT(99)
 	END Spline;
 
 	PROCEDURE Picture*(P: Printers.Printer; pict: Pictures.Picture; sx, sy, sw, sh, dx, dy, dw, dh, mode: INTEGER);
-		VAR bmi: RECORD head: GDI32.BITMAPINFOHEADER; color: ARRAY 256 OF LONGINT END;
+		VAR pdx, pdy: LONGINT;
 	BEGIN
 		WITH P: Printer DO
 			IF P.newPage THEN NewPage(P) END;
 			IF P.showPage THEN
-				DEC(dx, P.offsX); DEC(dy, P.offsY);
-				SYSTEM.MOVE(SYSTEM.ADR(pict.bmi.head), SYSTEM.ADR(bmi.head), SIZE(GDI32.BITMAPINFOHEADER));
-				SYSTEM.MOVE(SYSTEM.ADR(pict.bmi.color), SYSTEM.ADR(bmi.color), 256*4);
-				GDI32.StretchDIBits(P.hDC, dx, P.pageH-(dy+dh), dw, dh, sx, sy, sw, sh, SYSTEM.ADR(pict.bits^),
-					SYSTEM.ADR(bmi), GDI32.DIBRGBColors, GDI32.SRCCOPY)
+				pdx := dx; pdy := dy;
+				DEC(pdx, P.offsX); DEC(pdy, P.offsY);
+				GDI32.StretchDIBits(P.hDC, pdx, P.pageH-(pdy+dh), dw, dh, sx, sy, sw, sh, pict.bits, pict.bmi, GDI32.DIBRGBColors, GDI32.SrcCopy)
 			END
 		END
 	END Picture;
@@ -845,110 +572,102 @@ HALT(99)
 HALT(99)
 	END UseListFont;
 
-	PROCEDURE LoadFont(P: Printer; fname: ARRAY OF CHAR; VAR F: Fonts.Font; VAR oberon: BOOLEAN);
-		VAR
-			family, class, tmp: FileDir.FileName;
-			size: LONGINT;
-			style: SET;
-			f0: Win32.Font;
+	PROCEDURE *printerDC(class: ARRAY OF CHAR): User32.HDC;
+		VAR P: Printer; hDC: User32.HDC;
 	BEGIN
-		printer := TRUE;
-		ParseName(fname, family, size, style, class);
-		class := "Pr?"; class[2] := CHR(ORD("0") + P.dpi DIV 100 MOD 10);
-		BuildName(tmp, family, size, style, class);
-		F := Fonts.This(tmp);
-		f0 := SYSTEM.VAL(Win32.Font, F.ind);
-		oberon := f0.oberon & (f0.hfont = Kernel32.NULL);
-		IF oberon & ~F(Font).printer THEN
-			Finalize(F); F.Load(F)
-		END;
-		f0 := SYSTEM.VAL(Win32.Font, F.ind);
-		oberon := f0.oberon & (f0.hfont = Kernel32.NULL);
-		printer := FALSE
-	END LoadFont;
-
-	PROCEDURE TranslateString(VAR s: ARRAY OF CHAR; VAR len: LONGINT);
-	BEGIN
-		len := 0;
-		WHILE s[len] # 0X DO
-			s[len] := Strings.OberonToISO[ORD(s[len])]; INC(len)
-		END
-	END TranslateString;
-
-	PROCEDURE SpecialString(P: Printer; X, Y: LONGINT; VAR s: ARRAY OF CHAR; f: Fonts.Font; VAR width: LONGINT);
-		VAR
-			p: Win32.PatternPtr;
-			pat: LONGINT;
-			i, dx, xp, yp, w, h: INTEGER;
-	BEGIN
-		i := 0; width := 0;
-		WHILE s[i] # 0X DO
-			Fonts.GetChar(f, s[i], dx, xp, yp, w, h, pat);
-			p := SYSTEM.VAL(Win32.PatternPtr, pat);
-			GDI32.SelectObject(P.hdcMem, p.bitmap);
-			IF P.color # 0FFFFFFH THEN (* needed for correct B&W printing *)
-				SetTextColor(P, 0FFFFFFH, P.color);
-				GDI32.BitBlt(P.hDC, X+xp, Y-yp-p.h, w, h, P.hdcMem, p.x, p.y, GDI32.SRCAND)
-			END;
-			IF P.color # 0 THEN (* correct color printing here? *)
-				SetTextColor(P, 0H, P.color);
-				GDI32.BitBlt(P.hDC, X+xp, Y-yp-p.h, w, h, P.hdcMem, p.x, p.y, GDI32.SRCPAINT)
-			END;
-			INC(X, LONG(dx)); INC(width, LONG(dx));
-			INC(i)
-		END
-	END SpecialString;
-
-	PROCEDURE contString*(P: Printer; VAR s: ARRAY OF CHAR; fnt: Fonts.Font);
-		VAR
-			F: Fonts.Font;
-			f0: Win32.Font;
-			size: User32.Size;
-			len, W, oldfont: LONGINT;
-			oberon: BOOLEAN;
-	BEGIN
-		LoadFont(P, fnt.name, F, oberon);
-		IF oberon THEN
-			SpecialString(P, P.textX, P.textY, s, F, W); 
-			INC(P.textX, W)
-		ELSE
-			TranslateString(s, len);
-			f0 := SYSTEM.VAL(Win32.Font, F.ind);
-			oldfont := GDI32.SelectObject(P.hDC, f0.hfont);
-			SetTextColor(P, 0FFFFFFH, P.color);
-			GDI32.TextOut(P.hDC, P.textX, P.textY, SYSTEM.ADR(s), len);
-			GDI32.GetTextExtentPoint(P.hDC, SYSTEM.ADR(s), len, SYSTEM.ADR(size));
-			GDI32.SelectObject(P.hDC, oldfont);
-			INC(P.textX, size.w)
-		END
-	END contString;
-
-	PROCEDURE String*(P: Printers.Printer; x, y: INTEGER; s: ARRAY OF CHAR; fnt: Fonts.Font);
-	BEGIN
-		WITH P: Printer DO
-			IF P.newPage THEN NewPage(P) END;
-			IF P.showPage THEN
-				DEC(x, P.offsX); DEC(y, P.offsY);
-				P.textX := x; P.textY := P.pageH-y;
-				contString(P, s, fnt)
+		WinFonts.keepDC := FALSE; WinFonts.unit := -1;
+		IF (Printers.current # NIL) & (Printers.current IS Printer) THEN
+			P := Printers.current(Printer);
+			IF P IS DocPrinter THEN
+				hDC := PrinterDC(P(DocPrinter))
+			ELSE
+				hDC := P.hDC; WinFonts.unit := P.dpi;
+				WinFonts.keepDC := TRUE
 			END
+		END;
+		IF hDC = Kernel32.NULL THEN
+			hDC := PrinterDC(NIL); WinFonts.keepDC := FALSE
+		END;
+		IF WinFonts.unit <= 0 THEN
+			WinFonts.unit := GDI32.GetDeviceCaps(hDC, GDI32.LogPixelsY)
+		END;
+		RETURN hDC
+	END printerDC;
+
+	PROCEDURE PrintString(P: Printer; F: Fonts.Font; VAR s: ARRAY OF CHAR);
+		VAR
+			family, tmp: FileDir.FileName;
+			class: ARRAY 8 OF CHAR;
+			i: LONGINT;
+			style: SET; size: User32.Size;
+			font: Displays.Font;
+			hOldFont: GDI32.HFont; hOldBm: GDI32.HBitmap;
+			pat: Display.Pattern; p: Displays.Pattern;
+			dx, x, y, w, h: INTEGER;
+	BEGIN
+		WinFonts.ParseName(F.name, family, i, style, class);
+		class := "Pr?"; class[2] := CHR(ORD("0") + ((P.dpi+50) DIV 100) MOD 10);
+		WinFonts.BuildName(tmp, family, i, style, class);
+		F := Fonts.This(tmp);
+		font := SYSTEM.VAL(Displays.Font, F.ind);
+		IF font.hFont # Kernel32.NULL THEN
+			i := 0;
+			WHILE s[i] # 0X DO
+				s[i] := Strings.OberonToISO[ORD(s[i])]; INC(i)
+			END;
+			hOldFont := GDI32.SelectObject(P.hDC, font.hFont);
+			SetTextColor(P, 0FFFFFFH, P.color);
+			GDI32.TextOut(P.hDC, P.textX, P.textY, s, i);
+			GDI32.GetTextExtentPoint(P.hDC, s, i, size);
+			GDI32.SelectObject(P.hDC, hOldFont);
+			INC(P.textX, size.cx)
+		ELSIF font IS Displays.RasterFont THEN
+			WITH font: Displays.RasterFont DO
+				i := 0;
+				WHILE s[i] # 0X DO
+					Fonts.GetChar(F, s[i], dx, x, y, w, h, pat);
+					ASSERT((pat < 0) OR (pat >= Display.FirstPattern));
+					p := SYSTEM.VAL(Displays.Pattern, pat);
+					hOldBm := GDI32.SelectObject(P.hdcMem, p.hBm);
+SetTextColor(P, 0FFFFFFH, P.color);
+GDI32.BitBlt(P.hDC, P.textX+x, P.textY-y-p.h, w, h, P.hdcMem, p.x, p.y, GDI32.SrcAnd);
+					GDI32.SelectObject(P.hdcMem, hOldBm);
+					INC(i); INC(P.textX, LONG(dx))
+				END
+			END
+		ELSE
+			HALT(99)
 		END
-	END String;
+	END PrintString;
 
 	PROCEDURE ContString*(P: Printers.Printer; s: ARRAY OF CHAR; fnt: Fonts.Font);
 	BEGIN
 		WITH P: Printer DO
 			IF P.newPage THEN NewPage(P) END;
 			IF P.showPage THEN
-				contString(P, s, fnt)
+				PrintString(P, fnt, s)
 			END
 		END
 	END ContString;
 
+	PROCEDURE String*(P: Printers.Printer; x, y: INTEGER; s: ARRAY OF CHAR; fnt: Fonts.Font);
+		VAR px, py: LONGINT;
+	BEGIN
+		WITH P: Printer DO
+			IF P.newPage THEN NewPage(P) END;
+			IF P.showPage THEN
+				px := x; py := y;
+				DEC(px, P.offsX); DEC(py, P.offsY);
+				P.textX := px; P.textY := P.pageH-py;
+				PrintString(P, fnt, s)
+			END
+		END
+	END String;
+
 	PROCEDURE UseColor*(P: Printers.Printer; red, green, blue: INTEGER);
 	BEGIN
 		WITH P: Printer DO
-			P.color := LONG(red)+256*(LONG(green)+256*LONG(blue))
+			P.color := GDI32.RGB(red, green, blue)
 		END
 	END UseColor;
 
@@ -962,7 +681,7 @@ HALT(99)
 			COPY(fnt.name, name);
 			i := 0; WHILE (name[i] # ".") & (name[i] # 0X) DO INC(i) END;
 			name[i] := "."; name[i+1] := "M"; name[i+2] := "d";
-			name[i+3] := CHR(ORD("0") + P.dpi DIV 100 MOD 10);
+			name[i+3] := CHR(ORD("0") + ((P.dpi+50) DIV 100) MOD 10);
 			name[i+4] := "."; name[i+5] := "F"; name[i+6] := "n"; name[i+7] := "t";
 			name[i+8] := 0X;
 			metric := Fonts.This(name);
@@ -971,44 +690,12 @@ HALT(99)
 		RETURN metric
 	END GetMetric;
 
-	PROCEDURE LoadConfig(P: Printer);
-		VAR
-			path, str: ARRAY 256 OF CHAR;
-			adr: LONGINT; offs: INTEGER;
-	BEGIN
-		Registry.OberonPath("WinPrinter", path);
-		Registry.GetKeyValue(Registry.CurrentUser, path, "Driver", str);
-		IF Registry.res # Registry.Done THEN RETURN END;
-		P.devNames := Kernel32.GlobalAlloc(Kernel32.GMemMoveable, 1024);
-		adr := Kernel32.GlobalLock(P.devNames);
-		SYSTEM.MOVE(SYSTEM.ADR(str), adr+8, 256);
-		offs := 8; SYSTEM.PUT(adr, offs);
-		Registry.GetKeyValue(Registry.CurrentUser, path, "Device", str);
-		SYSTEM.MOVE(SYSTEM.ADR(str), adr+8+256, 256);
-		offs := 8+256; SYSTEM.PUT(adr+2, offs);
-		offs := 0; SYSTEM.PUT(adr+4, offs);
-		offs := 0; SYSTEM.PUT(adr+6, offs);
-		Kernel32.GlobalUnlock(P.devNames);
-		Registry.GetKeyValue(Registry.CurrentUser, path, "Unit", str);
-		IF str = "ThousendthsOfInches" THEN
-			P.psdUnit := COMDLG32.PSDInThousendthsOfInches
-		ELSIF str = "HundredthsOfMillimeters" THEN
-			P.psdUnit := COMDLG32.PSDInHundredthsOfMillimeters
-		ELSE
-			HALT(99)
-		END;
-		Registry.GetKeyValue(Registry.CurrentUser, path, "Left", str); Strings.StrToInt(str, P.margin.left);
-		Registry.GetKeyValue(Registry.CurrentUser, path, "Right", str); Strings.StrToInt(str, P.margin.right);
-		Registry.GetKeyValue(Registry.CurrentUser, path, "Top", str); Strings.StrToInt(str, P.margin.top);
-		Registry.GetKeyValue(Registry.CurrentUser, path, "Bottom", str); Strings.StrToInt(str, P.margin.bottom)
-	END LoadConfig;
-
 	PROCEDURE Init*(P: Printer);
 	BEGIN
-		P.gen := "WinPrinter.Install";
+		P.gen := ""; P.Unit := 0;
 		P.InitMetrics := InitMetrics;
-		P.Open := Open;
-		P.Close := Close;
+		P.Open := NIL;
+		P.Close := NIL;
 		P.Page := Page;
 		P.ReplConst := ReplConst; 
 		P.ReplPattern := ReplPattern;
@@ -1023,172 +710,117 @@ HALT(99)
 		P.UseColor := UseColor;
 		P.GetMetric := GetMetric;
 		P.hDC := Kernel32.NULL; P.hdcMem := Kernel32.NULL;
-		P.job := 0; P.dpi := 0; P.psdUnit := 0;
-		P.devMode := Kernel32.NULL; P.devNames := Kernel32.NULL;
-		P.margin.left := 0; P.margin.right := 0;
-		P.margin.top := 0; P.margin.bottom := 0;
-		P.newPage := FALSE; P.showPage := FALSE;
-		P.color := 0; P.setup := FALSE;
-		P.page := 0; P.from := 0; P.to := MAX(INTEGER);
+		P.dpi := 0; P.color := 0; P.mode := GDI32.MMText;
+		P.color := 0; P.bkColor := 0FFFFFFH; P.textColor := 0;
 		P.textX := 0; P.textY := 0;
 		P.pageW := 0; P.pageH := 0;
 		P.offsX := 0; P.offsY := 0;
-		LoadConfig(P)
+		P.page := 0; P.from := 0; P.to := MAX(INTEGER);
+		P.newPage := FALSE; P.showPage := FALSE
 	END Init;
 
-	PROCEDURE Install*;
-		VAR P: Printer;
+	PROCEDURE InitDoc*(P: DocPrinter);
 	BEGIN
-		NEW(P); Init(P);
+		Init(P); P.gen := "WinPrinter.Install";
+		P.InitMetrics := InitDocMetrics;
+		P.Open := OpenDoc;
+		P.Close := CloseDoc;
+		P.job := 0; P.psdUnit := 0;
+		P.hDevMode := Kernel32.NULL; P.hDevNames := Kernel32.NULL;
+		P.margin.left := 0; P.margin.right := 0;
+		P.margin.top := 0; P.margin.bottom := 0;
+		P.setup := FALSE; LoadConfig(P)
+	END InitDoc;
+
+	PROCEDURE Install*;
+		VAR P: DocPrinter;
+	BEGIN
+		NEW(P); InitDoc(P);
 		Printers.Install(P);
+		WinFonts.printerDC := printerDC
 	END Install;
 
-	PROCEDURE InitPageSetupDlg(P: Printer; VAR page: COMDLG32.PAGESETUPDLG);
-	BEGIN
-		page.size := SIZE(COMDLG32.PAGESETUPDLG);
-		page.hwndOwner := Win32.Display;
-		IF P # NIL THEN
-			page.devMode := P.devMode; page.devNames := P.devNames
-		ELSE
-			page.devMode := Kernel32.NULL; page.devNames := Kernel32.NULL
-		END;
-		page.paperSize.x := 0; page.paperSize.y := 0;
-		page.minMargin.left := 0; page.minMargin.right := 0;
-		page.minMargin.top := 0; page.minMargin.bottom := 0;
-		IF (P # NIL) & (P.psdUnit # 0) THEN
-			page.flags := Kernel32.LongOr(P.psdUnit, COMDLG32.PSDMargins);
-			IF P.psdUnit = COMDLG32.PSDInThousendthsOfInches THEN
-				page.margin.left := (P.margin.left*1000+(P.dpi DIV 2)) DIV P.dpi;
-				page.margin.right := (P.margin.right*1000+(P.dpi DIV 2)) DIV P.dpi;
-				page.margin.top := (P.margin.top*1000+(P.dpi DIV 2)) DIV P.dpi;
-				page.margin.bottom := (P.margin.bottom*1000+(P.dpi DIV 2)) DIV P.dpi
-			ELSIF P.psdUnit = COMDLG32.PSDInHundredthsOfMillimeters THEN
-				page.margin.left := (P.margin.left*2540+(P.dpi DIV 2)) DIV P.dpi;
-				page.margin.right := (P.margin.right*2540+(P.dpi DIV 2)) DIV P.dpi;
-				page.margin.top := (P.margin.top*2540+(P.dpi DIV 2)) DIV P.dpi;
-				page.margin.bottom := (P.margin.bottom*2540+(P.dpi DIV 2)) DIV P.dpi
-			ELSE
-				HALT(99)
-			END
-		ELSE
-			page.flags := 0;
-			page.margin.left := 0; page.margin.right := 0;
-			page.margin.top := 0; page.margin.bottom := 0
-		END;
-		page.hInstance := Kernel.hInstance;
-		page.custData := 0;
-		page.pageSetupHook := Kernel.hInstance;
-		page.pagePaintHook := Kernel.hInstance;
-		page.pageSetupTemplateName := Kernel.hInstance;
-		page.pageSetupTemplate := Kernel.hInstance
-	END InitPageSetupDlg;
-
-	PROCEDURE CopyString(lpString: LONGINT; VAR str: ARRAY OF CHAR);
-		VAR i: LONGINT; ch: CHAR;
-	BEGIN
-		i := 0;
-		SYSTEM.GET(lpString, ch);
-		WHILE ch # 0X DO
-			str[i] := ch; INC(i);
-			INC(lpString); SYSTEM.GET(lpString, ch)
-		END;
-		str[i] := 0X
-	END CopyString;
-
-	PROCEDURE StoreConfig(P: Printer);
-		VAR
-			path, str: ARRAY 256 OF CHAR;
-			adrNames: LONGINT; offs: INTEGER;
-	BEGIN
-		Registry.OberonPath("WinPrinter", path);
-		adrNames := Kernel32.GlobalLock(P.devNames);
-		SYSTEM.GET(adrNames, offs);
-		CopyString(adrNames+offs, str);
-		Registry.SetKeyValue(Registry.CurrentUser, path, "Driver", str);
-		SYSTEM.GET(adrNames+2, offs);
-		CopyString(adrNames+offs, str);
-		Registry.SetKeyValue(Registry.CurrentUser, path, "Device", str);
-		IF P.psdUnit = COMDLG32.PSDInThousendthsOfInches THEN
-			Registry.SetKeyValue(Registry.CurrentUser, path, "Unit", "ThousendthsOfInches")
-		ELSIF P.psdUnit = COMDLG32.PSDInHundredthsOfMillimeters THEN
-			Registry.SetKeyValue(Registry.CurrentUser, path, "Unit", "HundredthsOfMillimeters")
-		ELSE
-			HALT(99)
-		END;
-		Strings.IntToStr(P.margin.left, str); Registry.SetKeyValue(Registry.CurrentUser, path, "Left", str);
-		Strings.IntToStr(P.margin.right, str); Registry.SetKeyValue(Registry.CurrentUser, path, "Right", str);
-		Strings.IntToStr(P.margin.top, str); Registry.SetKeyValue(Registry.CurrentUser, path, "Top", str);
-		Strings.IntToStr(P.margin.bottom, str); Registry.SetKeyValue(Registry.CurrentUser, path, "Bottom", str)
-	END StoreConfig;
-
-	(** Page Setup dialog *)
+	(** Open the printers page setup dialog *)
 	PROCEDURE Setup*;
-		VAR
-			P: Printer;
-			page: COMDLG32.PAGESETUPDLG;
 	BEGIN
-		IF (Printers.current # NIL) & (Printers.current IS Printer) THEN
-			P := Printers.current(Printer)
-		ELSE
-			RETURN
+		IF (Printers.current = NIL) OR ~(Printers.current IS DocPrinter) THEN
+			Install()
 		END;
-		InitPageSetupDlg(P, page);
-		IF COMDLG32.PageSetupDlg(SYSTEM.ADR(page)) = 0 THEN
-			RETURN
-		END;
-		IF Kernel32.Includes(page.flags, COMDLG32.PSDInThousendthsOfInches) THEN
-			P.margin.left := (page.margin.left*P.dpi + 500) DIV 1000;
-			P.margin.right := (page.margin.right*P.dpi + 500) DIV 1000;
-			P.margin.top := (page.margin.top*P.dpi + 500) DIV 1000;
-			P.margin.bottom := (page.margin.bottom*P.dpi + 500) DIV 1000;
-			P.psdUnit := COMDLG32.PSDInThousendthsOfInches
-		ELSIF Kernel32.Includes(page.flags, COMDLG32.PSDInHundredthsOfMillimeters) THEN
-			P.margin.left := (page.margin.left*P.dpi + 1270) DIV 2540;
-			P.margin.right := (page.margin.right*P.dpi + 1270) DIV 2540;
-			P.margin.top := (page.margin.top*P.dpi + 1270) DIV 2540;
-			P.margin.bottom := (page.margin.bottom*P.dpi + 1270) DIV 2540;
-			P.psdUnit := COMDLG32.PSDInHundredthsOfMillimeters
-		ELSE
-			HALT(99)
-		END;
-		P.devMode := page.devMode; P.devNames := page.devNames;
-		InitMetrics(P); P.setup := TRUE;
-		StoreConfig(P); Printers.Install(P)
+		IF (Printers.current # NIL) & (Printers.current IS DocPrinter) THEN
+			setupDoc(Printers.current(DocPrinter), FALSE)
+		END
 	END Setup;
 
-	PROCEDURE [stdcall] *WinFontEnum(lpelf, lpntm, type, data: LONGINT): LONGINT;
-		VAR lf: GDI32.ENUMLOGFONT;
+	(** Reset stored printer settings and choose a new printer *)
+	PROCEDURE Reset*;
+		VAR path: FileDir.FileName;
 	BEGIN
-		IF Kernel32.Includes(type, GDI32.TrueTypeFontType) THEN
-			SYSTEM.MOVE(lpelf, SYSTEM.ADR(lf), SIZE(GDI32.ENUMLOGFONT));
-			Texts.WriteString(W, lf.facename); Texts.WriteLn(W)
+		IF (Printers.current # NIL) & (Printers.current IS DocPrinter) THEN
+			Registry.OberonPath("Printer\WinPrinter", path);
+			Registry.DeletePath(Registry.CurrentUser, path);
+			setupDoc(Printers.current(DocPrinter), FALSE)
+		END
+	END Reset;
+
+	PROCEDURE [WINAPI] *WinFontEnum(lpelf: GDI32.EnumLogFont; lpntm: GDI32.TextMetric; FontType: SET; lParam: User32.LParam): LONGINT;
+		VAR name: FileDir.FileName;
+	BEGIN
+		IF GDI32.TrueTypeFontType IN FontType THEN
+			COPY(lpelf.elfFullName, name);
+			Texts.WriteString(W, name); Texts.WriteLn(W)
 		END;
 		RETURN 1
 	END WinFontEnum;
 
 	(** list available font families *)
 	PROCEDURE ListFonts*;
-		VAR hDC: LONGINT;
+		VAR hDC: User32.HDC;
 	BEGIN
 		hDC := PrinterDC(NIL);
-		GDI32.EnumFontFamilies(hDC, Kernel32.NULL, WinFontEnum, Kernel32.NULL);
-		GDI32.DeleteDC(hDC);
+		GDI32.EnumFontFamilies(hDC, NIL, WinFontEnum, 0);
+		ASSERT(GDI32.DeleteDC(hDC) # Kernel32.False, 32);
 		Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
 	END ListFonts;
 
-	PROCEDURE init();
-		VAR
-			class: FileDir.FileName;
-			style: SET;
-			size: LONGINT;
+	(** Start printing using a device context given by an external application. *)
+	PROCEDURE StartPrint*(hDC: User32.HDC; Unit, X, Y, W, H: LONGINT): Printer;
+		VAR P: ExtPrinter;
 	BEGIN
-		ClearFontCache(FALSE); printer := FALSE;
-		ParseName(Fonts.Default.name, default, size, style, class);
-		Texts.OpenWriter(W)
-	END init;
+		WinFonts.printerDC := printerDC;
+		NEW(P); Init(P); P.hDC := hDC;
+		P.oldP := Printers.current;
+		P.nSavedDC := GDI32.SaveDC(P.hDC);
+		P.mode := GDI32.GetMapMode(P.hDC);
+		P.pageW := X+W; P.pageH := Y+H;
+		P.Width := SHORT(P.pageW); P.Height := SHORT(P.pageH);
+		P.offsX := 0; P.offsY := 0;
+		P.FrameX := SHORT(X); P.FrameY := 0;
+		P.FrameW := SHORT(W); P.FrameH := SHORT(H);
+		P.Unit := Unit; (* V.dsc.W*Display.Unit DIV print.W *)
+		P.dpi := 914400 DIV P.Unit;
+		P.newPage := TRUE; P.showPage := FALSE;
+		P.color := 0; P.bkColor := 0FFFFFFH; P.textColor := 0;
+		P.hdcMem := GDI32.CreateCompatibleDC(P.hDC);
+		Printers.current := P; Printers.Install(P);
+		P.res := 0; RETURN P
+	END StartPrint;
+
+	(** End printing started with StartPrint. IF p.res = -1 then no print commands were called. *)
+	PROCEDURE EndPrint*(P: Printer);
+	BEGIN
+		WITH P: ExtPrinter DO
+			IF P.hdcMem # Kernel32.NULL THEN
+				GDI32.DeleteDC(P.hdcMem); P.hdcMem := Kernel32.NULL
+			END;
+			GDI32.GdiFlush();
+			GDI32.RestoreDC(P.hDC, P.nSavedDC);
+			Printers.Install(P.oldP);
+			IF P.page # 1 THEN P.res := -1 END
+		END
+	END EndPrint;
 
 BEGIN
-	init()
+	Texts.OpenWriter(W)
 END WinPrinter.
 
 PrinterInfo.Panel

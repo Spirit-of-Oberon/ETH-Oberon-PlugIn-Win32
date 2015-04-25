@@ -1,17 +1,5 @@
-﻿(* OBERON System 3, Release 2.3.
-
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
-
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
-
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
+﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE DOSBackup; (** non-portable / source: Win32.DOSBackup.Mod *)	(* jm 4.1.95, ejz 8.6.95 *)
 
@@ -336,12 +324,11 @@ END NextMapping;
 
 PROCEDURE Available(size: LONGINT): BOOLEAN;
 VAR
-	ret, SectorsPerCluster, BytesPerSector, FreeClusters, Clusters, reqClusters: LONGINT;
+	SectorsPerCluster, BytesPerSector, FreeClusters, Clusters, reqClusters: LONGINT;
 	drv: ARRAY 5 OF CHAR;
 BEGIN
 	COPY(path, drv); drv[3] := 0X;
-	ret := Kernel32.GetDiskFreeSpace(SYSTEM.ADR(drv), SectorsPerCluster, BytesPerSector, FreeClusters, Clusters);
-	IF ret # Kernel32.False THEN
+	IF Kernel32.GetDiskFreeSpace(drv, SectorsPerCluster, BytesPerSector, FreeClusters, Clusters) # Kernel32.False THEN
 		reqClusters := size DIV (SectorsPerCluster*BytesPerSector);
 		IF (size MOD (SectorsPerCluster*BytesPerSector)) # 0 THEN
 			INC(reqClusters)
@@ -364,10 +351,10 @@ BEGIN COPY(path, pathf);
 	pathf[j] := 0X
 END AddDrive;
 
-PROCEDURE Enumerator(path, dosName: ARRAY OF CHAR; time, date, size: LONGINT; isdir: BOOLEAN);
+PROCEDURE Enumerator(path, dosName: ARRAY OF CHAR; time, date, size: LONGINT; attrs: SET);
 VAR p, q: Map; i: INTEGER; name: ARRAY 64 OF CHAR;
 BEGIN
-	IF ~isdir THEN
+	IF ~(FileDir.Directory IN attrs) THEN
 		
 		COPY(dosName, name);
 		IF dosName[0] = HFP THEN
@@ -392,7 +379,7 @@ BEGIN
 END Enumerator;
 
 PROCEDURE ReadMap(VAR m: Map);
-VAR map: ARRAY 256 OF CHAR;  dos, oberon: ARRAY 64 OF CHAR; F: Files.File; R: Files.Rider; p, q: Map;
+VAR map: ARRAY 256 OF CHAR; dos, oberon: ARRAY 64 OF CHAR; F: Files.File; R: Files.Rider; p, q: Map;
 	i: INTEGER;
 BEGIN tmpMap := NIL;
 	m := NIL; q:= NIL;
@@ -454,16 +441,32 @@ END OpenText;
 
 PROCEDURE Directory*;
 VAR
-	T: Texts.Text;
-	m, p: Map;
-	s: ARRAY 256 OF CHAR;
-	i: INTEGER;
+	T: Texts.Text; S: Texts.Scanner;
+	m, p: Map; time, date: LONGINT;
+	s: ARRAY 256 OF CHAR; F: Files.File;
+	i: INTEGER; detail: BOOLEAN;
 BEGIN
+	Texts.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos); Texts.Scan(S);
+	detail := (S.class = Texts.Char) & (S.c = Oberon.OptionChar);
 	NEW(T); Texts.Open(T, "");
 	ReadMap(m);
 	p := m;
 	WHILE p # NIL DO
-		Texts.WriteString(W, p.oberon); Texts.WriteLn(W);
+		Texts.WriteString(W, p.oberon);
+		IF detail THEN
+			COPY(path, s); AddDrive(s, p.dos);
+			F := Files.Old(s);
+			IF F # NIL THEN
+				Files.GetDate(F, time, date);
+				Texts.WriteDate(W, time, date);
+				Texts.WriteString(W, "   ");
+				Texts.WriteInt(W, Files.Length(F), 0);
+				Texts.WriteString(W, "   [");
+				Texts.WriteString(W, p.dos);
+				Texts.Write(W, "]")
+			END
+		END;
+		Texts.WriteLn(W);
 		p := p.next
 	END;
 	Texts.Append(T, W.buf);

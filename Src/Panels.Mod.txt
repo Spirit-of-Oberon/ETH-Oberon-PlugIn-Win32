@@ -1,22 +1,10 @@
-﻿(* OBERON System 3, Release 2.3.
-
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
-
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
-
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
+﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE Panels; (** portable *)	(* jm 19.1.95 *)
 
-(**Implementation of a panel container.
-*)
+(** Implementation of a panel container. *)
+
 (* some nice to haves:
 	- control over the new focus point
 	- TranslateToGadgets returns lists of gadgets
@@ -176,7 +164,7 @@ PROCEDURE BoundingBox*(list: Display.Frame; VAR x, y, w, h, count: INTEGER);
 VAR f: Display.Frame; r, t: INTEGER;
 BEGIN
 	x := 32000; y := 32000; r := -32000; t := -32000;
-	f := list;  count := 0;
+	f := list; count := 0;
 	WHILE f # NIL DO
 		x := Min(x, f.X); y := Min(y, f.Y); r := Max(r, f.X + f.W - 1); t := Max(t, f.Y + f.H - 1); w := r - x + 1; h := t - y + 1;
 		INC(count);
@@ -283,7 +271,7 @@ END StorePanel;
 PROCEDURE Explain;
 BEGIN
 	IF (Modules.res # 0) & (Modules.resMsg # "") THEN
-		Texts.WriteString(W, " (");  Texts.WriteString(W, Modules.resMsg);  Texts.Write(W, ")")
+		Texts.WriteString(W, " ("); Texts.WriteString(W, Modules.resMsg); Texts.Write(W, ")")
 	END
 END Explain;
 
@@ -368,7 +356,7 @@ BEGIN
 		t := t.next; t0 := t0.next
 	END;
 	
-	to.focused := FALSE; to.time := 0; to.grid := from.grid;
+	to.focused := FALSE; to.time := Input.Time()-MAX(INTEGER); to.grid := from.grid;
 	to.borderW := from.borderW; to.state0 := from.state0;
 	to.do := from.do;
 	IF (from.pict # NIL) & (M.id = Objects.deep) THEN
@@ -388,12 +376,13 @@ BEGIN
 		IF M.name = "Gen" THEN M.class := Objects.String; COPY("Panels.NewPanel", M.s); M.res := 0
 		ELSIF M.name = "LineupHY" THEN M.class := Objects.Int; M.i := F.H - Fonts.Default.height; M.res := 0
 		ELSIF M.name = "Locked" THEN M.class := Objects.Bool; M.b := frozen IN F.state0; M.res := 0
-		ELSIF M.name = "Color" THEN M.class := Objects.Int; M.i := F.col; M.res := 0
+		ELSIF M.name = "Color" THEN
+			IF (M.class = Objects.Int) & (M.i >= 0) & (M.i <= 255) THEN F.col := SHORT(M.i); M.res := 0 END
 		ELSIF M.name = "Flat" THEN M.class := Objects.Bool; M.b := flatlook IN F.state0; M.res := 0
-		ELSIF (M.name = "FocusX") & F.focused THEN  M.class := Objects.Int; M.i := F.focusx; M.res := 0
-		ELSIF (M.name = "FocusY") & F.focused THEN  M.class := Objects.Int; M.i := F.focusy; M.res := 0
-		ELSIF M.name = "Border" THEN  M.class := Objects.Int; M.i := F.borderW; F.mask := NIL; M.res := 0
-		ELSIF M.name = "GridSnap" THEN  M.class := Objects.Int; M.i := F.grid; M.res := 0
+		ELSIF (M.name = "FocusX") & F.focused THEN M.class := Objects.Int; M.i := F.focusx; M.res := 0
+		ELSIF (M.name = "FocusY") & F.focused THEN M.class := Objects.Int; M.i := F.focusy; M.res := 0
+		ELSIF M.name = "Border" THEN M.class := Objects.Int; M.i := F.borderW; F.mask := NIL; M.res := 0
+		ELSIF M.name = "GridSnap" THEN M.class := Objects.Int; M.i := F.grid; M.res := 0
 		ELSIF M.name = "Texture" THEN M.class := Objects.Bool; M.b := texture IN F.state0; M.res := 0
 		ELSE Gadgets.framehandle(F, M);
 		END;
@@ -455,7 +444,7 @@ BEGIN
 		A.id := Display.move; A.mode := Display.state; Objects.Stamp(A);
 (* A.dX := F.X - M.X; A.dY := (F.Y + F.H) - (M.Y + M.H); *) A.dW := 0; A.dH:= 0;
 A.dX := M.dX; A.dY := M.dY;
-		A.x := 0;  A.y := 0; f:= F.dsc;
+		A.x := 0; A.y := 0; f:= F.dsc;
 		WHILE f # NIL DO
 			A.X := f.X + A.dX; A.Y := f.Y + A.dY; A.W := f.W; A.H := f.H; A.F := f; A.res := -1;
 			ToChild(F, f, x, y, A); f := f.next
@@ -509,7 +498,7 @@ BEGIN
 			(* should clip against here *)
 			D.u := f.X; D.v := f.Y; D.w := f.W; D.h := f.H; ClipAgainst(D.u, D.v, D.w, D.h, u, v, w, h);
 			D.u := D.u - f.X; D.v := D.v - (f.Y + f.H - 1); D.dlink := dlink;
-			D.x := 0;  D.y := 0;
+			D.x := 0; D.y := 0;
 			D.device := Display.screen; D.id := Display.area; D.F := f; D.res := -1; ToChild(F, f, x, y, D)
 		END;
 		f := f.next
@@ -550,7 +539,7 @@ BEGIN
 	END
 END DrawHull;
 
-(** Recalculate and update all invalid (NIL) masks of children. partialupdate modifies the existing backgound mask to reflect the current situation. buildback recreates the whole background mask from scratch. Both options are normally used mutual exclusive. Partial update is faster if few masks were invalidated, otherwise use buildback.  Partial update requires the use of InvalidateMasks to keep the background mask valid. When in doubt simply use buildback. *)
+(** Recalculate and update all invalid (NIL) masks of children. partialupdate modifies the existing backgound mask to reflect the current situation. buildback recreates the whole background mask from scratch. Both options are normally used mutual exclusive. Partial update is faster if few masks were invalidated, otherwise use buildback. Partial update requires the use of InvalidateMasks to keep the background mask valid. When in doubt simply use buildback. *)
 PROCEDURE UpdateMasks*(F: Panel; partialupdate, buildback: BOOLEAN);
 VAR f, o: Display.Frame; O: Display3.OverlapMsg; allTransp: BOOLEAN; R: Display3.Mask;
 	fx, fy, fw, fh: INTEGER;
@@ -560,7 +549,7 @@ BEGIN
 		f := F.dsc; O.M := NIL; O.F := NIL; O.x := 0; O.y := 0; O.res := -1; Objects.Stamp(O);
 		WHILE f # NIL DO O.res := -1; f.handle(f, O); f := f.next END
 	ELSE
-		f := F.dsc; allTransp := TRUE; (*  KR *)
+		f := F.dsc; allTransp := TRUE; (* KR *)
 		WHILE (f # NIL) & allTransp DO 
 			allTransp := allTransp & (f IS Gadgets.Frame) & (Gadgets.transparent IN f(Gadgets.Frame).state);
 			f := f.next
@@ -629,7 +618,7 @@ BEGIN
 		IF Effects.Intersect(x, y, w, h, f.X, f.Y, f.W, f.H) & (f IS Gadgets.Frame) THEN
 			IF ~(Gadgets.transparent IN f(Gadgets.Frame).state) & (F.back # NIL) THEN
 				x0 := f.X; y0 := f.Y; w0 := f.W; h0 := f.H;
-				ClipAgainst(x0, y0, w0, h0, F.borderW,  -F.H + F.borderW + 1, F.W - F.borderW * 2, F.H - F.borderW * 2);
+				ClipAgainst(x0, y0, w0, h0, F.borderW, -F.H + F.borderW + 1, F.W - F.borderW * 2, F.H - F.borderW * 2);
 				Display3.Subtract(F.back, x0, y0, w0, h0)
 			END;
 			IF (f # except) THEN O.F := f; f.handle(f, O); O.res := -1; END;
@@ -659,7 +648,7 @@ BEGIN
 			GrowHull(F, f.X, f.Y, f.W, f.H);
 		END;
 		M.F := f; M.res := -1; M.dlink := NIL; Objects.Stamp(M);
-		M.x := 0;  M.y := 0;  M.time := 0;
+		M.x := 0; M.y := 0; M.time := Input.Time();
 		ToChild(F, f, x, y, M);
 		f := f.next;
 	END;
@@ -735,7 +724,7 @@ BEGIN
 			(* should clip against here *)
 			D.u := f.X; D.v := f.Y; D.w := f.W; D.h := f.H; ClipAgainst(D.u, D.v, D.w, D.h, u, v, w, h);
 			D.u := D.u - f.X; D.v := D.v - (f.Y + f.H - 1); D.dlink := dlink;
-			D.x := 0;  D.y := 0;
+			D.x := 0; D.y := 0;
 			D.device := Display.screen; D.id := Display.area; D.F := f; D.res := -1; ToChild(F, f, x, y, D)
 		END;
 		f := f.next
@@ -855,8 +844,8 @@ PROCEDURE GetSelection*(VAR obj: Objects.Object; VAR parent: Display.Frame; VAR 
 VAR S: Display.SelectMsg;
 BEGIN
 	obj := NIL; parent := NIL;
-	S.id := Display.get; S.time := 0; S.sel := NIL; S.obj := NIL; S.F := NIL; Display.Broadcast(S); (* object selection *)
-	IF S.time > 0 THEN obj := S.obj; parent := S.sel; time := S.time ELSE time := -1 END	
+	S.id := Display.get; S.time := -1; S.sel := NIL; S.obj := NIL; S.F := NIL; Display.Broadcast(S); (* object selection *)
+	IF S.time # -1 THEN obj := S.obj; parent := S.sel; time := S.time ELSE time := -1 END	
 END GetSelection;
 
 PROCEDURE PrintPanel(F: Panel; x, y: INTEGER; dlink: Objects.Object);
@@ -881,13 +870,12 @@ BEGIN
 	ELSIF flatlook IN F.state0 THEN
 		Printer3.ReplConst(R, F.col, x, y, Pr(F.W), Pr(F.H), Display.replace)
 	ELSE
-		Printer3.FilledRect3D(R, Display3.topC, Display3.bottomC, F.col, x, y, Pr(F.W), Pr(F.H), 5, Display.replace)
+		Printer3.FilledRect3D(R, Display3.topC, Display3.bottomC, F.col, x, y, Pr(F.W), Pr(F.H), Pr(1), Display.replace)
 	END;
 	f := F.dsc; y := y + Pr(F.H) - 1;
 	WHILE (f # NIL) & (Printer.res = 0) DO
 		P.res := -1; Objects.Stamp(P); P.device := Display.printer; P.id := Display.full; P.F := f; P.dlink := F;
-		P.x := x + SHORT(LONG(f.X) * Display.Unit DIV Printer.Unit);
-		P.y := y + SHORT(LONG(f.Y) * Display.Unit DIV Printer.Unit);
+		P.x := x + Pr(f.X); P.y := y + Pr(f.Y);
 		f.handle(f, P); f := f.next
 	END;
 END PrintPanel;
@@ -922,7 +910,7 @@ BEGIN
 	WHILE T # NIL DO
 		IF T = f THEN
 			IF T0 # NIL THEN T0.next := f.next; f.next := NIL;
-			ELSE F.dsc := f.next; f.next := NIL;  
+			ELSE F.dsc := f.next; f.next := NIL;
 			END;
 			RETURN
 		END;
@@ -1005,14 +993,14 @@ BEGIN
 						END
 					ELSIF M IS Display.SelectMsg THEN
 						WITH M: Display.SelectMsg DO
-							IF (M.id = Display.get) THEN
-								IF (F.time > M.time) & (F.time # 0) THEN
+							IF M.id = Display.get THEN
+								IF (((M.time-F.time) < 0) OR (M.time = -1)) & (F.time # -1) THEN
 									GetPanelSelection(F, t);
-									IF t # NIL THEN M.time := F.time; M.obj := t; M.sel := F END
+									IF t # NIL THEN M.time := F.time; M.obj := t; M.sel := F ELSE ToChildren(F, M) END
 								ELSE ToChildren(F, M)
 								END
 							ELSE Gadgets.framehandle(F, M)
-							END;
+							END
 						END
 					ELSIF M IS Display.ConsumeMsg THEN
 						WITH M: Display.ConsumeMsg DO
@@ -1048,7 +1036,7 @@ BEGIN
 					ELSIF M IS Oberon.ControlMsg THEN
 						WITH M: Oberon.ControlMsg DO
 							IF M.id = Oberon.neutralize THEN
-								SetChildren(F, x, y, Display.reset); F.time := 0;
+								SetChildren(F, x, y, Display.reset); F.time := Input.Time()-MAX(INTEGER);
 								IF F.focused THEN F.focused := FALSE; F.do.UpdateCaret(F) END;
 							ELSIF M.id = Oberon.defocus THEN
 								IF F.focused THEN F.focused := FALSE; F.do.UpdateCaret(F) END;
@@ -1100,7 +1088,7 @@ BEGIN
 							WITH M: Display.SelectMsg DO
 								IF M.id = Display.set THEN F.time := Oberon.Time(); ToChildren(F, M)
 								ELSIF M.id = Display.reset THEN
-									GetPanelSelection(F, t); IF t = NIL THEN F.time := 0; END;
+									GetPanelSelection(F, t); IF t = NIL THEN F.time := Input.Time()-MAX(INTEGER); END;
 									ToChildren(F, M)
 								END
 							END
@@ -1159,8 +1147,8 @@ BEGIN
 END PanelHandler;
 
 PROCEDURE InitPanel*(P: Panel);
-BEGIN P.handle := PanelHandler; P.dsc := NIL; P.W := 128; P.H := 128; P.focused := FALSE; P.time := 0;
-	P.borderW := DefBorderWidth; P.grid := defaultgrid; ResetHull(P);
+BEGIN P.handle := PanelHandler; P.dsc := NIL; P.W := 128; P.H := 128; P.focused := FALSE;
+	P.time := Input.Time()-MAX(INTEGER); P.borderW := DefBorderWidth; P.grid := defaultgrid; ResetHull(P);
 	P.do := methods; P.col := Display3.groupC
 END InitPanel;
 
@@ -1184,9 +1172,9 @@ END NewPictPanel;
 PROCEDURE ToFront*;
 VAR M: Display.SelectMsg; b: Objects.Object; P: Gadgets.PriorityMsg;
 BEGIN
-	M.id := Display.get; M.time := 0; M.obj := NIL; M.sel := NIL; M.F := NIL; Display.Broadcast(M);
-	IF M.time > 0 THEN
-		b := M.obj;  
+	M.id := Display.get; M.time := -1; M.obj := NIL; M.sel := NIL; M.F := NIL; Display.Broadcast(M);
+	IF M.time # -1 THEN
+		b := M.obj;
 		WHILE b # NIL DO
 			P.id := Gadgets.top; P.F := b(Display.Frame); P.passon := TRUE; Display.Broadcast(P);
 			b := b.slink
@@ -1194,13 +1182,13 @@ BEGIN
 	END;
 END ToFront;
 
-(**  Command to take the selection of a panel to the back. *)
+(** Command to take the selection of a panel to the back. *)
 PROCEDURE ToBack*;
 VAR M: Display.SelectMsg; b: Objects.Object; P: Gadgets.PriorityMsg;
 BEGIN
-	M.id := Display.get; M.time := 0; M.obj := NIL; M.sel := NIL; M.F := NIL; Display.Broadcast(M);
-	IF M.time > 0 THEN
-		b := M.obj;  
+	M.id := Display.get; M.time := -1; M.obj := NIL; M.sel := NIL; M.F := NIL; Display.Broadcast(M);
+	IF M.time # -1 THEN
+		b := M.obj;
 		WHILE b # NIL DO
 			P.id := Gadgets.bottom; P.F := b(Display.Frame); P.passon := TRUE; Display.Broadcast(P);
 			b := b.slink
@@ -1227,9 +1215,9 @@ BEGIN
 			Texts.WriteString(W, "  picture not found"); Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf);
 			P := NIL
 		END;
-		M.id := Display.get; M.time := 0; M.obj := NIL; M.sel := NIL; M.F := NIL; Display.Broadcast(M);
-		IF M.time > 0 THEN
-			b := M.obj;  
+		M.id := Display.get; M.time := -1; M.obj := NIL; M.sel := NIL; M.F := NIL; Display.Broadcast(M);
+		IF M.time # -1 THEN
+			b := M.obj;
 			WHILE b # NIL DO
 				IF b IS Panel THEN
 					WITH b: Panel DO b.pict := P; Gadgets.Update(b) END;
@@ -1253,9 +1241,9 @@ VAR M: Display.SelectMsg; obj, n: Objects.Object; x, y, w, h, maxW, maxH, px , p
 	END Score;
 	
 BEGIN
-	M.id := Display.get; M.time := 0; M.sel := NIL; M.obj := NIL; M.F := NIL;
+	M.id := Display.get; M.time := -1; M.sel := NIL; M.obj := NIL; M.F := NIL;
 	Display.Broadcast(M);
-	IF (M.time > 0) & (M.obj # NIL) THEN
+	IF (M.time # -1) & (M.obj # NIL) THEN
 		BoundingBox(M.obj(Display.Frame), x, y, w, h, count);
 		
 		vertical := (type = "verticalcenter") OR (type = "vertical");
@@ -1297,11 +1285,11 @@ BEGIN
 				ELSIF type = "horizontal" THEN A.X := px; INC(px, obj.W)
 				ELSIF type = "vertical" THEN A.Y := py - obj.H + 1; DEC(py, obj.H)
 				END;
-				A.dX := A.X - obj.X; A.dY := A.Y - obj.Y; A.dW := A.W - obj.W; A.dH := A.H - obj.H; Display.Broadcast(A);
+				A.dX := A.X - obj.X; A.dY := A.Y - obj.Y; A.dW := A.W - obj.W; A.dH := A.H - obj.H; Display.Broadcast(A)
 			END; 
-			obj := n;
+			obj := n
 		END
-	ELSE Texts.WriteString(W, "  no selection "); Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf);
+	ELSE Texts.WriteString(W, "  no selection "); Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
 	END
 END Align0;
 
@@ -1331,12 +1319,12 @@ BEGIN
 			WITH newobj: Gadgets.Frame DO
 				IF Gadgets.Recursive(F, newobj) THEN
 					Texts.WriteString(W,"Not allowed, will cause recursive structures");
-					Texts.Append(Oberon.Log, W.buf); ok := FALSE;
-				ELSIF  (newobj.lib # NIL) & (newobj.lib.name # "") & (F.lib # newobj.lib) THEN
+					Texts.Append(Oberon.Log, W.buf); ok := FALSE
+				ELSIF (newobj.lib # NIL) & (newobj.lib.name # "") & (F.lib # newobj.lib) THEN
 					Texts.WriteString(W," sorry, cannot insert public object directly in panel; make a copy first");
 					Texts.WriteLn(W);
-					Texts.Append(Oberon.Log, W.buf); ok := FALSE;
-				END;
+					Texts.Append(Oberon.Log, W.buf); ok := FALSE
+				END
 			END;
 			(* Append to list, can be optimized a little *)
 			IF ok THEN
@@ -1345,7 +1333,7 @@ BEGIN
 				ELSE t := list; WHILE t.slink # NIL DO t := t.slink END; t.slink := newobj
 				END
 			END
-		END;
+		END
 	END;
 	RETURN ok
 END NewChildrenOK;
@@ -1362,7 +1350,7 @@ BEGIN
 	WHILE t # NIL DO
 		t.handle(t, C); t0.slink := C.obj;
 		t := t.slink; t0 := t0.slink
-	END;
+	END
 END CopyObjList;
 
 (** Recalls last deleted children to the caret. *)
@@ -1371,8 +1359,8 @@ VAR M: Display.ConsumeMsg;
 BEGIN
 	IF (recall # NIL) THEN
 		M.id := Display.integrate; M.F := NIL; CopyObjList(Objects.deep, recall, M.obj);
-		Display.Broadcast(M);
-	END;
+		Display.Broadcast(M)
+	END
 END Recall;
 
 
@@ -1381,13 +1369,12 @@ END Recall;
 PROCEDURE RestoreBackGround*(F: Panel; x, y: INTEGER; R: Display3.Mask);
 BEGIN
 	IF F.pict # NIL THEN
-		
 		IF ~(texture IN F.state0) THEN
 			IF F.pict.width < F.W THEN
 				Display3.FillPattern(R, 15, Display3.selectpat, x, y, x + F.pict.width, y, F.W - F.pict.width, F.H, Display.replace);
 			END;
 			IF F.pict.height < F.H THEN
-				Display3.FillPattern(R, 15, Display3.selectpat, x, y, x , y, F.W, F.H - F.pict.height, Display.replace);
+				Display3.FillPattern(R, 15, Display3.selectpat, x, y, x , y, F.W, F.H - F.pict.height, Display.replace)
 			END;
 			Display3.Pict(R, F.pict, 0, 0, F.pict.width, F.pict.height, x, y + F.H - F.pict.height, Display.replace)
 		ELSE Display3.ReplPict(R, F.pict, x, y, x, y, F.W, F.H, Display.replace)
@@ -1405,7 +1392,7 @@ END RestoreCaret;
 
 PROCEDURE UpdateCaret*(F: Panel);
 BEGIN
-	GrowHull(F, F.focusx - markW, F.focusy - markW, markW*2+1, markW*2+1); DrawHull(F);
+	GrowHull(F, F.focusx - markW, F.focusy - markW, markW*2+1, markW*2+1); DrawHull(F)
 END UpdateCaret;
 
 PROCEDURE TrackCaret*(F: Panel; VAR M: Oberon.InputMsg);
@@ -1421,12 +1408,11 @@ BEGIN
 	M.res := 0;
 	
 	IF keysum = {2, 1} THEN (* copy to caret *)
-		texttime := 0;
 		GetSelection(obj, parent, objtime); Oberon.GetSelection(text, beg, end, texttime);
-		IF (obj # NIL) & (objtime > texttime) THEN (* use the object selection *)
+		IF (obj # NIL) & (((texttime-objtime) < 0) OR (texttime = -1)) THEN (* use the object selection *)
 			CopyObjList(Objects.shallow, obj, newobj);
 			F.do.InsertFrames(F, F.focusx, F.focusy, newobj);
-		ELSIF (texttime > 0) & (texttime > objtime) THEN (* use the text selection *)
+		ELSIF (texttime # -1) & (((objtime-texttime) < 0) OR (objtime = -1)) THEN (* use the text selection *)
 			NEW(buf); Texts.OpenBuf(buf);
 			Texts.Save(text, beg, end, buf);
 			NEW(T0); Texts.Open(T0, "");
@@ -1453,14 +1439,14 @@ BEGIN
 		IF f IS Gadgets.Frame THEN
 			IF Inside(f) THEN
 				IF ~(Gadgets.selected IN f(Gadgets.Frame).state) THEN
-					M.x := 0;  M.y := 0;
+					M.x := 0; M.y := 0;
 					M.id := Display.set; M.res := -1; M.F := f; ToChild(F, f, x, y, M);
 					GrowHull(F, f.X, f.Y, f.W, f.H);
 				END;
 				b := TRUE; 
 			ELSE
 				IF Gadgets.selected IN f(Gadgets.Frame).state THEN
-					M.x := 0;  M.y := 0;
+					M.x := 0; M.y := 0;
 					M.id := Display.reset; M.res := -1; M.F := f; ToChild(F, f, x, y, M); 
 					GrowHull(F, f.X, f.Y, f.W, f.H);
 				END;
@@ -1469,12 +1455,12 @@ BEGIN
 		 f := f.next;
 	END;
 	DrawHull(F); 
-	IF b THEN F.time := Oberon.Time(); ELSE F.time := 0; END;
+	IF b THEN F.time := Oberon.Time(); ELSE F.time := Input.Time()-MAX(INTEGER); END;
 END SelectArea;
 
 PROCEDURE *SelectHandler(mx, my, x, y, w, h: INTEGER; keysum: SET);
 BEGIN
-	SelectArea(tmpP, px, py, sx - px, y - (py  + tmpP.H - 1), sw, h);
+	SelectArea(tmpP, px, py, sx - px, y - (py + tmpP.H - 1), sw, h);
 	SelectArea(tmpP, px, py, x - px, y - (py + tmpP.H - 1), w, h);
 	sx := x; sy := y; sw := w; sh := h;
 END SelectHandler;
@@ -1484,7 +1470,7 @@ PROCEDURE KillChildren*(F: Panel; objlist: Objects.Object);
 VAR f: Objects.Object; A: Display.ControlMsg;
 BEGIN
 	IF objlist # NIL THEN
-		F.time := 0;
+		F.time :=Input.Time()-MAX(INTEGER);
 		A.id := Display.remove; A.F := objlist(Display.Frame); Display.Broadcast(A); (* <<< remove everything *)
 		recall := objlist; (* update recall list *)
 		
@@ -1529,10 +1515,10 @@ BEGIN
 	x := M.x + F.X; y := M.y + F.Y;
 	
 	S.F := child; S.res := -1; S.dlink := NIL; ResetHull(F);
-	S.x := 0;  S.y := 0;
+	S.x := 0; S.y := 0;
 	IF Gadgets.selected IN child.state THEN S.id := Display.reset; ToChild(F, child, x, y, S);
 		GetPanelSelection(F, t);
-		IF t = NIL THEN F.time := 0; END;
+		IF t = NIL THEN F.time := Input.Time()-MAX(INTEGER); END;
 	ELSE S.id := Display.set; ToChild(F, child, x, y, S); F.time := Oberon.Time()
 	END;
 	GrowHull(F, child.X, child.Y, child.W, child.H); DrawHull(F);
@@ -1546,7 +1532,7 @@ BEGIN
 	ELSE
 		IF keysum = {0, 2} THEN (* RL delete selection *)
 			GetPanelSelection(F, t); KillChildren(F, t)
-		ELSIF keysum = {0, 1} THEN  (* RM copy to focus *)
+		ELSIF keysum = {0, 1} THEN (* RM copy to focus *)
 			GetPanelSelection(F, t);
 			IF t # NIL THEN
 				CopyObjList(Objects.shallow, t, newobj);
@@ -1597,7 +1583,7 @@ BEGIN
 	
 	(* F.do.ModifyChild(F, f, u, v, TRUE) *)
 	A.id := Display.move; A.mode := Display.state; A.x := 0; A.y := 0; A.X := u; A.Y := v; A.W := f.W; A.H := f.H;
-	A.dX := 0;  A.dY := 0;  A.dW := 0;  A.dH := 0;
+	A.dX := 0; A.dY := 0; A.dW := 0; A.dH := 0;
 	A.res := -1; A.F := f; A.dlink := NIL;
 	Objects.Stamp(A);
 	f.handle(f, A);

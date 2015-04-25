@@ -1,17 +1,5 @@
-﻿(* OBERON System 3, Release 2.3.
-
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
-
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
-
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
+﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE Gages; (** portable *)	(* kr/ jm 21.12.94 *)
 
@@ -94,12 +82,12 @@ VAR M: Gadgets.UpdateMsg; tm: LONGINT;
 BEGIN
 	INC(load); tm := Oberon.Time();
 	IF tm - laptime > Input.TimeUnit DIV 2 THEN			
-		Lap.val := (tm - laptime) * 1000  DIV Input.TimeUnit;
+		Lap.val := (tm - laptime) * 1000 DIV Input.TimeUnit;
 		Gadgets.Update(Lap)
 	END;
 	laptime := tm;
-	IF tm - loadtime > Input.TimeUnit THEN  
-		IF tm - loadtime > Input.TimeUnit*3 DIV 2 THEN load  := 0
+	IF tm - loadtime > Input.TimeUnit THEN
+		IF tm - loadtime > Input.TimeUnit*3 DIV 2 THEN load := 0
 		ELSE load := load * Input.TimeUnit DIV (tm - loadtime)
 		END;
 		IF load > maxLoad THEN maxLoad := load END;
@@ -127,7 +115,7 @@ END Deinstall;
 PROCEDURE AddPoint (F: Frame; x: LONGINT);
 VAR i: INTEGER;
 BEGIN
-	IF F.W -2 > Max THEN F.maxPoints := Max ELSE F.maxPoints  := F.W -2 END;
+	IF F.W -2 > Max THEN F.maxPoints := Max ELSE F.maxPoints := F.W -2 END;
 	F.points[F.end] := x;
 	F.end := (F.end + 1) MOD F.maxPoints;
 	IF F.end = F.beg THEN F.beg := (F.beg + 1) MOD F.maxPoints END;
@@ -149,8 +137,8 @@ BEGIN
 	i := F.beg; j := 0;
 	WHILE i # F.end DO
 		p := (F.points[i] - F.min) * (h-5) DIV ABS(F.max - F.min);
-		Display3.ReplConst(M,12,x + j,  y , 1, SHORT(p) + 2, Display.replace);
-		Display3.ReplConst(M,Display3.textbackC,x + j,  y  + SHORT(p) + 2, 1, F.H - (SHORT(p) + 2), Display.replace);
+		Display3.ReplConst(M,12,x + j, y , 1, SHORT(p) + 2, Display.replace);
+		Display3.ReplConst(M,Display3.textbackC,x + j, y + SHORT(p) + 2, 1, F.H - (SHORT(p) + 2), Display.replace);
 		i := (i + 1) MOD F.maxPoints; INC(j)
 	END;
 	Display3.ReplConst(M,Display3.textbackC, x+ j, y+1, F.W, h-2, Display.replace);
@@ -158,7 +146,7 @@ BEGIN
 	mode := Display.paint;
 	Display3.String(M,Display3.textC, x + 2, y + h - 12, Fonts.Default, s, mode);
 	Strings.IntToStr(F.min, s);
-	Display3.String(M, Display3.textC, x + 2, y + 2,  Fonts.Default, s, mode);
+	Display3.String(M, Display3.textC, x + 2, y + 2, Fonts.Default, s, mode);
 	IF Gadgets.selected IN F.state THEN
 		Display3.FillPattern(M, Display3.white, Display3.selectpat, x, y, x, y, w, h, Display.paint)
 	END
@@ -179,8 +167,8 @@ BEGIN
 	i := F.beg; j := 0;
 	WHILE i # F.end DO
 		p := SHORT((F.points[i] - F.min) * (F.H-3) DIV ABS(F.max - F.min));
-		Printer3.ReplConst(Q,12, x + j,  y , P(1), P(p + 1), Display.replace);
-		Printer3.ReplConst(Q,Display3.textbackC,x + j,  y  + P(p + 1), P(1), P(F.H - p - 3), Display.replace);
+		Printer3.ReplConst(Q,12, x + j, y , P(1), P(p + 1), Display.replace);
+		Printer3.ReplConst(Q,Display3.textbackC,x + j, y + P(p + 1), P(1), P(F.H - p - 3), Display.replace);
 		i := (i + 1) MOD F.maxPoints; INC(j, P(1))
 	END;
 	Printer3.ReplConst(Q,Display3.textbackC, x+ j, y, w - j, h, Display.replace);
@@ -224,8 +212,8 @@ BEGIN
 						ELSIF M.device = Display.printer THEN PrintFrame(F, M)
 						END
 					END
-				ELSIF  M IS Gadgets.UpdateMsg THEN
-					WITH M: Gadgets.UpdateMsg  DO
+				ELSIF M IS Gadgets.UpdateMsg THEN
+					WITH M: Gadgets.UpdateMsg DO
 						IF (M.obj = F.obj) & (M.obj IS BasicGadgets.Integer) THEN
 							IF M.stamp # F.stamp THEN
 								F.stamp := M.stamp;
@@ -252,7 +240,7 @@ END NewFrame;
 
 BEGIN
 	maxLoad := 1; load := 0;
-	NEW(task); task.handle := TaskHandle; Oberon.Install(task);
+	NEW(task); task.handle := TaskHandle; task.time := Oberon.Time(); Oberon.Install(task);
 	Modules.InstallTermHandler(Deinstall);
 	BasicGadgets.NewInteger; Mem := Objects.NewObj(BasicGadgets.Integer);
 	BasicGadgets.NewInteger; Load := Objects.NewObj(BasicGadgets.Integer);
@@ -262,9 +250,9 @@ BEGIN
 	Lap.val := 0; laptime := time
 END Gages.
 
-System.Free Gages  ~
+System.Free Gages ~
 Gadgets.Insert Gages.NewFrame Gages.NewMem ~
-Gadgets.Insert TextFields.NewTextField Gages.NewLap ~
+Gadgets.Insert TextFields.NewTextField Gages.NewMem ~
 Gadgets.Insert Gages.NewFrame ~Gages.NewLoad ~
 
 
@@ -273,4 +261,3 @@ Gadgets.SetAttr Max 1024
 Gadgets.SetAttr Min -1024
 
 Coordinates.Mod
-

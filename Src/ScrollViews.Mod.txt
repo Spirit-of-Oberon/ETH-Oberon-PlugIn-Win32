@@ -1,25 +1,12 @@
-﻿(* OBERON System 3, Release 2.3.
-
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
-
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
-
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;type=A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
+﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE ScrollViews; (** portable *)	(** PS  **)
 
-(**Implementation of camera-views with adjustable viewpoints and scrollbars.
- *)
+(** Implementation of camera-views with adjustable viewpoints and scrollbars. *)
 
 (*
-	9.5.96 - fixed Oberon.ControlMsg, added versioning  (ps - 9.5.96)
+	9.5.96 - fixed Oberon.ControlMsg, added versioning (ps - 9.5.96)
 	7.6.96 - heavy dragging / still to do: try to remove flickering
 	5.1.97 - changed scrollbar model (no division by 0 anymore)
 	6.1.97 - heavy dragging / removed flickering (MoveContent)
@@ -83,7 +70,7 @@ VAR res: LONGINT;
 		ELSE
 			r := (bx - x - bw DIV 2) * d DIV (w - bw);
 			r := min + r;
-			IF min > max THEN d :=  max; max := min; min := d END;
+			IF min > max THEN d := max; max := min; min := d END;
 			IF r > max THEN r := max ELSIF r < min THEN r := min END
 		END;
 		RETURN r
@@ -221,7 +208,7 @@ END DrawKnob;
 
 PROCEDURE DrawBar (Q: Display3.Mask; VAR bar: Bar; x, y, w, h: INTEGER);
 BEGIN
-    Oberon.RemoveMarks(x, y, w, h);
+	Oberon.RemoveMarks(x, y, w, h);
 	Display3.ReplConst(Q, bar.backC, x, y, w, h, Display.replace);
 	IF bar.vertical THEN	(* vertical *)
 		Display3.ReplConst(Q, Display3.topC, x + w - 2, y, 1, h, Display.replace);
@@ -302,7 +289,7 @@ BEGIN
 					ClipAgainst(cx, cy, cw, ch, mx, my, mw, mh);	(* clip source area *)
 					INC(cy, dv);
 					ClipAgainst(cx, cy, cw, ch, mx, my, mw, mh);	(* clip destination area *)
-					D.v :=  cy - dv; D.h := dv
+					D.v := cy - dv; D.h := dv
 				END;
 				IF (cw > 0) & (ch > 0) THEN
 					Display.CopyBlock(cx, cy - dv, cw, ch, cx, cy, Display.replace)
@@ -410,10 +397,10 @@ BEGIN
 		IF t < 0 THEN t := 0 END;
 		Display3.FilledRect3D(M, Display3.black, Display3.black, col, X+t, Y+t, F.W-t*2, F.H-t*2, 1, Display.replace)
 	END;
-	IF F.hasVBar  & (x < X + BarW) THEN
+	IF F.hasVBar & (x < X + BarW) THEN
 		DrawBar(M, F.vBar, X + F.border, Y + F.border, BarW, F.H - 2*F.border)
 	END;
-	IF F.hasHBar  & (y < Y + BarW) THEN
+	IF F.hasHBar & (y < Y + BarW) THEN
 		IF F.hasVBar THEN DrawBar(M, F.hBar, X + F.border + BarW, Y + F.border, F.W - 2*F.border - BarW, BarW)
 		ELSE DrawBar(M, F.hBar, X + F.border, Y + F.border, F.W - 2*F.border, BarW)
 		END
@@ -495,7 +482,7 @@ BEGIN
 			ClipAgainst(cx, cy, cw, ch, fx + F.border, fy + F.border, fw - F.border*2, fh - F.border*2);
 			CutoutBack(F, R, cx, cy, cw, ch, x, y, w, h)
 		END;
-		ClipAgainst(u, v, w1, h1,  F.vx, F.vy - f.H + 1, f.W, f.H);
+		ClipAgainst(u, v, w1, h1, F.vx, F.vy - f.H + 1, f.W, f.H);
 		M.u:= u - F.vx; M.v:= v - F.vy; M.w:= w1; M.h:= h1;
 		M.device := Display.screen; M.id := Display.area; M.F := f; M.dlink := dlink; M.res := -1; ToFrame(F, x, y, M)
 	ELSE
@@ -509,7 +496,9 @@ END RestoreViewArea;
 
 PROCEDURE PrintView (F: View; M: Display.DisplayMsg);
 VAR R: Display3.Mask; f: Display.Frame; x, y, w, h, t, backC: INTEGER; Pr: Display.DisplayMsg;
+	X, Y: INTEGER;
 BEGIN
+X := F.absX; Y := F.absY; F.absX := M.x; F.absY := M.y;
 	x:= M.x; y:= M.y; w:= P(F.W); h:= P(F.H);
 	Gadgets.MakePrinterMask(F, M.x, M.y, M.dlink, R);
 
@@ -536,12 +525,16 @@ BEGIN
 	(* content *)
 	IF F.obj # NIL THEN
 		f:= F.obj(Display.Frame);
-		Pr.res:= -1; Pr.device := Display.printer; Pr.id:= Display.full; Pr.F:= f; Pr.dlink:= M.dlink;
+		(* Pr.res:= -1; Pr.device := Display.printer; Pr.id:= Display.full; Pr.F:= f; Pr.dlink:= M.dlink;
 		Pr.x:= x + P(F.vx + f.X); Pr.y:= y + h + P(F.vy + f.Y - f.H);
-		Gadgets.Send(F, x, y, f, Pr)
+		Gadgets.Send(F, x, y, f, Pr) *)
+Pr.res := -1; Objects.Stamp(Pr); Pr.device := Display.printer; Pr.id := Display.full; Pr.F := f; Pr.dlink := F;
+Pr.x := x + P(f.X); Pr.y := M.y + P(F.H+f.Y-f.H);
+f.handle(f, Pr)
 	ELSE
 		Printer3.CenterString(R, Display3.textC, x, y, w, h, Fonts.Default, "Empty View", Display.paint)
-	END
+	END;
+F.absX := X; F.absY := Y
 END PrintView;
 
 PROCEDURE InHotspot (X, Y, x, y, w, h: INTEGER): BOOLEAN;
@@ -572,7 +565,7 @@ PROCEDURE TrackSelectChild (F: View; VAR M: Oberon.InputMsg; child: Gadgets.Fram
 VAR keysum: SET; S: Display.SelectMsg; D: Display.DisplayMsg; C: Objects.CopyMsg;
 BEGIN
 	S.F:= child; S.res := -1; S.dlink:= M.dlink;
-	IF Gadgets.selected IN child.state THEN S.id:= Display.reset; F.time:= 0
+	IF Gadgets.selected IN child.state THEN S.id:= Display.reset; F.time:= -1
 	ELSE S.id:= Display.set; F.time:= Oberon.Time()
 	END;
 	ToFrame(F, M.x + F.X, M.y + F.Y, S);
@@ -635,7 +628,7 @@ BEGIN
 			ELSE Oberon.DrawCursor(Oberon.Mouse, Effects.Arrow, M.X, M.Y)
 			END
 		ELSIF 0 IN M.keys THEN (* right *)
-			IF (f # NIL) & (f IS Gadgets.Frame)  & ~(Gadgets.lockedcontents IN F.state) THEN
+			IF (f # NIL) & (f IS Gadgets.Frame) & ~(Gadgets.lockedcontents IN F.state) THEN
 				TrackSelectChild(F, M, f(Gadgets.Frame))
 			ELSE Oberon.DrawCursor(Oberon.Mouse, Effects.Arrow, M.X, M.Y)
 			END
@@ -657,7 +650,7 @@ END AdjustToFrame;
 PROCEDURE AdjustChild (F: View; x, y, w, h: INTEGER; VAR M: Display.ModifyMsg);
 VAR RM, R: Display3.Mask; cx, cy: INTEGER;
 BEGIN
-	IF last = F THEN  (* moved or resized in this view *)
+	IF last = F THEN (* moved or resized in this view *)
 		IF M.stamp # F.stamp THEN cx := F.vx + M.dX; cy := F.vy + (M.dY + M.dH) - M.H + 1
 		ELSE cx := F.vx; cy := F.vy - M.H + 1
 		END;
@@ -754,7 +747,7 @@ BEGIN
 			(* extend / reduce X *)
 			w1 := 0; h1 := 0;
 			IF M.W > w THEN (* extend *)
-				x1 := w - F.border; y1 := -M.H + 1;  w1 := M.W - w + 1 + F.border; h1 := M.H
+				x1 := w - F.border; y1 := -M.H + 1; w1 := M.W - w + 1 + F.border; h1 := M.H
 			ELSIF M.W < w THEN (* reduce *)
 				x1 := M.W - F.border; y1 := -M.H + 1; w1 := F.border; h1 := M.H
 			END;
@@ -811,7 +804,7 @@ BEGIN
 	END
 END Adjust;
 
-PROCEDURE Consume (F: View;  x, y: INTEGER; VAR M: Display.ConsumeMsg);
+PROCEDURE Consume (F: View; x, y: INTEGER; VAR M: Display.ConsumeMsg);
 VAR f: Display.Frame; CM: Display.ControlMsg; BM: Objects.BindMsg;
 BEGIN
 	IF (M.id = Display.drop) & (M.F = F) THEN
@@ -1018,7 +1011,13 @@ BEGIN
 				END
 			END
 		ELSIF M IS Objects.BindMsg THEN Gadgets.framehandle(F, M)
-		ELSIF M IS Objects.FindMsg THEN Gadgets.framehandle(F, M)
+		ELSIF M IS Objects.FindMsg THEN
+			WITH M: Objects.FindMsg DO
+				Gadgets.framehandle(F, M);
+				IF (M.obj = NIL) & (F.obj # NIL) THEN
+					F.obj.handle(F.obj, M)
+				END
+			END		
 		ELSIF M IS Display.FrameMsg THEN
 			WITH M: Display.FrameMsg DO
 				x := M.x + F.X; y := M.y + F.Y; w:= F.W; h:= F.H;
@@ -1071,13 +1070,13 @@ BEGIN
 					WITH M: Oberon.ControlMsg DO
 						IF (M.id = Oberon.neutralize) & (M.stamp # F.stamp) THEN
 							F.stamp:= M.stamp;
-							IF (F.time # 0) & (F.obj # NIL) THEN (* was selected *)
+							IF (F.time # -1) & (F.obj # NIL) THEN (* was selected *)
 								Oberon.RemoveMarks(x, y, w, h);
 								S.obj:= F.obj; S.F:= F.obj(Display.Frame); S.res:= -1; Objects.Stamp(S);
 								S.id:= Display.reset; S.dlink:= M.dlink; ToFrame(F, x, y, S);
 								Gadgets.Update(F.obj)
 							END;
-							F.time := 0
+							F.time := -1
 						END;
 						ToFrame(F, x ,y, M)	(* ps - 9.5.96 *)				
 					END
@@ -1088,7 +1087,7 @@ BEGIN
 				ELSIF M IS Display.SelectMsg THEN 
 					WITH M: Display.SelectMsg DO
 						IF M.id = Display.get THEN
-							IF (F.time > M.time) & (F.obj # NIL) & (Gadgets.selected IN F.obj(Gadgets.Frame).state) THEN
+							IF (((M.time-F.time) < 0) OR (M.time = -1)) & (F.time # -1) & (F.obj # NIL) & (Gadgets.selected IN F.obj(Gadgets.Frame).state) THEN
 								M.obj := F.obj; M.time := F.time; M.sel := F
 							END;
 							ToFrame(F, x, y, M)
@@ -1175,5 +1174,4 @@ Function:	Click for a description of Views. The horizontal and vertical scrollba
 Attributes:
 	HScrollBar	enable/disable horizontal scrollbar
 	VScrollBar	enable/disable vertical scrollbar
-Links:
-*)
+Links: *)

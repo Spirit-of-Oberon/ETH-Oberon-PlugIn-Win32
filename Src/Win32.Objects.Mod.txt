@@ -1,24 +1,11 @@
-﻿(* OBERON System 3, Release 2.3.
-
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
-
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
-
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
+﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE Objects; (** portable / source: Win32.Objects.Mod *)	(* JG 21.9.93/comments jm 28.2.95*)
 
-(** Module Objects forms the basis of the object-oriented part of the Oberon system. It provides the system with the type Object and defines what messages objects understand. Most entities in Oberon are derived from this base type.
-*)
+(** Module Objects forms the basis of the object-oriented part of the Oberon system. It provides the system with the type Object and defines what messages objects understand. Most entities in Oberon are derived from this base type. *)
 
-	IMPORT SYSTEM, Kernel, Console, Files, Modules;
+	IMPORT SYSTEM, Kernel32, Kernel, Files, Modules;
 
 	CONST
 		enum* = 0; get* = 1; set* = 2; (** AttrMsg and LinkMsg id *)
@@ -140,7 +127,7 @@ MODULE Objects; (** portable / source: Win32.Objects.Mod *)	(* JG 21.9.93/commen
 		GenName = ARRAY 64 OF CHAR;
 
 		LibDesc* = RECORD	(** Container for persistent objects. *)
-			next: Library; (* offset used by Fonts.GetCharObj, also next offset *)
+			next[UNTRACED]: Library; (* offset used by Fonts.GetCharObj, also next offset *)
 			ind*: Index;	(** Library contents. *)
 			f: Files.File;	(* file containing data *)
 			R: Files.Rider;	(* a rider on the lib file *)
@@ -177,7 +164,7 @@ MODULE Objects; (** portable / source: Win32.Objects.Mod *)	(* JG 21.9.93/commen
 		AliasDesc = RECORD
 			next: Alias;
 			name: Name;
-			lib: Library
+			lib[UNTRACED]: Library
 		END;
 
 	VAR
@@ -194,14 +181,17 @@ MODULE Objects; (** portable / source: Win32.Objects.Mod *)	(* JG 21.9.93/commen
 
 		FirstAlias: Alias;
 
-	PROCEDURE Stamp* (VAR M: ObjMsg);	(** Timestamp a message.	*)
-	BEGIN M.stamp := stamp; INC(stamp)
+	PROCEDURE Stamp*(VAR M: ObjMsg);	(** Timestamp a message.	*)
+	BEGIN
+		M.stamp := stamp; INC(stamp)
 	END Stamp;
 
-	(*general library management*)
+	(* general library management *)
 
-	PROCEDURE *Cleanup(L: PTR);
-	VAR p0, p: Library; a0, a: Alias;
+	(* Delete library L from the list, without changing L.next. *)
+
+	PROCEDURE *Cleanup(L: SYSTEM.PTR);
+		VAR p0, p: Library; a0, a: Alias;
 	BEGIN
 		WITH L: Library DO
 			p0 := FirstLib; p := p0.next;
@@ -215,8 +205,10 @@ MODULE Objects; (** portable / source: Win32.Objects.Mod *)	(* JG 21.9.93/commen
 		END
 	END Cleanup;
 
-	PROCEDURE Match(VAR s, ext: ARRAY OF CHAR; VAR len: INTEGER): BOOLEAN;
-	VAR i, j: INTEGER;
+	(* Check if end of s matches ext. len returns length of ext. *)
+
+	PROCEDURE Match(VAR s, ext: ARRAY OF CHAR; VAR len: LONGINT): BOOLEAN;
+		VAR i, j: LONGINT;
 	BEGIN
 		i := 0; WHILE ext[i] # 0X DO INC(i) END; len := i;
 		j := 0; WHILE s[j] # 0X DO INC(j) END;
@@ -226,8 +218,8 @@ MODULE Objects; (** portable / source: Win32.Objects.Mod *)	(* JG 21.9.93/commen
 	END Match;
 
 	(** Search, load and cache a public library. *)
-	PROCEDURE ThisLibrary* (name: ARRAY OF CHAR): Library;
-	VAR L: Library; len, n, n0, t, i, j: INTEGER;proc: NewProc; A: Alias;
+	PROCEDURE ThisLibrary*(name: ARRAY OF CHAR): Library;
+		VAR L: Library; len, n, n0, t: LONGINT; proc: NewProc; A: Alias;
 	BEGIN
 		A := FirstAlias.next;
 		WHILE (A # NIL) & (name # A.name) DO A := A.next END;
@@ -252,9 +244,9 @@ MODULE Objects; (** portable / source: Win32.Objects.Mod *)	(* JG 21.9.93/commen
 						L.next := FirstLib.next; FirstLib.next := L
 					ELSE
 						NEW(A); COPY(name, A.name); A.lib := L; A.next := FirstAlias.next; FirstAlias.next := A;
-						Console.Str("Alias: ");
-						Console.Str(name); Console.Str(" -> "); Console.Str(L.name);
-						Console.Ln()
+						Kernel32.Str("Alias: ");
+						Kernel32.Str(name); Kernel32.Str(" -> "); Kernel32.Str(L.name);
+						Kernel32.Ln()
 					END
 				END
 			END
@@ -263,7 +255,7 @@ MODULE Objects; (** portable / source: Win32.Objects.Mod *)	(* JG 21.9.93/commen
 	END ThisLibrary;
 
 (** Free library from public library cache *)
-	PROCEDURE FreeLibrary* (name: ARRAY OF CHAR);
+	PROCEDURE FreeLibrary*(name: ARRAY OF CHAR);
 		VAR L: Library;
 	BEGIN
 		L := FirstLib.next;
@@ -274,16 +266,18 @@ MODULE Objects; (** portable / source: Win32.Objects.Mod *)	(* JG 21.9.93/commen
 	END FreeLibrary;
 
 (** Enumerate public libraries. Don't free libraries during enumeration! *)
-	PROCEDURE Enumerate* (P: EnumProc);
+	PROCEDURE Enumerate*(P: EnumProc);
 		VAR L: Library;
-	BEGIN L := FirstLib.next;
+	BEGIN
+		L := FirstLib.next;
 		WHILE L # NIL DO P(L); L := L.next END
 	END Enumerate;
 
 (** Register a new library file extension and its associated generator procedure. *)
-	PROCEDURE Register* (ext: ARRAY OF CHAR; new: NewProc);
-		VAR n, len: INTEGER; L: Library;
-	BEGIN n := 0;
+	PROCEDURE Register*(ext: ARRAY OF CHAR; new: NewProc);
+		VAR n, len: LONGINT; L: Library;
+	BEGIN
+		n := 0;
 		WHILE (n # nofreg) & (ext # LibExt[n]) DO INC(n) END;
 		IF n # nofreg THEN LibNew[n] := new
 		ELSE COPY(ext, LibExt[nofreg]); LibNew[nofreg] := new; INC(nofreg)
@@ -298,17 +292,18 @@ MODULE Objects; (** portable / source: Win32.Objects.Mod *)	(* JG 21.9.93/commen
 
 	(*standard libraries*)
 
-	PROCEDURE ReadName (VAR R: Files.Rider; VAR name: ARRAY OF CHAR);
-		VAR i: INTEGER; ch: CHAR;
-	BEGIN i := 0; Files.Read(R, ch);
+	PROCEDURE ReadName(VAR R: Files.Rider; VAR name: ARRAY OF CHAR);
+		VAR i: LONGINT; ch: CHAR;
+	BEGIN
+		i := 0; Files.Read(R, ch);
 		WHILE (ch # ".") & (ch # 0X) DO name[i] := ch; INC(i); Files.Read(R, ch) END;
 		name[i] := "."; INC(i); Files.Read(R, ch);
 		WHILE ch # 0X DO name[i] := ch; INC(i); Files.Read(R, ch) END;
 		name[i] := 0X
 	END ReadName;
 
-	PROCEDURE SplitName (VAR name, MName, PName: ARRAY OF CHAR);
-		VAR i, j: INTEGER;
+	PROCEDURE SplitName(VAR name, MName, PName: ARRAY OF CHAR);
+		VAR i, j: LONGINT;
 	BEGIN i := 0;
 		WHILE name[i] # "." DO MName[i] := name[i]; INC(i) END;
 		MName[i] := 0X; INC(i); j := 0;
@@ -316,7 +311,7 @@ MODULE Objects; (** portable / source: Win32.Objects.Mod *)	(* JG 21.9.93/commen
 		PName[j] := 0X
 	END SplitName;
 
-	PROCEDURE HandleDummy (obj: Object; VAR M: ObjMsg);
+	PROCEDURE *HandleDummy(obj: Object; VAR M: ObjMsg);
 		VAR dum: Dummy;
 	BEGIN
 		WITH obj: Dummy DO
@@ -347,7 +342,7 @@ MODULE Objects; (** portable / source: Win32.Objects.Mod *)	(* JG 21.9.93/commen
 		END
 	END HandleDummy;
 
-	PROCEDURE NewDummy (VAR GName: ARRAY OF CHAR);
+	PROCEDURE NewDummy(VAR GName: ARRAY OF CHAR);
 		VAR dum: Dummy;
 	BEGIN
 		NEW(dum); dum.handle := HandleDummy;
@@ -355,7 +350,7 @@ MODULE Objects; (** portable / source: Win32.Objects.Mod *)	(* JG 21.9.93/commen
 		NewObj := dum
 	END NewDummy;
 
-	PROCEDURE GetObj (L: Library; ref: INTEGER; VAR obj: Object);
+	PROCEDURE *GetObj(L: Library; ref: INTEGER; VAR obj: Object);
 		VAR objOrg: LONGINT; ind: ArrayIndex; MName, PName: ARRAY 32 OF CHAR; n: INTEGER;
 				Mod: Modules.Module; Cmd: Modules.Command; M: FileMsg;
 	BEGIN
@@ -398,8 +393,8 @@ MODULE Objects; (** portable / source: Win32.Objects.Mod *)	(* JG 21.9.93/commen
 		END
 	END GetObj;
 
-	PROCEDURE PutObj (L: Library; ref: INTEGER; obj: Object);
-		VAR index: Block; ind: ArrayIndex; i : LONGINT; size: INTEGER;
+	PROCEDURE *PutObj(L: Library; ref: INTEGER; obj: Object);
+		VAR index: Block; ind: ArrayIndex; i, size: LONGINT;
 	BEGIN
 		IF (ref < 0) OR (obj = NIL) THEN RETURN END;
 		ind := L.ind(ArrayIndex);
@@ -408,23 +403,24 @@ MODULE Objects; (** portable / source: Win32.Objects.Mod *)	(* JG 21.9.93/commen
 			NEW(index, size);
 			IF ind.index # NIL THEN SYSTEM.MOVE(SYSTEM.ADR(ind.index^), SYSTEM.ADR(index^), ind.size*4) END;
 			FOR i := ind.size TO size-1 DO index[i] := NoObj END;
-			ind.size := size; ind.index := index
+			ind.size := SHORT(size); ind.index := index
 		END;
 		ind.index[ref] := obj; obj.lib := L; obj.ref := ref;
 		IF ref >= L.maxref THEN L.maxref := ref + 1 END
 	END PutObj;
 
-	PROCEDURE FreeObj (L: Library; ref: INTEGER);
+	PROCEDURE *FreeObj(L: Library; ref: INTEGER);
 	BEGIN
 		IF (ref >= 0) & (ref < L.ind(ArrayIndex).size) THEN L.ind(ArrayIndex).index[ref] := NoObj END
 	END FreeObj;
 
-	PROCEDURE GenRef (L: Library; VAR ref: INTEGER);
-	BEGIN ref := L.maxref; INC(L.maxref)
+	PROCEDURE *GenRef(L: Library; VAR ref: INTEGER);
+	BEGIN
+		ref := L.maxref; INC(L.maxref)
 	END GenRef;
 
 (* Load a standard object library (old format) from position pos in file f. *)
-	PROCEDURE OldLoadLibrary (L: Library; f: Files.File; pos: LONGINT; VAR len: LONGINT);
+	PROCEDURE OldLoadLibrary(L: Library; f: Files.File; pos: LONGINT; VAR len: LONGINT);
 		VAR R, S: Files.Rider; Mod: Modules.Module; Cmd: Modules.Command; NofRuns, key, N, i, k, m: INTEGER;
 				clen, dlen: LONGINT; type, n: SHORTINT; ch: CHAR; entry: Entry;
 				obj: Object; M: FileMsg; MName, PName: Name; GName: ARRAY MaxNews OF Name;
@@ -498,8 +494,8 @@ MODULE Objects; (** portable / source: Win32.Objects.Mod *)	(* JG 21.9.93/commen
 	END OldLoadLibrary;
 	
 (** Load a standard object library from position pos in file f. *)
-	PROCEDURE LoadLibrary* (L: Library; f: Files.File; pos: LONGINT; VAR len: LONGINT);
-		VAR ind: ArrayIndex; dict: ListDict; i, version, dorg, gorg: LONGINT; key, n, N: INTEGER; entry: Entry;
+	PROCEDURE LoadLibrary*(L: Library; f: Files.File; pos: LONGINT; VAR len: LONGINT);
+		VAR ind: ArrayIndex; dict: ListDict; i, n, N, version, dorg, gorg: LONGINT; key: INTEGER; entry: Entry;
 				R: Files.Rider;
 	BEGIN
 		ind := L.ind(ArrayIndex);
@@ -512,7 +508,7 @@ MODULE Objects; (** portable / source: Win32.Objects.Mod *)	(* JG 21.9.93/commen
 			FOR i := 0 TO L.maxref - 1 DO ind.index[i] := NIL END;
 			(* read generator table *)
 			Files.Set(R, f, gorg);
-			Files.ReadInt(R, N);
+			Files.ReadInt(R, key); N := key;
 			IF N > 0 THEN
 				NEW(L.GName, N);
 				FOR n := 0 TO N - 1 DO Files.ReadString(R, L.GName[n]) END
@@ -523,7 +519,7 @@ MODULE Objects; (** portable / source: Win32.Objects.Mod *)	(* JG 21.9.93/commen
 			dict := L.dict(ListDict);
 			Files.Set(R, f, dorg);
 			Files.ReadInt(R, key);
-			WHILE key # MIN(INTEGER) DO
+			WHILE (key # MIN(INTEGER)) & ~R.eof DO
 				NEW(entry);
 				Files.ReadString(R, entry.name);
 				entry.key := key;
@@ -531,7 +527,6 @@ MODULE Objects; (** portable / source: Win32.Objects.Mod *)	(* JG 21.9.93/commen
 				IF key < dict.key THEN dict.key := key END;
 				Files.ReadInt(R, key)
 			END;
-
 			L.f := f; Files.Set(L.R, f, ind.org);
 			len := Files.Pos(R) - pos
 		ELSE
@@ -542,8 +537,8 @@ MODULE Objects; (** portable / source: Win32.Objects.Mod *)	(* JG 21.9.93/commen
 	END LoadLibrary;
 
 (** Store a standard object library at position pos in file f. *)
-	PROCEDURE StoreLibrary* (L: Library; f: Files.File; pos: LONGINT; VAR len: LONGINT);
-		VAR obj: Object; ind: ArrayIndex; i, olen, org, indorg: LONGINT; m, n, N: INTEGER; entry: Entry;
+	PROCEDURE StoreLibrary*(L: Library; f: Files.File; pos: LONGINT; VAR len: LONGINT);
+		VAR obj: Object; ind: ArrayIndex; i, olen, org, indorg, n, N: LONGINT; m: INTEGER; entry: Entry;
 				ch: CHAR; GName: ARRAY MaxNews OF GenName; R, indR: Files.Rider; M: FileMsg; A: AttrMsg;
 	BEGIN
 		ind := L.ind(ArrayIndex);
@@ -574,7 +569,7 @@ MODULE Objects; (** portable / source: Win32.Objects.Mod *)	(* JG 21.9.93/commen
 					IF n = N THEN INC(N) END;
 					
 					Files.WriteLInt(indR, Files.Pos(R));	(* write index *)
-					Files.WriteInt(R, n);
+					Files.WriteInt(R, SHORT(n));
 					Files.WriteLInt(R, olen);
 					WHILE olen > 0 DO Files.Read(L.R, ch); Files.Write(R, ch); DEC(olen) END
 				ELSE	(* there was never an object with this ref *)
@@ -587,7 +582,7 @@ MODULE Objects; (** portable / source: Win32.Objects.Mod *)	(* JG 21.9.93/commen
 				IF n = N THEN INC(N) END;
 
 				Files.WriteLInt(indR, Files.Pos(R));	(* write index *)
-				Files.WriteInt(R, n);
+				Files.WriteInt(R, SHORT(n));
 				Files.Set(M.R, f, Files.Pos(R));
 				Files.WriteLInt(M.R, 0); obj.handle(obj, M);
 				olen := Files.Pos(M.R) - Files.Pos(R) - 4;
@@ -601,7 +596,7 @@ MODULE Objects; (** portable / source: Win32.Objects.Mod *)	(* JG 21.9.93/commen
 		(* write generator table *)
 		i := Files.Pos(R);
 		Files.Set(R, f, pos + 5); Files.WriteLInt(R, i); Files.Set(R, f, i);
-		Files.WriteInt(R, N);
+		Files.WriteInt(R, SHORT(N));
 		IF N > 0 THEN
 			NEW(L.GName, N);
 			FOR n := 0 TO N-1 DO
@@ -625,7 +620,7 @@ MODULE Objects; (** portable / source: Win32.Objects.Mod *)	(* JG 21.9.93/commen
 		Files.Set(L.R, L.f, ind.org)
 	END StoreLibrary;
 
-	PROCEDURE LoadFileLib (L: Library);
+	PROCEDURE *LoadFileLib(L: Library);
 		VAR f: Files.File; R: Files.Rider; len: LONGINT; id: CHAR;
 	BEGIN
 		f := Files.Old(L.name);
@@ -637,7 +632,7 @@ MODULE Objects; (** portable / source: Win32.Objects.Mod *)	(* JG 21.9.93/commen
 		END
 	END LoadFileLib;
 
-	PROCEDURE StoreFileLib (L: Library);
+	PROCEDURE *StoreFileLib(L: Library);
 		VAR f: Files.File; len: LONGINT;
 	BEGIN
 		f := Files.New(L.name);
@@ -645,7 +640,7 @@ MODULE Objects; (** portable / source: Win32.Objects.Mod *)	(* JG 21.9.93/commen
 	END StoreFileLib;
 
 (** Initialize a standard object library. *)
-	PROCEDURE OpenLibrary* (L: Library);
+	PROCEDURE OpenLibrary*(L: Library);
 		VAR ind: ArrayIndex; dict: ListDict;
 	BEGIN
 		L.Load := LoadFileLib; L.Store := StoreFileLib;
@@ -656,13 +651,13 @@ MODULE Objects; (** portable / source: Win32.Objects.Mod *)	(* JG 21.9.93/commen
 		L.maxref := 0
 	END OpenLibrary;
 
-	PROCEDURE NewLibrary (): Library;
+	PROCEDURE *NewLibrary(): Library;
 		VAR L: Library;
 	BEGIN NEW(L); OpenLibrary(L); RETURN L
 	END NewLibrary;
 
 (** Given an object name, return the object reference number from the dictionary. *)
-	PROCEDURE GetRef* (VAR D: Dictionary; name: ARRAY OF CHAR; VAR ref: INTEGER);
+	PROCEDURE GetRef*(VAR D: Dictionary; name: ARRAY OF CHAR; VAR ref: INTEGER);
 		VAR cur: Entry;
 	BEGIN
 		IF D IS ListDict THEN
@@ -674,7 +669,7 @@ MODULE Objects; (** portable / source: Win32.Objects.Mod *)	(* JG 21.9.93/commen
 	END GetRef;
 
 (** Allocate a key (any integer < 0) to a name. *)
-	PROCEDURE GetKey* (VAR D: Dictionary; name: ARRAY OF CHAR; VAR key: INTEGER);
+	PROCEDURE GetKey*(VAR D: Dictionary; name: ARRAY OF CHAR; VAR key: INTEGER);
 		VAR cur: Entry;
 	BEGIN
 		IF D IS ListDict THEN
@@ -691,7 +686,7 @@ MODULE Objects; (** portable / source: Win32.Objects.Mod *)	(* JG 21.9.93/commen
 	END GetKey;
 
 (** Get name associated with a key/reference number. *)
-	PROCEDURE GetName* (VAR D: Dictionary; key: INTEGER; VAR name: ARRAY OF CHAR);
+	PROCEDURE GetName*(VAR D: Dictionary; key: INTEGER; VAR name: ARRAY OF CHAR);
 		VAR cur: Entry;
 	BEGIN
 		IF D IS ListDict THEN
@@ -703,7 +698,8 @@ MODULE Objects; (** portable / source: Win32.Objects.Mod *)	(* JG 21.9.93/commen
 	END GetName;
 
 (** Associate a name with a reference number. *)
-	PROCEDURE PutName* (VAR D: Dictionary; key: INTEGER; name: ARRAY OF CHAR);
+	PROCEDURE PutName*(VAR D: Dictionary; key: INTEGER; name: ARRAY OF CHAR);
+	(* Note: D could be value parameter *)
 		VAR cur: Entry;
 	BEGIN
 		IF D IS ListDict THEN
@@ -722,9 +718,7 @@ MODULE Objects; (** portable / source: Win32.Objects.Mod *)	(* JG 21.9.93/commen
 
 BEGIN LibBlockId := 0DBX;
 	NEW(FirstLib); FirstLib.next := NIL;
-	Kernel.DisableTracing(SYSTEM.ADR(FirstLib^), SYSTEM.ADR(FirstLib.next));
 	NEW(FirstAlias); FirstAlias.next := NIL;
-	Kernel.DisableTracing(SYSTEM.ADR(FirstAlias^), SYSTEM.ADR(FirstAlias.lib));
 	stamp := MIN(LONGINT);
 	NEW(NoObj);
 	nofreg := 0;
@@ -882,6 +876,4 @@ Each library has a dictionary of (key, name) pairs. The key is either positive o
 Dummies are objects created in place of objects that cannot be loaded into memory (module missing). Pointers to Dummies are often set to NIL by the application itself.
 
 17. Extended Libraries
-It is possible to add new library types to the system. New types are distinguished by filename extensions that are registered by Objects.Register. The NewProc is called by Objects.ThisLibrary to create an empty instance of the new library type. The name field is filled in, after which the Load procedure of the library is called to load the library from disk. In accordance, the Store procedure stores the library under its name to disk. The LoadLibrary and StoreLibrary procedures implement the default behaviour for the standard object libraries.
-
-*)
+It is possible to add new library types to the system. New types are distinguished by filename extensions that are registered by Objects.Register. The NewProc is called by Objects.ThisLibrary to create an empty instance of the new library type. The name field is filled in, after which the Load procedure of the library is called to load the library from disk. In accordance, the Store procedure stores the library under its name to disk. The LoadLibrary and StoreLibrary procedures implement the default behaviour for the standard object libraries. *)

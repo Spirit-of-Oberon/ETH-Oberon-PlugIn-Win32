@@ -1,0 +1,166 @@
+﻿(* Copyright (c) 1994 - 2000 Emil J. Zeller *)
+
+MODULE WSock32; (** non-portable / source: Win32.WSock32.Mod *)	(* ejz  *)
+	IMPORT SYSTEM, Kernel32, User32, Modules;
+
+(** This module defines all the Win32 WSock32 APIs used by Oberon. *)
+
+	CONST
+		InvalidSocket* = -1; SocketError*= -1;
+		AFINet* = 2; PFINet* = AFINet;
+		SockStream* = 1; SockDGram* = 2; SockRaw* = 3;
+		IPProtoICMP* = 1; IPProtoTCP* = 6; IPProtoUDP* = 17;
+		MAXGETHOSTSTRUCT* = 1024;
+		WSADescriptionLen* = 256; WSASysStatusLen* = 128;
+		FDRead* = 01H; FDWrite* = 02H; FDAccept *= 08H; FDConnect* = 010H; FDClose* = 020H;
+		WSABaseErr = 10000; WSAEInval* = WSABaseErr+22; WSAEWouldBlock* = WSABaseErr+35;
+		WSAEConnAborted* = WSABaseErr+53; WSAEConnReset* = WSABaseErr+54; WSAENoBufs* = WSABaseErr+55;
+		FIONRead* = 4004667FH;
+		SOLSocket* = 0FFFFH; SOSndTimeo* = 01005H; SORcvTimeo* = 01006H;
+		MsgPeek* = 2;
+
+	TYPE
+		Socket* = Kernel32.HANDLE;
+		Group* = LONGINT;
+
+		WSAData* = RECORD [NOTAG]
+			wVersion*, wHighVersion*: INTEGER;
+			szDescription*: ARRAY WSADescriptionLen+1 OF CHAR;
+			szSystemStatus*: ARRAY WSASysStatusLen+1 OF CHAR;
+			iMaxSockets*, iMaxUdpDg*: INTEGER;
+			lpVendorInfo*: Kernel32.ADDRESS
+		END;
+
+		(** The Windows Sockets WSAPROTOCOL_INFO structure is used to store or retrieve complete information for
+			a given protocol. *)
+		WSAProtocolInfo* = RECORD [NOTAG]
+			data: ARRAY 372 OF SYSTEM.BYTE
+		END;
+
+		(** In the Internet address family, the SOCKADDR_IN structure is used by Windows Sockets to specify a local or remote
+			endpoint address to which to connect a socket. *)
+		INAddr* = LONGINT;
+		SockAddrIN* = RECORD [NOTAG]
+			sinFamily*: INTEGER;
+			sinPort*: INTEGER;
+			sinAddr*: INAddr;
+			sinZero: ARRAY 8 OF CHAR
+		END;
+
+		(** The Windows Sockets hostent structure is used by functions to store information about a given host,
+			such as host name, IP address, and so forth. *)
+		LPHostent* = Kernel32.ADDRESS;
+		Hostent* = RECORD [NOTAG]
+			hName*, hAliases*: Kernel32.ADDRESS;
+			hAddrtype*, hLength*: INTEGER;
+			hAddrList*: Kernel32.ADDRESS
+		END;
+
+	VAR
+		wsock32: Kernel32.HMODULE;
+		(** The Windows Sockets WSACleanup function terminates use of the Ws2_32.dll. *)
+		WSACleanup-: PROCEDURE [WINAPI] (): LONGINT;
+		(** The Windows Sockets WSAAsyncGetHostByAddr function asynchronously retrieves host information that
+			corresponds to an address. *)
+		WSAAsyncGetHostByAddr-: PROCEDURE [WINAPI] (hWnd: User32.HWND; wMsg: LONGINT; VAR addr: ARRAY [NOTAG] OF SYSTEM.BYTE; len: LONGINT; type: LONGINT; VAR buf: ARRAY [NOTAG] OF SYSTEM.BYTE; buflen: LONGINT): Kernel32.HANDLE;
+		(** The Windows Sockets WSAAsyncGetHostByName function asynchronously retrieves host information corresponding
+			to a host name. *)
+		WSAAsyncGetHostByName-: PROCEDURE [WINAPI] (hWnd: User32.HWND; wMsg: LONGINT; name: ARRAY [NOTAG] OF CHAR; VAR buf: ARRAY [NOTAG] OF SYSTEM.BYTE; buflen: LONGINT): Kernel32.HANDLE;
+		(** The Windows Sockets WSAAsyncSelect function requests Windows message-based notification of network events
+			for a socket. *)
+		WSAAsyncSelect-: PROCEDURE [WINAPI] (s: Socket; hWnd: User32.HWND; wMsg: LONGINT; lEvent: LONGINT): LONGINT;
+		(** The Windows Sockets WSAGetLastError function gets the error status for the last operation that failed. *)
+		WSAGetLastError-: PROCEDURE [WINAPI] (): LONGINT;
+		(** The Windows Sockets WSASocket function creates a socket that is bound to a specific transport-service provider. *)
+		WSASocket-: PROCEDURE [WINAPI] (af, type, protocol: LONGINT; VAR lpProtocolInfo: WSAProtocolInfo; g: Group; dwFlags: LONGINT): Socket;
+		(** The Windows Sockets WSAStartup function initiates use of Ws2_32.dll by a process. *)
+		WSAStartup-: PROCEDURE [WINAPI] (wVersionRequested: LONGINT; VAR lpWSAData: WSAData): LONGINT;
+		(** The Windows Sockets accept function permits an incoming connection attempt on a socket. *)
+		accept-: PROCEDURE [WINAPI] (s: Socket; VAR addr: ARRAY [NOTAG] OF SYSTEM.BYTE; VAR addrlen: LONGINT): Socket;
+		(** The Windows Sockets bind function associates a local address with a socket. *)
+		bind-: PROCEDURE [WINAPI] (s: Socket; VAR name: ARRAY [NOTAG] OF SYSTEM.BYTE; namelen: LONGINT): LONGINT;
+		(** The Windows Sockets closesocket function closes an existing socket. *)
+		closesocket-: PROCEDURE [WINAPI] (s: Socket): LONGINT;
+		(** The Windows Sockets connect function establishes a connection to a specified socket. *)
+		connect-: PROCEDURE [WINAPI] (s: Socket; VAR name: ARRAY [NOTAG] OF SYSTEM.BYTE; namelen: LONGINT): LONGINT;
+		(** The Windows Sockets gethostbyname function retrieves host information corresponding to a host name from a
+			host database. *)
+		gethostbyname-: PROCEDURE [WINAPI] (name: ARRAY [NOTAG] OF CHAR): LPHostent;
+		(** The Windows Sockets gethostname function returns the standard host name for the local machine. *)
+		gethostname-: PROCEDURE [WINAPI] (VAR name: ARRAY [NOTAG] OF CHAR; namelen: LONGINT): LONGINT;
+		(** The Windows Sockets getpeername function retrieves the name of the peer to which a socket is connected. *)
+		getpeername-: PROCEDURE [WINAPI] (s: Socket; VAR name: ARRAY [NOTAG] OF SYSTEM.BYTE; VAR namelen: LONGINT): LONGINT;
+		(** The Windows Sockets htonl function converts a u_long from host to TCP/IP network byte order
+			(which is big-endian). *)
+		htonl-: PROCEDURE [WINAPI] (x: LONGINT): LONGINT;
+		(** The Windows Sockets htons function converts a u_short from host to TCP/IP network byte order
+			(which is big-endian). *)
+		htons-: PROCEDURE [WINAPI] (x: INTEGER): INTEGER;
+		(** The Windows Sockets ioctlsocket function controls the I/O mode of a socket. *)
+		ioctlsocket-: PROCEDURE [WINAPI] (s: Socket; cmd: LONGINT; VAR argp: LONGINT): LONGINT;
+		(** The Windows Sockets listen function places a socket a state where it is listening for an incoming connection. *)
+		listen-: PROCEDURE [WINAPI] (s: Socket; backlog: LONGINT): LONGINT;
+		(** The Windows Sockets ntohl function converts a u_long from TCP/IP network order to host byte order
+			(which is little-endian on Intel processors). *)
+		ntohl-: PROCEDURE [WINAPI] (x: LONGINT): LONGINT;
+		(** The Windows Sockets ntohs function converts a u_short from TCP/IP network byte order to host byte order
+			(which is little-endian on Intel processors). *)
+		ntohs-: PROCEDURE [WINAPI] (x: INTEGER): INTEGER;
+		(** The Windows Sockets recv function receives data from a connected socket. *)
+		recv-: PROCEDURE [WINAPI] (s: Socket; VAR buf: ARRAY [NOTAG] OF SYSTEM.BYTE; len: LONGINT; flags: LONGINT): LONGINT;
+		(** The Windows Sockets recvfrom function receives a datagram and stores the source address. *)
+		recvfrom-: PROCEDURE [WINAPI] (s: Socket; VAR buf: ARRAY [NOTAG] OF SYSTEM.BYTE; len: LONGINT; flags: LONGINT; VAR from: ARRAY [NOTAG] OF SYSTEM.BYTE; VAR fromlen: LONGINT): LONGINT;
+		(** The Windows Sockets send function sends data on a connected socket. *)
+		send-: PROCEDURE [WINAPI] (s: Socket; VAR buf: ARRAY [NOTAG] OF SYSTEM.BYTE; len: LONGINT; flags: LONGINT): LONGINT;
+		(** The Windows Sockets sendto function sends data to a specific destination. *)
+		sendto-: PROCEDURE [WINAPI] (s: Socket; VAR buf: ARRAY [NOTAG] OF SYSTEM.BYTE; len: LONGINT; flags: LONGINT; VAR to: ARRAY [NOTAG] OF SYSTEM.BYTE; tolen: LONGINT): LONGINT;
+		(** The Windows Sockets setsockopt function sets a socket option. *)
+		setsockopt-: PROCEDURE [WINAPI] (s: Socket; level, optname: LONGINT; VAR optval: ARRAY [NOTAG] OF SYSTEM.BYTE; optlen: LONGINT): LONGINT;
+		(** The Windows Sockets socket function creates a socket that is bound to a specific service provider. *)
+		socket-: PROCEDURE [WINAPI] (af, type, protocol: LONGINT): Socket;
+
+	PROCEDURE *TermMod();
+	BEGIN
+		IF wsock32 # Kernel32.NULL THEN
+			Kernel32.FreeLibrary(wsock32); wsock32 := Kernel32.NULL
+		END
+	END TermMod;
+
+	PROCEDURE Init();
+	BEGIN
+		wsock32 := Kernel32.LoadLibrary("ws2_32.dll");
+		IF wsock32 = Kernel32.NULL THEN
+			wsock32 := Kernel32.LoadLibrary("WSOCK32.DLL")
+		END;
+		Kernel32.GetProcAddress(wsock32, "WSACleanup", SYSTEM.VAL(LONGINT, WSACleanup));
+		Kernel32.GetProcAddress(wsock32, "WSAAsyncGetHostByAddr", SYSTEM.VAL(LONGINT, WSAAsyncGetHostByAddr));
+		Kernel32.GetProcAddress(wsock32, "WSAAsyncGetHostByName", SYSTEM.VAL(LONGINT, WSAAsyncGetHostByName));
+		Kernel32.GetProcAddress(wsock32, "WSAAsyncSelect", SYSTEM.VAL(LONGINT, WSAAsyncSelect));
+		Kernel32.GetProcAddress(wsock32, "WSAGetLastError", SYSTEM.VAL(LONGINT, WSAGetLastError));
+		Kernel32.GetProcAddress(wsock32, "WSASocketA", SYSTEM.VAL(LONGINT, WSASocket));
+		Kernel32.GetProcAddress(wsock32, "WSAStartup", SYSTEM.VAL(LONGINT, WSAStartup));
+		Kernel32.GetProcAddress(wsock32, "accept", SYSTEM.VAL(LONGINT, accept));
+		Kernel32.GetProcAddress(wsock32, "bind", SYSTEM.VAL(LONGINT, bind));
+		Kernel32.GetProcAddress(wsock32, "closesocket", SYSTEM.VAL(LONGINT, closesocket));
+		Kernel32.GetProcAddress(wsock32, "connect", SYSTEM.VAL(LONGINT, connect));
+		Kernel32.GetProcAddress(wsock32, "gethostbyname", SYSTEM.VAL(LONGINT, gethostbyname));
+		Kernel32.GetProcAddress(wsock32, "gethostname", SYSTEM.VAL(LONGINT, gethostname));
+		Kernel32.GetProcAddress(wsock32, "getpeername", SYSTEM.VAL(LONGINT, getpeername));
+		Kernel32.GetProcAddress(wsock32, "htonl", SYSTEM.VAL(LONGINT, htonl));
+		Kernel32.GetProcAddress(wsock32, "htons", SYSTEM.VAL(LONGINT, htons));
+		Kernel32.GetProcAddress(wsock32, "ioctlsocket", SYSTEM.VAL(LONGINT, ioctlsocket));
+		Kernel32.GetProcAddress(wsock32, "listen", SYSTEM.VAL(LONGINT, listen));
+		Kernel32.GetProcAddress(wsock32, "ntohl", SYSTEM.VAL(LONGINT, ntohl));
+		Kernel32.GetProcAddress(wsock32, "ntohs", SYSTEM.VAL(LONGINT, ntohs));
+		Kernel32.GetProcAddress(wsock32, "recv", SYSTEM.VAL(LONGINT, recv));
+		Kernel32.GetProcAddress(wsock32, "recvfrom", SYSTEM.VAL(LONGINT, recvfrom));
+		Kernel32.GetProcAddress(wsock32, "send", SYSTEM.VAL(LONGINT, send));
+		Kernel32.GetProcAddress(wsock32, "sendto", SYSTEM.VAL(LONGINT, sendto));
+		Kernel32.GetProcAddress(wsock32, "setsockopt", SYSTEM.VAL(LONGINT, setsockopt));
+		Kernel32.GetProcAddress(wsock32, "socket", SYSTEM.VAL(LONGINT, socket));
+		Modules.InstallTermHandler(TermMod)
+	END Init;
+
+BEGIN
+	Init()
+END WSock32.

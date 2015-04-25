@@ -1,0 +1,492 @@
+﻿(* Copyright (c) 1994 - 2000 Emil J. Zeller *)
+
+MODULE WinFonts; (** non-portable / source: Win32.WinFonts.Mod *)	(* ejz  *)
+	IMPORT SYSTEM, Kernel32, Kernel, Registry, FileDir, Files, User32, GDI32, Displays, Objects, Fonts, Strings;
+
+(** This module implements the Oberon font manager using windows TrueType fonts. *)
+
+	CONST
+		(** font styles *)
+		Bold* = 0; Italics* = 1; Medium* = 2; Underline* = 3; Strikeout* = 4; Thin* = 5; Light* = 6;
+		DisplayDPI = 91.4; DefFontFamily = "Arial"; DefFontSize = 10; DefFontName = "Arial10.Scn.Fnt";
+		CacheSize = 8;
+
+	TYPE
+		GetDCProc* = PROCEDURE (class: ARRAY OF CHAR): User32.HDC;
+		RunRec = RECORD beg, end: INTEGER END;
+		BoxRec = RECORD dx, x, y, w, h: INTEGER END;
+
+	VAR
+		unit*: LONGINT;	(** resolution (dpi) of the current device context *)
+		theChar: Fonts.Char;
+		getDC: GetDCProc;
+		displayDC*: GetDCProc;	(** get a device context for the current active display *)
+		printerDC*: GetDCProc;	(** get a device context for the current active printer *)
+		class: ARRAY 8 OF CHAR;
+		cache: ARRAY CacheSize OF Objects.Library;
+		curCache: LONGINT;
+		keepDC*: BOOLEAN;	(** TRUE: do not delete the context returned by displayDC or printerDC *)
+
+	(** split a font name into its components: family, size, style and class *)
+	PROCEDURE ParseName*(VAR name, family: ARRAY OF CHAR; VAR size: LONGINT; VAR style: SET; VAR class: ARRAY OF CHAR);
+		VAR i, j: LONGINT;
+	BEGIN
+		size := 0; style := {};
+		i := Strings.Length(name)-7; j := 0;
+		WHILE j < 3 DO
+			class[j] := name[i]; INC(i); INC(j)
+		END;
+		class[j] := 0X; i := i-5;
+		LOOP
+			IF (i <= 0) OR ((name[i] >= "0") & (name[i] <= "9")) THEN
+				EXIT
+			ELSE
+				CASE CAP(name[i]) OF
+					"B": INCL(style, Bold); name[i] := "b"
+					|"M": INCL(style, Medium); name[i] := "m"
+					|"L": INCL(style, Light); name[i] := "l"
+					|"T": INCL(style, Thin); name[i] := "t"
+					|"I": INCL(style, Italics); name[i] := "i"
+					|"U": INCL(style, Underline); name[i] := "u"
+					|"S": INCL(style, Strikeout); name[i] := "s"
+				ELSE
+				END;
+				DEC(i)
+			END
+		END;
+		WHILE (name[i] >= "0") & (name[i] <= "9") DO
+			DEC(i)
+		END;
+		j := i+1;
+		WHILE (name[j] >= "0") & (name[j] <= "9") DO
+			size := 10*size + (ORD(name[j])-ORD("0")); INC(j)
+		END;
+		j := i; i := 0;
+		WHILE i <= j DO
+			family[i] := name[i]; INC(i)
+		END;
+		family[i] := 0X;
+		IF family = "" THEN
+			COPY(DefFontFamily, family)
+		END;
+		IF size <= 0 THEN
+			size := DefFontSize
+		END;
+		IF (class # "Scn") & ~((((class[0] = "P") & (class[1] = "r")) OR ((class[0] = "M") & (class[1] = "d"))) & ((class[2] >= "0") & (class[2] <= "9"))) THEN
+			COPY("Scn", class)
+		END
+	END ParseName;
+
+	(** build a font name out of its components: family, size, style and class *)
+	PROCEDURE BuildName*(VAR name, family: ARRAY OF CHAR; size: LONGINT; style: SET; class: ARRAY OF CHAR);
+		VAR str: ARRAY 8 OF CHAR;
+	BEGIN
+		COPY(family, name);
+		IF size > 0 THEN
+			Strings.IntToStr(size, str);
+			Strings.Append(name, str)
+		END;
+		IF Bold IN style THEN
+			Strings.AppendCh(name, "b")
+		ELSIF Medium IN style THEN
+			Strings.AppendCh(name, "m")
+		ELSIF Light IN style THEN
+			Strings.AppendCh(name, "l")
+		ELSIF Thin IN style THEN
+			Strings.AppendCh(name, "t")
+		END;
+		IF Italics IN style THEN
+			Strings.AppendCh(name, "i")
+		END;
+		IF Underline IN style THEN
+			Strings.AppendCh(name, "u")
+		END;
+		IF Strikeout IN style THEN
+			Strings.AppendCh(name, "s")
+		END;
+		Strings.AppendCh(name, "."); Strings.Append(name, class);
+		Strings.Append(name, ".Fnt")
+	END BuildName;
+
+	PROCEDURE [WINAPI] FontInstaller(VAR lplf: GDI32.LogFont; font: Displays.Font);
+		VAR style: SET;
+	BEGIN
+		style := font.style;
+		IF Bold IN style THEN
+			lplf.lfWeight := GDI32.FWBold
+		ELSIF Medium IN style THEN
+			lplf.lfWeight := GDI32.FWMedium
+		ELSIF Light IN style THEN
+			lplf.lfWeight := GDI32.FWLight
+		ELSIF Thin IN style THEN
+			lplf.lfWeight := GDI32.FWThin
+		ELSE
+			lplf.lfWeight := GDI32.FWNormal
+		END;
+		lplf.lfItalic := Italics IN style;
+		lplf.lfUnderline := Underline IN style;
+		lplf.lfStrikeOut := Strikeout IN style;
+		lplf.lfWidth := 0; lplf.lfHeight := -ENTIER(0.5 + font.size*unit / DisplayDPI)
+	END FontInstaller;
+
+	PROCEDURE InitMetrics(hDC: User32.HDC; F: Fonts.Font);
+		VAR
+			font: Displays.Font; i: LONGINT;
+			tm: GDI32.TextMetric; abc: GDI32.ABC;
+			hOldFont: GDI32.HFont;
+	BEGIN
+		font := SYSTEM.VAL(Displays.Font, F.ind);
+		hOldFont := GDI32.SelectObject(hDC, font.hFont);
+		GDI32.GetTextMetrics(hDC, tm);
+		F.height := SHORT(tm.tmHeight-tm.tmExternalLeading);
+		F.minX := MAX(INTEGER); F.maxX := MIN(INTEGER);
+		F.minY := -SHORT(tm.tmDescent); F.maxY := SHORT(tm.tmAscent);
+		i := 0;
+		WHILE i < 256 DO
+			IF (i >= ORD(tm.tmFirstChar)) & (i <= ORD(tm.tmLastChar)) THEN
+				GDI32.GetCharABCWidths(hDC, i, i, abc)
+			ELSE
+				abc.abcA := 0; abc.abcB := 0; abc.abcC := 0;
+			END;
+			font.metrics[i].dx := abc.abcA + abc.abcB + abc.abcC;
+			IF font.metrics[i].dx < F.minX THEN
+				F.minX := SHORT(font.metrics[i].dx)
+			END;
+			IF font.metrics[i].dx > F.maxX THEN
+				F.maxX := SHORT(font.metrics[i].dx)
+			END;
+			font.metrics[i].x := abc.abcA; font.metrics[i].y := -tm.tmDescent;
+			font.metrics[i].w := abc.abcB; font.metrics[i].h := tm.tmHeight;
+			INC(i)
+		END;
+		font.metrics[9].dx := font.metrics[32].dx * 4;
+		GDI32.SelectObject(hDC, hOldFont)
+	END InitMetrics;
+
+	PROCEDURE [WINAPI] *TrueTypeFontInstaller(lpelf: GDI32.EnumLogFont; lpntm: GDI32.TextMetric; FontType: SET; lParam: User32.LParam): LONGINT;
+		VAR font: Displays.Font;
+	BEGIN
+		IF GDI32.TrueTypeFontType IN FontType THEN
+			font := SYSTEM.VAL(Displays.Font, lParam);
+			IF FileDir.SameName(font.family, lpelf.elfLogFont.lfFaceName) THEN
+				FontInstaller(lpelf.elfLogFont, font);
+				font.hFont := GDI32.CreateFontIndirect(lpelf.elfLogFont);
+				IF font.hFont # Kernel32.NULL THEN RETURN 0 END
+			END
+		END;
+		RETURN 1
+	END TrueTypeFontInstaller;
+
+	PROCEDURE LoadTrueTypeFont(F: Fonts.Font; font: Displays.Font; VAR family, alias: ARRAY OF CHAR; size: LONGINT; style: SET; VAR class: ARRAY OF CHAR);
+		VAR hDC: User32.HDC;
+	BEGIN
+		COPY(alias, font.family); font.size := size; font.style := style;
+		hDC := getDC(class);
+		IF hDC = Kernel32.NULL THEN
+			Kernel32.Str("WinFonts: getDC failed"); Kernel32.Ln();
+			hDC := displayDC(class); ASSERT(hDC # Kernel32.NULL)
+		END;
+		GDI32.EnumFontFamilies(hDC, alias, TrueTypeFontInstaller, SYSTEM.VAL(User32.LParam, font));
+		IF font.hFont # Kernel32.NULL THEN
+			InitMetrics(hDC, F)
+		ELSE
+			F.type := -2
+		END;
+		IF ~keepDC THEN GDI32.DeleteDC(hDC) END;
+		COPY(family, font.family)
+	END LoadTrueTypeFont;
+
+	PROCEDURE *GetTrueTypeCharObj(F: Objects.Library; ref: INTEGER; VAR obj: Objects.Object);
+		VAR font: Displays.Font; r: LONGINT;
+	BEGIN
+		font := SYSTEM.VAL(Displays.Font, F.ind);
+		r := ORD(Strings.OberonToISO[ref]);
+		theChar.lib := F; theChar.ref := ref;
+		theChar.pat := r + 256*font.number;
+		theChar.dx := SHORT(font.metrics[r].dx);
+		theChar.x := SHORT(font.metrics[r].x); theChar.y := SHORT(font.metrics[r].y);
+		theChar.w := SHORT(font.metrics[r].w); theChar.h := SHORT(font.metrics[r].h);
+		obj := theChar
+	END GetTrueTypeCharObj;
+
+	PROCEDURE [WINAPI] *RasterFontResourceInstaller(lplf: GDI32.LogFont; lptm: GDI32.TextMetric; dwType: SET; lpData: User32.LParam): LONGINT;
+		VAR font: Displays.RasterFont;
+	BEGIN
+		font := SYSTEM.VAL(Displays.RasterFont, lpData);
+		font.hFont := GDI32.CreateFontIndirect(lplf);
+		RETURN 0
+	END RasterFontResourceInstaller;
+
+	PROCEDURE LoadRasterFontResource(hDC: User32.HDC; F: Fonts.Font; font: Displays.RasterFont; VAR family: ARRAY OF CHAR; size: LONGINT; style: SET);
+		VAR res: ARRAY 8 OF CHAR;
+	BEGIN
+		COPY(family, res); res[5] := 0X;
+		BuildName(font.fonRes, res, size, style, "FON");
+		font.fonRes[Strings.Length(font.fonRes)-4] := 0X;
+		IF GDI32.AddFontResource(font.fonRes) >= 1 THEN
+			GDI32.EnumFonts(hDC, F.name, RasterFontResourceInstaller, SYSTEM.VAL(User32.LParam, font))
+		END;
+		IF font.hFont = Kernel32.NULL THEN font.fonRes := "" END
+	END LoadRasterFontResource;
+
+	PROCEDURE DummyCh(font: Displays.RasterFont; m: LONGINT);
+	BEGIN
+		font.metrics[m].dx := 0;
+		font.metrics[m].x := 0; font.metrics[m].y := 0;
+		font.metrics[m].w := 0; font.metrics[m].h := 0;
+		font.patterns[m].x := 0; font.patterns[m].y := 0;
+		font.patterns[m].w := 0; font.patterns[m].h := 0
+	END DummyCh;
+
+	PROCEDURE LoadOberonRasterFile(VAR R: Files.Rider; F: Fonts.Font; font: Displays.RasterFont);
+		VAR
+			rasterBase: POINTER TO ARRAY OF SYSTEM.BYTE; hBitmap: GDI32.HBitmap;
+			bitmapX, bitmapDX, bitmapW, bitmapH: LONGINT;
+			b, n, a, k, l, m, w, h: LONGINT;
+			nofBoxes: LONGINT;
+			nofRuns: INTEGER;
+			ch: CHAR;
+			run: ARRAY 16 OF RunRec;
+			box: ARRAY 256 OF BoxRec;
+	BEGIN
+		Files.Read(R, ch); (*family*) Files.Read(R, ch); (*variant*)
+		Files.ReadInt(R, F.height);
+		Files.ReadInt(R, F.minX); Files.ReadInt(R, F.maxX);
+		Files.ReadInt(R, F.minY); Files.ReadInt(R, F.maxY);
+		Files.ReadInt(R, nofRuns);
+		nofBoxes := 0; k := 0;
+		WHILE k # nofRuns DO
+			Files.ReadInt(R, run[k].beg); Files.ReadInt(R, run[k].end);
+			nofBoxes := nofBoxes + run[k].end - run[k].beg;
+			INC(k)
+		END;
+		l := 0;
+		WHILE l # nofBoxes DO
+			Files.ReadInt(R, box[l].dx);
+			Files.ReadInt(R, box[l].x); Files.ReadInt(R, box[l].y);
+			Files.ReadInt(R, box[l].w); Files.ReadInt(R, box[l].h);
+			INC(l)
+		END;
+		IF F.type = Fonts.font THEN
+			bitmapW := 0; l := 0;
+			WHILE l # nofBoxes DO
+				bitmapW := bitmapW + (box[l].w + 7) DIV 8; INC(l)
+			END;
+			bitmapW := bitmapW + (-bitmapW) MOD 4; bitmapH := F.maxY - F.minY;
+			NEW(rasterBase, bitmapW * bitmapH); (* temporary *)
+			bitmapX := 0; k := 0; l := 0; m := 0;
+			WHILE k < nofRuns DO
+				WHILE m < run[k].beg DO DummyCh(font, m); INC(m) END;
+				WHILE m < run[k].end DO
+					font.metrics[m].dx := box[l].dx;
+					font.metrics[m].x := box[l].x; font.metrics[m].y := box[l].y;
+					w := box[l].w; h := box[l].h;
+					font.metrics[m].w := w; font.metrics[m].h := h;
+					font.patterns[m].x := bitmapX; font.patterns[m].y := 0;
+					font.patterns[m].w := font.metrics[m].w; font.patterns[m].h := font.metrics[m].h;
+					bitmapDX := (w + 7) DIV 8;
+					n := bitmapDX * h;
+					a := SYSTEM.ADR(rasterBase[0]) + bitmapX DIV 8;
+					b := 0;
+					WHILE b < n DO
+						Files.Read(R, ch);
+SYSTEM.PUT(a + (h - 1 - (b DIV bitmapDX)) * bitmapW + (b MOD bitmapDX), GDI32.T[ORD(ch)]);
+						INC(b)
+					END;
+					INC(l); INC(m);
+					INC(bitmapX, 8*bitmapDX)
+				END;
+				INC(k)
+			END;
+			WHILE m < 256 DO DummyCh(font, m); INC(m) END;
+			hBitmap := GDI32.CreateBitmap(8*bitmapW, bitmapH, 1, 1, rasterBase^);
+			ASSERT(hBitmap # Kernel32.NULL);
+			m := 0; WHILE m < 256 DO font.patterns[m].hBm := hBitmap; INC(m) END
+		ELSE (* metric *)
+			k := 0; l := 0; m := 0;
+			WHILE k < nofRuns DO
+				WHILE m < run[k].beg DO DummyCh(font, m); INC(m) END;
+				WHILE m < run[k].end DO
+					font.metrics[m].dx := box[l].dx;
+					font.metrics[m].x := box[l].x; font.metrics[m].y := box[l].y;
+					w := box[l].w; h := box[l].h;
+					font.metrics[m].w := w; font.metrics[m].h := h;
+					font.patterns[m].x := bitmapX; font.patterns[m].y := 0;
+					font.patterns[m].w := font.metrics[m].w; font.patterns[m].h := font.metrics[m].h;
+					INC(l); INC(m)
+				END;
+				INC(k)
+			END;
+			WHILE m < 256 DO DummyCh(font, m); INC(m) END;
+			m := 0;
+			WHILE m < 256 DO font.patterns[m].hBm := Kernel32.NULL; INC(m) END
+		END
+	END LoadOberonRasterFile;
+
+	PROCEDURE LoadRasterFont(VAR R: Files.Rider; F: Fonts.Font; font: Displays.RasterFont; VAR family, alias: ARRAY OF CHAR; size: LONGINT; style: SET; VAR class: ARRAY OF CHAR);
+		VAR hDC: User32.HDC;
+	BEGIN
+		COPY(alias, font.family); font.size := size; font.style := style;
+		IF class = "Scn" THEN
+			hDC := getDC(class); ASSERT(hDC # Kernel32.NULL);
+			LoadRasterFontResource(hDC, F, font, alias, size, style);
+			IF ~keepDC THEN GDI32.DeleteDC(hDC) END
+		END;
+		LoadOberonRasterFile(R, F, font);
+		COPY(family, font.family)
+	END LoadRasterFont;
+
+	PROCEDURE *GetRasterCharObj(F: Objects.Library; ref: INTEGER; VAR obj: Objects.Object);
+		VAR font: Displays.RasterFont; r: LONGINT;
+	BEGIN
+		font := SYSTEM.VAL(Displays.RasterFont, F.ind);
+		r := LONG(ref);
+		theChar.lib := F; theChar.ref := ref;
+		IF font.hFont # Kernel32.NULL THEN
+			theChar.pat := r + 256*font.number
+		ELSE
+			theChar.pat := SYSTEM.ADR(font.patterns[r])
+		END;
+		theChar.dx := SHORT(font.metrics[r].dx);
+		theChar.x := SHORT(font.metrics[r].x); theChar.y := SHORT(font.metrics[r].y);
+		theChar.w := SHORT(font.metrics[r].w); theChar.h := SHORT(font.metrics[r].h);
+		obj := theChar
+	END GetRasterCharObj;
+
+	PROCEDURE *Finalize(F: PTR);
+		VAR font: Displays.Font; 
+	BEGIN
+		WITH F: Fonts.Font DO
+			font := SYSTEM.VAL(Displays.Font, F.ind);
+			Displays.UnregisterFont(font);
+			IF (font.hFont # Kernel32.NULL) & (F.type # Fonts.substitute) THEN
+				GDI32.DeleteObject(font.hFont); font.hFont := Kernel32.NULL
+			END;
+			IF font IS Displays.RasterFont THEN
+				WITH font: Displays.RasterFont DO
+					IF font.patterns[65].hBm # Kernel32.NULL THEN
+						GDI32.DeleteObject(font.patterns[65].hBm);
+						font.patterns[65].hBm := Kernel32.NULL
+					END;
+					IF font.fonRes # "" THEN
+						GDI32.RemoveFontResource(font.fonRes); font.fonRes := ""
+					END
+				END
+			END
+		END
+	END Finalize;
+
+	PROCEDURE *OpenFont(F: Objects.Library);
+		VAR
+			tmp: FileDir.FileName; family, alias: ARRAY 64 OF CHAR;
+			font: Displays.Font; rfont: Displays.RasterFont; size, i: LONGINT; style: SET;
+			f: Files.File; R: Files.Rider; id: CHAR;
+		PROCEDURE Substitute(F: Fonts.Font);
+		BEGIN
+			(* F.type := Fonts.substitute;
+			F.height := Fonts.Default.height;
+			F.minX := Fonts.Default.minX; F.maxX := Fonts.Default.maxX;
+			F.minY := Fonts.Default.minY; F.maxY := Fonts.Default.maxY;
+			F.ind := Fonts.Default.ind *)
+			COPY(DefFontFamily, family);
+			BuildName(F.name, family, size, style, class);
+			OpenFont(F)
+		END Substitute;
+	BEGIN
+		WITH F: Fonts.Font DO
+			font := NIL; rfont := NIL;
+			ParseName(F.name, family, size, style, class);
+			Registry.OberonPath("Fonts", tmp);
+			Registry.GetKeyValue(Registry.CurrentUser, tmp, family, alias);
+			IF Registry.res = Registry.Done THEN
+				COPY(alias, family)
+			ELSE
+				COPY(family, alias)	
+			END;
+			BuildName(F.name, family, size, style, class);
+			F.type := Fonts.font; f := Files.Old(F.name);
+			IF (class[0] = "M") & (class[1] = "d") THEN
+				F.type := Fonts.metric; getDC := printerDC;
+				class[0] := "P"; class[1] := "r";
+				BuildName(tmp, family, size, style, class);
+				f := Files.Old(tmp)
+			ELSIF (class[0] = "P") & (class[1] = "r") THEN
+				getDC := printerDC
+			ELSE (* Scn *)
+				getDC := displayDC
+			END;
+			i := 0;
+			WHILE alias[i] # 0X DO
+				IF alias[i] = "_" THEN alias[i] := " " END; INC(i)
+			END;
+			IF f # NIL THEN
+				Files.Set(R, f, 0); Files.Read(R, id);
+				IF id = Fonts.FontId THEN
+					Files.Read(R, id);
+					IF ORD(id) = Fonts.font THEN
+						NEW(rfont); F.ind := SYSTEM.VAL(Objects.Index, rfont); rfont.hFont := Kernel32.NULL;
+						font := rfont; F.GetObj := GetRasterCharObj;
+						LoadRasterFont(R, F, rfont, family, alias, size, style, class)
+					END
+				END
+			END;
+			IF font = NIL THEN
+				NEW(font); F.ind := SYSTEM.VAL(Objects.Index, font); font.hFont := Kernel32.NULL;
+				LoadTrueTypeFont(F, font, family, alias, size, style, class)
+			END;
+			IF F.type = -2 THEN
+				Substitute(F)
+			ELSIF F.type # Fonts.substitute THEN
+				Kernel.RegisterObject(F, Finalize, FALSE);
+				font.height := F.height;
+				font.minX:= F.minX; font.maxX := F.maxX;
+				font.minY := F.minY;font.maxY := F.maxY;
+				Displays.RegisterFont(font)
+			END
+		END
+	END OpenFont;
+
+	(** create a new font library *)
+	PROCEDURE NewFont*(): Objects.Library;
+		VAR F: Fonts.Font;
+	BEGIN
+		NEW(F); F.Load := OpenFont; F.GetObj := GetTrueTypeCharObj;
+		cache[curCache] := F; curCache := (curCache+1) MOD CacheSize;
+		RETURN F
+	END NewFont;
+
+	(** get a device context for the current active display *)
+	PROCEDURE DisplayDC*(class: ARRAY OF CHAR): User32.HDC;
+		VAR hDC: User32.HDC;
+	BEGIN
+		hDC := GDI32.CreateDC("DISPLAY", NIL, NIL, NIL);
+		IF ((class[0] = "P") & (class[1] = "r")) OR ((class[0] = "M") & (class[1] = "d")) THEN
+			unit := 100 * (ORD(class[2])-ORD("0"))
+		ELSE (* Scn *)
+			unit := GDI32.GetDeviceCaps(hDC, GDI32.LogPixelsY)
+		END;
+		keepDC := FALSE; RETURN hDC
+	END DisplayDC;
+
+	PROCEDURE Init();
+		VAR
+			path: FileDir.FileName; family: ARRAY 64 OF CHAR;
+			size: LONGINT; style: SET; class: ARRAY 8 OF CHAR;
+	BEGIN
+		curCache := 0;
+		NEW(theChar); Objects.Register("Fnt", NewFont);
+		getDC := NIL; displayDC := DisplayDC; printerDC := DisplayDC;
+		keepDC := FALSE; unit := ENTIER(DisplayDPI+0.5);
+		Registry.OberonPath("Fonts", path);
+		Registry.GetKeyValue(Registry.CurrentUser, path, "DefaultFont", family);
+		IF Registry.res = Registry.Done THEN Fonts.Default := Fonts.This(family) END;
+		IF Fonts.Default = NIL THEN Fonts.Default := Fonts.This(DefFontName) END;
+		ASSERT(Fonts.Default # NIL);
+		Registry.SetKeyValue(Registry.CurrentUser, path, "DefaultFont", Fonts.Default.name);
+		ParseName(Fonts.Default.name, family, size, style, class);
+		Registry.SetKeyValue(Registry.CurrentUser, path, "Default", family)
+	END Init;
+
+BEGIN
+	Init()
+END WinFonts.

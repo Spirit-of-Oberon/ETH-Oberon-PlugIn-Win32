@@ -1,61 +1,104 @@
-﻿(* OBERON System 3, Release 2.3.
+﻿(* Copyright (c) 1994 - 2000 Emil J. Zeller *)
 
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
+MODULE Configuration; (** non-portable / source: Win32.Configuration.Mod *)	(* ejz  *)
+	IMPORT Registry, FileDir, Modules, Display, Texts, Viewers, Input, Oberon;
 
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
+	CONST
+		CR = 0DX; ESC = 1BX;
+		Default = "Configuration.Text";
 
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
-
-MODULE Configuration; (** portable, except where noted / source: Win32.Configuration.Mod *)	(*  jm, Configuration module/code borrowed from ET by uh *)
-
-(*
-	contains a lot of code borrowed from ET
-*)
-
-IMPORT SYSTEM, Kernel32, Registry, FileDir, Modules, Display, Viewers, Texts, Oberon;
-
-CONST
-	CR = 0DX;
-	Default = "Configuration.Text";
-
-VAR
-	W: Texts.Writer;
-	sX, sY: INTEGER;	(* saved coordinates for newm viewer [used in Marker ] *)
-	commandLine*: FileDir.FileName;
+	VAR
+		W: Texts.Writer;
+		sX, sY: INTEGER;	(* saved coordinates for newm viewer [used in Marker ] *)
 
 	(** Execute commands contained in the text. Each command must be on a separate line. *)
 	PROCEDURE do*(T: Texts.Text; beg, end: LONGINT);
-	VAR S: Texts.Scanner; pos: LONGINT; res: INTEGER;
-		
+		VAR S: Texts.Scanner; pos: LONGINT; res: INTEGER;
+		PROCEDURE NextCmd();
+			VAR tR: Texts.Reader; ch: CHAR;
+		BEGIN
+			IF pos < end THEN 
+				Texts.OpenReader(tR, T, pos); Texts.Read(tR, ch);
+				LOOP
+					WHILE ~tR.eot & (ch # CR) DO Texts.Read(tR, ch) END;
+					Texts.Read(tR, ch);
+					IF tR.eot THEN
+						EXIT
+					ELSIF (ch > " ") & (ch # "!") THEN
+						pos := Texts.Pos(tR)-1;
+						Texts.OpenScanner(S, T, pos); Texts.Scan(S);
+						RETURN
+					END
+				END
+			END;
+			S.class := Texts.Inval
+		END NextCmd;
+		PROCEDURE FirstCmd();
+			VAR tR: Texts.Reader; ch: CHAR;
+		BEGIN
+			IF pos < end THEN 
+				Texts.OpenReader(tR, T, pos); Texts.Read(tR, ch);
+				IF ~tR.eot & (ch > " ") & (ch # "!") THEN
+					pos := Texts.Pos(tR)-1;
+					Texts.OpenScanner(S, T, pos); Texts.Scan(S);
+					RETURN
+				END
+			END;
+			NextCmd()
+		END FirstCmd;
+		PROCEDURE UserInterrupt(): BOOLEAN;
+			VAR ch: CHAR;
+		BEGIN
+			WHILE Input.Available() # 0 DO
+				Input.Read(ch);
+				IF ch = ESC THEN RETURN TRUE END;
+				Input.Write(ch)
+			END;
+			RETURN FALSE
+		END UserInterrupt;
+	BEGIN
+		pos := beg; FirstCmd();
+		WHILE (S.class = Texts.Name) & (pos < end) & ~UserInterrupt() DO
+			pos := Texts.Pos(S) - 1; 
+			Oberon.Par.vwr := Oberon.MarkedViewer();
+			Oberon.Par.frame := Oberon.MarkedFrame();
+			Oberon.Par.text := T; Oberon.Par.pos := pos;
+			Oberon.Call(S.s, Oberon.Par, FALSE, res);
+			IF res # 0 THEN
+				Texts.WriteString(W, "Call error: "); Texts.WriteString(W, Modules.resMsg);
+				Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
+			END;
+			NextCmd()
+		END
+	END do;
+
+(*
+	(** Execute commands contained in the text. Each command must be on a separate line. *)
+	PROCEDURE do*(T: Texts.Text; beg, end: LONGINT);
+		VAR S: Texts.Scanner; pos: LONGINT; res: INTEGER;
 		PROCEDURE NextLine(text: Texts.Text; pos: LONGINT): LONGINT;
-			VAR tR: Texts.Reader;	ch: CHAR;
+			VAR tR: Texts.Reader; ch: CHAR;
 		BEGIN
 			IF pos < text.len THEN 
 				Texts.OpenReader(tR, text, pos); Texts.Read(tR, ch);
 				WHILE ~ tR.eot & (ch # CR) DO Texts.Read(tR, ch) END;
-				IF tR.eot THEN RETURN -1 ELSE RETURN Texts.Pos(tR)  END
+				IF tR.eot THEN RETURN -1 ELSE RETURN Texts.Pos(tR) END
 			ELSE RETURN -1
 			END
 		END NextLine;
-	
 	BEGIN
 		pos := beg;
 		Texts.OpenScanner(S, T, pos); Texts.Scan(S);
 		WHILE ((S.class = Texts.Name) OR ((S.class = Texts.Char) & (S.c = "!"))) & (pos < end) DO
 			pos := Texts.Pos(S) - 1; 
 			IF S.class = Texts.Name THEN
+				Oberon.Par.vwr := Oberon.MarkedViewer();
+				Oberon.Par.frame := Oberon.MarkedFrame();
 				Oberon.Par.text := T; Oberon.Par.pos := pos;
 				Oberon.Call(S.s, Oberon.Par, FALSE, res);
 				IF res # 0 THEN
-					Texts.WriteString(W, "Call error: ");  Texts.WriteString(W, Modules.resMsg);
-					Texts.WriteLn(W);  Texts.Append(Oberon.Log, W.buf)
+					Texts.WriteString(W, "Call error: "); Texts.WriteString(W, Modules.resMsg);
+					Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
 				END
 			END;
 			pos := NextLine(T, pos);
@@ -64,16 +107,16 @@ VAR
 			END
 		END
 	END do;
+*)
 
 	PROCEDURE ValidX(X: INTEGER): BOOLEAN;
 	BEGIN
-		RETURN (Display.Left <= X) & (X < Display.Left + Display.Width)
-				OR (Display.ColLeft <= X) & (X < Display.ColLeft + Display.Width)
+		RETURN (X >= 0) & (X < Display.Width)
 	END ValidX;
 
 	PROCEDURE ValidY(Y: INTEGER): BOOLEAN;
 	BEGIN
-		RETURN (Display.Bottom <= Y) & (Y < Display.Bottom + Display.Height)
+		RETURN (Y >= 0) & (Y < Display.Height)
 	END ValidY;
 
 	(** Set the star marker under program control:
@@ -87,7 +130,7 @@ VAR
 		Configuration.Marker save user		(* save marker in user track *)
 	*)
 	PROCEDURE Marker*;
-		VAR S: Texts.Scanner;	V : Viewers.Viewer;	cM: Oberon.ControlMsg;
+		VAR S: Texts.Scanner; V : Viewers.Viewer; cM: Oberon.ControlMsg;
 	BEGIN
 		Texts.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos); Texts.Scan(S);
 		IF S.class # Texts.Name THEN RETURN END;
@@ -104,11 +147,11 @@ VAR
 					cM.Y := Oberon.Par.vwr.Y + Oberon.Par.vwr.H DIV 2
 				END
 			ELSIF (S.class = Texts.Name) & (S.s = "system") THEN
-				Oberon.AllocateSystemViewer(Oberon.SystemTrack(Oberon.Par.vwr.X), cM.X, cM.Y);
-				cM.id := Oberon.mark;
+				Oberon.AllocateSystemViewer(Oberon.SystemTrack(0), cM.X, cM.Y);
+				cM.id := Oberon.mark
 			ELSIF (S.class = Texts.Name) & (S.s = "user") THEN
-				Oberon.AllocateUserViewer(Oberon.UserTrack(Oberon.Par.vwr.X), cM.X, cM.Y);
-				cM.id := Oberon.mark;
+				Oberon.AllocateUserViewer(Oberon.UserTrack(0), cM.X, cM.Y);
+				cM.id := Oberon.mark
 			ELSIF (S.class = Texts.Int) & (S.i >= 0) THEN
 				cM.X := SHORT(S.i); Texts.Scan(S);
 				IF (S.class = Texts.Int) & (S.i >= 0) THEN
@@ -123,49 +166,43 @@ VAR
 					END
 				END
 			END;
-			IF cM.id = Oberon.mark THEN
-				V := Viewers.This(cM.X, cM.Y); IF V # NIL THEN V.handle(V, cM) END	(* set marker *)
+			IF cM.id = Oberon.mark THEN	(* set marker *)
+				IF cM.Y >= Display.Height THEN cM.Y := Display.Height-1 END;
+				V := Viewers.This(cM.X, cM.Y);
+				IF V # NIL THEN Viewers.Send(V, cM) END
 			END
 		ELSIF S.s = "save" THEN
 			Texts.Scan(S);
 			IF S.class = Texts.Name THEN
 				IF S.s = "system" THEN
-					Oberon.AllocateSystemViewer(Oberon.SystemTrack(Oberon.Par.vwr.X), sX, sY)
+					Oberon.AllocateSystemViewer(Oberon.SystemTrack(0), sX, sY)
 				ELSIF S.s = "user" THEN
-					Oberon.AllocateUserViewer(Oberon.UserTrack(Oberon.Par.vwr.X), sX, sY)
+					Oberon.AllocateUserViewer(Oberon.UserTrack(0), sX, sY)
 				ELSE sX := -1; sY := -1
 				END
 			END
 		END
 	END Marker;
 
-	PROCEDURE Init();
-		VAR
-			config: ARRAY 256 OF CHAR;
-			T: Texts.Text;
-			adr, i, l: LONGINT;
-			x, y: INTEGER;
-			ch: CHAR;
+	(** Execute "Configuration.Text" (called by System.StartEXE/System.StartDLL).
+		The name of the configuration file is stored in the registry under the key <name>.
+		The default value is Configuration.Text. *)
+	PROCEDURE Load*(name: ARRAY OF CHAR): BOOLEAN;
+		VAR config: FileDir.FileName; T: Texts.Text;
 	BEGIN
-		Registry.GetKeyValue(Registry.CurrentUser, Registry.oberonSystem, "Configuration", config);
-		IF Registry.res # Registry.Done THEN
+		IF name # "" THEN
+			Registry.GetKeyValue(Registry.CurrentUser, Registry.oberonSystem, name, config);
+			IF Registry.res # Registry.Done THEN COPY(Default, config) END
+		ELSE
 			COPY(Default, config)
 		END;
 		NEW(T); Texts.Open(T, config);
 		IF T.len > 0 THEN
-			Oberon.AllocateSystemViewer(Display.Left, x, y);
-			NEW(Oberon.Par);
-			Oberon.Par.vwr := Viewers.This(x+1, y-1); NEW(Oberon.Par.frame);
-			do(T, 0, T.len)
+			do(T, 0, T.len); RETURN TRUE
 		END;
-		adr := Kernel32.GetCommandLine();
-		i := 0; l := LEN(commandLine)-1;
-		REPEAT
-			SYSTEM.GET(adr, ch); INC(adr);
-			commandLine[i] := ch; INC(i)
-		UNTIL (ch = 0X) OR (i >= l);
-		commandLine[i] := 0X
-	END Init;
-	
-BEGIN Texts.OpenWriter(W); Init()
+		RETURN FALSE
+	END Load;
+
+BEGIN
+	Texts.OpenWriter(W)
 END Configuration.

@@ -1,17 +1,5 @@
-﻿(* OBERON System 3, Release 2.3.
-
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
-
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
-
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
+﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE Directories; (** portable / source: Win32.Directories.Mod *)	(* ps,  *)
 
@@ -21,7 +9,8 @@ IMPORT
 
 CONST
 	(* drive types *)
-	None = 1; Removable = 2; Fixed = 3; Remote = 4; CDROM = 5; RAMDisk = 6; Floppy = 7;
+	None = Kernel32.DriveNoRootDir; Removable = Kernel32.DriveRemovable; Fixed = Kernel32.DriveFixed;
+	Remote = Kernel32.DriveRemote; CDROM = Kernel32.DriveCDRom; RAMDisk = Kernel32.DriveRamDisk; Floppy = 7;
 	FoldC = 8; FoldO = 9;
 	Picts = 9;
 
@@ -70,7 +59,7 @@ VAR
 
 (*========== aux. procs ==========*)
 PROCEDURE IsDriveAvailable (drv: ARRAY OF CHAR): BOOLEAN;
-BEGIN RETURN (drv[0] = "C") OR (Kernel32.GetDriveType(SYSTEM.ADR(drv)) > None)
+BEGIN RETURN (drv[0] = "C") OR (Kernel32.GetDriveType(drv) > None)
 END IsDriveAvailable;
 
 PROCEDURE IsOnlyDrive (path: ARRAY OF CHAR): BOOLEAN;
@@ -78,12 +67,12 @@ BEGIN RETURN (path[0] # 0X) & (path[1] = ":") & (path[2] = 0X)
 END IsOnlyDrive;
 
 PROCEDURE IsDirectory (path: ARRAY OF CHAR): BOOLEAN;
-VAR attrs: LONGINT; res: BOOLEAN;
+VAR attrs: SET; res: BOOLEAN;
 BEGIN
 	IF IsOnlyDrive(path) THEN res := IsDriveAvailable(path)
 	ELSE
-		attrs := Kernel32.GetFileAttributes(SYSTEM.ADR(path));
-		IF attrs # -1 THEN res := Kernel32.Includes(attrs, Kernel32.FileAttributeDirectory)
+		attrs := Kernel32.GetFileAttributes(path);
+		IF attrs # {0 .. 31} THEN res := Kernel32.FileAttributeDirectory IN attrs
 		ELSE res := FALSE
 		END
 	END;
@@ -118,7 +107,7 @@ BEGIN
 	RETURN n
 END NewItem;
 
-(* Insert item "n" after "item"  *)
+(* Insert item "n" after "item" *)
 PROCEDURE InsertItem (item, n: Item);
 BEGIN
 	n.next := item.next; n.prev := item; item.next.prev := n; item.next := n;
@@ -127,7 +116,7 @@ BEGIN
 END InsertItem;
 
 (* FileDir.FileEnumerator. Global variable "model" has to be preset. *)
-PROCEDURE * Enum (path, name: ARRAY OF CHAR; time, date, size: LONGINT; isDir: BOOLEAN);
+PROCEDURE * Enum (path, name: ARRAY OF CHAR; time, date, size: LONGINT; attrs: SET);
 VAR new, cur: Item;
 
 	PROCEDURE CAPCompare (VAR s1, s2: ARRAY OF CHAR): INTEGER;
@@ -141,7 +130,7 @@ VAR new, cur: Item;
 BEGIN
 	new := NewItem(name, GetKey(model));
 	cur := root;
-	IF isDir THEN
+	IF FileDir.Directory IN attrs THEN
 		new.dsc := NewItem("", -1); new.dsc.pos := -1; new.dsc.asc := new;
 		REPEAT cur := cur.next UNTIL (cur = root) OR (cur.dsc = NIL) OR (CAPCompare(cur.s, name) > 0)
 	ELSE
@@ -168,7 +157,7 @@ BEGIN
 		IF CAP(item.s[0]) = "C" THEN res := Fixed
 		ELSIF CAP(item.s[0]) < "C" THEN res := Floppy
 		ELSE
-			res := Kernel32.GetDriveType(SYSTEM.ADR(item.s));
+			res := Kernel32.GetDriveType(item.s);
 			IF res > RAMDisk THEN res := Fixed ELSIF res < None THEN res := None END
 		END;
 		d.pictNr := res
@@ -525,10 +514,10 @@ BEGIN Objects.NewObj := drv
 END NewDrv;
 
 (* ------------ aux. Commands ------------ *)
-PROCEDURE * EnumForList (path, name: ARRAY OF CHAR; time, date, size: LONGINT; isDir: BOOLEAN);
+PROCEDURE * EnumForList (path, name: ARRAY OF CHAR; time, date, size: LONGINT; attrs: SET);
 VAR d: ListRiders.String; full: ARRAY 256 OF CHAR; i, j: LONGINT;
 BEGIN
-	IF ~isDir THEN
+	IF ~(FileDir.Directory IN attrs) THEN
 		NEW(d);
 		IF writePath THEN
 			i := 0; j := 0;
@@ -562,7 +551,7 @@ BEGIN
 		WHILE S.s[i] # 0X DO writePath := writePath OR (S.s[i] = "p"); INC(i) END;
 		Texts.Scan(S)
 	END;
-	IF S.class IN {Texts.Name, Texts.String}  THEN
+	IF S.class IN {Texts.Name, Texts.String} THEN
 		COPY(S.s, path); Texts.Scan(S);
 		i := 0; j := 0;
 		WHILE path[i] # 0X DO
@@ -576,7 +565,7 @@ BEGIN
 			pattern[i] := path[j]; INC(j); INC(i)
 		END;
 		pattern[i] := 0X; path[j-i] := 0X;
-		IF S.class IN {Texts.Name, Texts.String}  THEN
+		IF S.class IN {Texts.Name, Texts.String} THEN
 			obj := Gadgets.FindObj(Gadgets.context, S.s);
 			IF obj # NIL THEN
 				C.R := NIL; Objects.Stamp(C); obj.handle(obj, C);
@@ -638,7 +627,7 @@ BEGIN
 	vMethod.Format := FormatLine; vMethod.Display := DisplayLine;
 	vMethod.PrintFormat := PrintFormatLine; vMethod.Print := PrintLine;
 
-	NEW(task); task.handle := TaskHandler; task.time := 0; task.safe := TRUE; Oberon.Install(task);
+	NEW(task); task.handle := TaskHandler; task.time := Oberon.Time(); task.safe := TRUE; Oberon.Install(task);
 	drv := Gadgets.CreateObject("String"); StringHandler := drv.handle; drv.handle := HandleDrv;
 	Modules.InstallTermHandler(Cleanup);
 	GetPicts

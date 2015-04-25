@@ -1,82 +1,72 @@
-﻿(* OBERON System 3, Release 2.3.
+﻿(* Copyright (c) 1994 - 2000 Emil J. Zeller *)
 
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
+MODULE Input; (** portable, except where noted / source: Win32.Input.Mod *)	(* ejz  *)
+	IMPORT SYSTEM, Kernel32, User32, Displays, Display, Viewers;
 
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
+(** Module Input is responsible for event timing, mouse and keyboard input. *)
 
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
+	CONST
+		SHIFT* = 0; CTRL* = 1; ALT* = 2; (** constants for KeyState *)
 
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
+	VAR
+		TimeUnit*: LONGINT; (** timer ticks per second (platform dependent). *)
 
-MODULE Input; (** portable, except where noted / source: Win32.Input.Mod *)	(* ejz  / MH *)
+	(** Returns the number of keystrokes in the keyboard input buffer. *)
+	PROCEDURE Available*(): INTEGER;
+	BEGIN
+		Displays.FlushCharacterCache(Display.cur);
+		RETURN SHORT(Displays.AvailChar())
+	END Available;
 
-(**
-Module Input is responsible for event timing, mouse and keyboard input.
-*)
+	(** Read a character from the keyboard buffer. Blocks if no character is available. *)
+	PROCEDURE Read*(VAR ch: CHAR);
+	BEGIN
+		Displays.FlushCharacterCache(Display.cur);
+		Displays.ReadChar(ch)
+	END Read;
 
-IMPORT Kernel32, User32, Win32, Registry;
+	(** Write a character to the keyboard buffer. *)
+	PROCEDURE Write*(ch: CHAR);	(** non-portable *)
+	BEGIN
+		Displays.FlushCharacterCache(Display.cur);
+		Displays.WriteChar(Display.cur, ch)
+	END Write;
 
-CONST
-	SHIFT* = 0 (*Win32.SHIFT*); CTRL* = 1 (*Win32.CTRL*); ALT* = 2 (*Win32.ALT*); (** constants for KeyState *)
+	(** Return the state of the shift keys (SHIFT, CTRL or ALT). *)
+	PROCEDURE KeyState*(VAR keys: SET);
+	BEGIN
+		Displays.FlushCharacterCache(Display.cur); keys := {};
+		IF User32.GetAsyncKeyState(User32.VKShift) < 0 THEN INCL(keys, SHIFT) END;
+		IF User32.GetAsyncKeyState(User32.VKControl) < 0 THEN INCL(keys, CTRL) END;
+		IF User32.GetAsyncKeyState(User32.VKMenu) < 0 THEN INCL(keys, ALT) END
+	END KeyState;
 
-VAR
-	TimeUnit*: LONGINT; (** timer ticks per second (platform dependent). *)
-	emulateMM: BOOLEAN;
-
-(** Returns the number of keystrokes in the keyboard input buffer. *)
-PROCEDURE Available*(): INTEGER;
-BEGIN RETURN Win32.Available()
-END Available;
-
-(** Read a character from the keyboard buffer. Blocks if no character is available. *)
-PROCEDURE Read*(VAR ch: CHAR);
-BEGIN Win32.GetChar(ch)
-END Read;
-
-PROCEDURE Write*(ch: CHAR);	(** non-portable *)
-BEGIN Win32.PutChar(ch)
-END Write;
-
-(** Return the state of the shift keys (SHIFT, CTRL or ALT). *)
-PROCEDURE KeyState*(VAR keys: SET);
-BEGIN
-	keys := {};
-	IF User32.GetAsyncKeyState(User32.VKShift) < 0 THEN
-		INCL(keys, SHIFT)
-	END;
-	IF User32.GetAsyncKeyState(User32.VKCtrl) < 0 THEN
-		INCL(keys, CTRL)
-	END;
-	IF User32.GetAsyncKeyState(User32.VKAlt) < 0 THEN
-		INCL(keys, ALT)
-	END
-END KeyState;
-
-(** Reads the current mouse position x, y and the key state of the mouse buttons (also called keys). The mouse buttons are numbered from the right to the left as 0, 1, 2 (i.e. 1 is the middle mouse button). For example, when the left and middle buttons are pressed, keys will be set to {1, 2}. *)
-PROCEDURE Mouse*(VAR keys: SET; VAR x, y: INTEGER);
-BEGIN
-	Win32.Mouse(keys, x, y);
-	IF emulateMM THEN
-		IF User32.GetAsyncKeyState(User32.VKCtrl) < 0 THEN
-			INCL(keys, 1)
-		ELSIF 1 IN keys THEN
-			emulateMM := FALSE
+	(** Reads the current mouse position x, y and the key state of the mouse buttons (also called keys). The mouse buttons
+		are numbered from the right to the left as 0, 1, 2 (i.e. 1 is the middle mouse button). For example, when the left and
+		middle buttons are pressed, keys will be set to {1, 2}. *)
+	PROCEDURE Mouse*(VAR keys: SET; VAR x, y: INTEGER);
+		VAR win: Displays.Display;
+	BEGIN
+		win := Display.cur;
+		Displays.FlushCharacterCache(win);
+		IF (win # NIL) & (win IS Viewers.Window) THEN
+			WITH win: Viewers.Window DO
+				Kernel32.Sleep(0);
+				keys := win.track.keys; x := SHORT(win.track.X); y := SHORT(win.track.Y)
+			END
+		ELSE
+			keys := {}; x := 0; y := 0
 		END
-	END
-END Mouse;
+	END Mouse;
 
-(** Returns the elapsed number of timer ticks from Oberon startup. *)
-PROCEDURE Time*(): LONGINT;
-BEGIN RETURN Kernel32.GetTickCount()
-END Time;
+	(** Returns the elapsed number of timer ticks from Oberon (Windows) startup. *)
+	PROCEDURE Time*(): LONGINT;
+	BEGIN
+		RETURN Kernel32.GetTickCount()
+	END Time;
 
 BEGIN
-	TimeUnit := 1000; emulateMM := TRUE
+	TimeUnit := 1000
 END Input.
 
 (** Remark:
@@ -102,5 +92,4 @@ Keyboard character codes correspond to the ASCII character set. Some other impor
 	ü, Ü	133, 130
 	ß	150
 
-The module EditKeys allows you to determine the keyboard code of any key pressed. For cross-platform portability, Oberon does not normally support all keys available on your keyboard.
-*)
+The module EditKeys allows you to determine the keyboard code of any key pressed. For cross-platform portability, Oberon does not normally support all keys available on your keyboard. *)

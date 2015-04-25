@@ -1,17 +1,4 @@
-﻿(* OBERON System 3, Release 2.3.
-
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
-
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
-
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
+﻿(* Copyright (c) 1994 - 2000 Emil J. Zeller *)
 
 MODULE Strings; (** portable *)	(* ejz,  *)
 
@@ -129,7 +116,7 @@ MODULE Strings; (** portable *)	(* ejz,  *)
 			|"ç": ch := "C"
 			|"á": ch := "A"
 			|"ñ": ch := "N"
-			|"": ch := "S"
+			|"ß": ch := "S"
 		ELSE
 		END;
 		RETURN ch
@@ -380,35 +367,30 @@ MODULE Strings; (** portable *)	(* ejz,  *)
 
 (** Convert a string into an integer. Leading white space characters are ignored. *)
 	PROCEDURE StrToInt*(VAR str: ARRAY OF CHAR; VAR val: LONGINT);
-		VAR
-			i, d: LONGINT;
-			neg: BOOLEAN;
+		VAR i, d: LONGINT; ch: CHAR; neg: BOOLEAN;
 	BEGIN
-		i := 0;
-		WHILE (str[i] # 0X) & (str[i] <= " ") DO
-			INC(i)
+		i := 0; ch := str[0];
+		WHILE (ch # 0X) & (ch <= " ") DO
+			INC(i); ch := str[i]
 		END;
-		neg := FALSE;
-		IF str[i] = "+" THEN INC(i) END;
-		IF str[i] = "-" THEN
-			neg := TRUE; INC(i)
-		END;
-		WHILE (str[i] # 0X) & (str[i] <= " ") DO
-			INC(i)
+		neg := FALSE; IF ch = "+" THEN INC(i); ch := str[i] END;
+		IF ch = "-" THEN neg := TRUE; INC(i); ch := str[i] END;
+		WHILE (ch # 0X) & (ch <= " ") DO
+			INC(i); ch := str[i]
 		END;
 		val := 0;
-		WHILE (str[i] >= "0") & (str[i] <= "9") DO
-			d := ORD(str[i])-ORD("0");
+		WHILE (ch >= "0") & (ch <= "9") DO
+			d := ORD(ch)-ORD("0");
+			INC(i); ch := str[i];
 			IF val <= ((MAX(LONGINT)-d) DIV 10) THEN
 				val := 10*val+d
+			ELSIF neg & (val = 214748364) & (d = 8) & ((ch < "0") OR (ch > "9")) THEN
+				val := MIN(LONGINT); neg := FALSE
 			ELSE
 				HALT(99)
-			END;
-			INC(i)
+			END
 		END;
-		IF neg THEN
-			val := -val
-		END
+		IF neg THEN val := -val END
 	END StrToInt;
 
 (** Convert the substring beginning at position i in str into an integer. Any leading whitespace characters are ignored.
@@ -737,13 +719,14 @@ END StrToReal;
 					str[i] := CHR(x MOD 10 + ORD("0")); INC(i)
 				END
 			ELSIF CAP(form[j]) = "Y" THEN	(* Year *)
-				INC(j, 2); x := date DIV 512;
+				INC(j, 2); x := 1900 + date DIV 512;
 				IF CAP(form[j]) = "Y" THEN
-					INC(j, 2); INC(x, 1900);
+					INC(j, 2);
 					str[i] := CHR(x DIV 1000 + ORD("0")); str[i + 1] := CHR(x DIV 100 MOD 10 + ORD("0"));
 					str[i + 2] := CHR(x DIV 10 MOD 10 + ORD("0")); str[i + 3] := CHR(x MOD 10 + ORD("0"));
 					INC(i, 4)
 				ELSE
+					x := x MOD 100;
 					str[i] := CHR(x DIV 10 MOD 10 + ORD("0")); str[i + 1] := CHR(x MOD 10 + ORD("0"));
 					INC(i, 2)
 				END
@@ -754,30 +737,29 @@ END StrToReal;
 	END DateToStr;
 
 (** Returns a month's name (set short to get the abbreviation) *) 
-	PROCEDURE MonthToStr*(month: LONGINT; VAR str: ARRAY OF CHAR; short: BOOLEAN);
+	PROCEDURE MonthToStr*(month: INTEGER; VAR str: ARRAY OF CHAR; short: BOOLEAN);
 	BEGIN
 		month := (month - 1) MOD 12;
 		IF short THEN COPY(sMonthName[month], str) ELSE COPY(lMonthName[month], str) END
 	END MonthToStr;
 
 (** Returns a day's name (set short to get the abbreviation) *) 
-	PROCEDURE DayToStr*(day: LONGINT; VAR str: ARRAY OF CHAR; short: BOOLEAN);
+	PROCEDURE DayToStr*(day: INTEGER; VAR str: ARRAY OF CHAR; short: BOOLEAN);
 	BEGIN
 		IF short THEN COPY(sDayName[day MOD 7], str) ELSE COPY(lDayName[day MOD 7], str) END
 	END DayToStr;
 
 (** Convert time (Oberon.GetClock) into specified format. *)
 	PROCEDURE TimeToStr*(time: LONGINT; VAR str: ARRAY OF CHAR);
-		VAR i, j, x, h, hPos: LONGINT; form: ARRAY 32 OF CHAR; shortH, leadingH: BOOLEAN;
+		VAR i, j, x, h, hPos: LONGINT; form: ARRAY 32 OF CHAR; leadingH: BOOLEAN;
 	BEGIN
 		COPY(timeform, form);
 		IF form = "" THEN form := "HH:MM:SS" END;
-		i := 0; j := 0; h:= time DIV 4096 MOD 32; shortH := FALSE;
+		i := 0; j := 0; h:= time DIV 4096 MOD 32;
 		WHILE form[j] # 0X DO
 			IF ((CAP(form[j]) = "A") OR (CAP(form[j]) = "P")) & (CAP(form[j+1]) = "M") THEN
-				shortH := TRUE;
 				IF CAP(form[j]) = form[j] THEN x := 0 ELSE x := 32 END;
-				IF  (h < 1) OR (h > 12) THEN str[i] := CHR(ORD("P") + x) ELSE str[i] := CHR(ORD("A") + x) END;
+				IF (h < 1) OR (h > 12) THEN str[i] := CHR(ORD("P") + x) ELSE str[i] := CHR(ORD("A") + x) END;
 				h := h MOD 12; IF h = 0 THEN h := 12 END;
 				str[i + 1] := CHR(ORD("M") + x);
 				INC(i, 2);
@@ -878,7 +860,7 @@ END StrToReal;
 		isAlpha[ORD("è")] := TRUE; isAlpha[ORD("ì")] := TRUE; isAlpha[ORD("ò")] := TRUE;
 		isAlpha[ORD("ù")] := TRUE; isAlpha[ORD("é")] := TRUE; isAlpha[ORD("ë")] := TRUE;
 		isAlpha[ORD("ï")] := TRUE; isAlpha[ORD("ç")] := TRUE; isAlpha[ORD("á")] := TRUE;
-		isAlpha[ORD("ñ")] := TRUE; isAlpha[ORD("")] := TRUE;
+		isAlpha[ORD("ñ")] := TRUE; isAlpha[ORD("ß")] := TRUE;
 		FOR i := 0 TO 255 DO
 			ISOToOberon[i] := CHR(i); OberonToISO[i] := CHR(i)
 		END;

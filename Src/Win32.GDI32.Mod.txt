@@ -1,219 +1,366 @@
-﻿(* OBERON System 3, Release 2.3.
-
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
-
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
-
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
+﻿(* Copyright (c) 1994 - 2000 Emil J. Zeller *)
 
 MODULE GDI32; (** non-portable / source: Win32.GDI32.Mod *)	(* ejz  *)
-	IMPORT S := SYSTEM, Kernel32;
+	IMPORT SYSTEM, Kernel32, User32;
+
+(** This module defines all the Win32 GDI32 APIs used by Oberon.
+	Note this module is part of the Oberon inner-core and must be linked with PELinker. *)
 
 	CONST
-		PATCOPY* = 0F00021H; PATINVERT* = 5A0049H; PATAND* = 0A000C9H; PATPAINT* = 0FA0089H; SRCCOPY* = 0CC0020H;
-		DSTINVERT* = 0550009H; SRCINVERT* = 0660046H; SRCAND* = 08800C6H; SRCPAINT* = 0EE0086H; NOTSRCCOPY* = 0330008H;
-		RasterFontType* = 1; DeviceFontType* = 2; TrueTypeFontType* = 4; BLACKNESS* = 00000042H; WHITENESS* = 00FF0062H;
+		(** SetBkMode iBkMode values *)
 		Transparent* = 1; Opaque* = 2;
-		BitsPixel* = 12;
-		HORZRES* = 8; VERTRES* = 10;
-		LOGPIXELSX* = 88; LOGPIXELSY* = 90;
-		PHYSICALWIDTH* = 110; PHYSICALHEIGHT* = 111;
-		PHYSICALOFFSETX* = 112; PHYSICALOFFSETY* = 113;
-		RCBitBlt* = 1;
-		TABaseline* = 24; TALeft* = 0;
-		MMText* = 1;
+		(** BitBlt/PatBlt dwRop values *)
+		PatCopy* = 0F00021H; PatInvert* = 05A0049H; DstInvert* = 0550009H;
+		SrcInvert* = 0660046H; SrcCopy* = 0CC0020H; SrcPaint* = 0EE0086H; SrcAnd* = 08800C6H; NotSrcCopy* = 0330008H;
+		(** GetDeviceCaps nIndex values *)
+		HorzRes* = 8; VertRes* = 10; BitsPixel* = 12; LogPixelsX* = 88; LogPixelsY* = 90;
+		PhysicalWidth* = 110; PhysicalHeight* = 111; PhysicalOffsetX* = 112; PhysicalOffsetY* = 113;
+		(** SetROP2 fnDrawMode values *)
+		R2NotCopyPen* = 4; R2Not* = 6; R2NotXOrPen* = 10; R2Nop* = 11; R2CopyPen* = 13;
+		(** CreatePen  fnPenStyle values *)
 		PSSolid* = 0;
-		FWThin* = 100; FWLight* = 300; FWNormal* = 400; FWMedium* = 500; FWBold* = 700; FWBlack* = 900;
-		BIRGB* = 0; DIBRGBColors* = 0; DIBPalColors* = 1;
+		(** GetStockObject fnObject values *)
+		NullBrush* = 5; NullPen* = 8;
+		(** LogFont/EnumLogFont face name lengths *)
+		LFFaceSize* = 32; LFFullFaceSize* = 64;
+		(** LogFont lfWeight values *)
+		FWThin* = 100; FWLight* = 300; FWNormal* = 400; FWMedium* = 500; FWBold* = 700;
+		(** EnumFontFamilies FontType values *)
+		RasterFontType* = 0; TrueTypeFontType* = 2;
+		(** BitmapInfo biCompression values *)
+		BIRGB* = 0;
+		(** GetDIBits/SetDIBitsToDevice/StretchDIBits uUsage/fuColorUse/iUsage values *)
+		DIBRGBColors* = 0; DIBPalColors* = 1;
+		(** GetMapMode/SetMapMode fnMapMode values *)
+		MMText* = 1; MMTwips* = 6;
+		(** SetTextAlign fMode values *)
+		TALeft* = {}; TABaseline* = {3, 4};
+		(** GetGlyphOutline uFormat values *)
+		GGOMetrics* = 0; GGOBitmap* = 1; GGONative* = 2; GGOGray2Bitmap* = 4; GGOGray4Bitmap* = 5; GGOGray8Bitmap* = 6;
+		(** ExtSelectClipRgn fnMode values *)
+		RgnAnd* = 1; RgnOr* = 2; RgnXOr* = 3; RgnDiff* = 4; RgnCopy* = 5;
+
+		NullRegion* = 1; SimpleRegion* = 2; ComplexRegion* = 3;
+
+		RDHRectangles* = 1;
 
 	TYPE
-		COLORREF* = LONGINT;
-		LogPalette* = RECORD
-			version*, numEntries*: INTEGER;
-			entries*: ARRAY 256 OF LONGINT
+		(** handle types for different gdi objects *)
+		HGDIObj* = User32.HGDIObj;
+		HFont* = User32.HFont;
+		HBrush* = User32.HBrush;
+		HRgn* = User32.HRgn;
+		HBitmap* = User32.HBitmap;
+		HPen* = HGDIObj;
+		HMetafile* = HGDIObj;
+		HEnhMetafile* = HGDIObj;
+
+		(** The COLORREF value is used to specify an RGB color. *)
+		ColorRef* = User32.ColorRef;
+
+		(** The LOGFONT structure defines the attributes of a font. *)
+		LogFont* = RECORD [NOTAG]
+			lfHeight*, lfWidth*, lfEscapement*, lfOrientation*, lfWeight*: LONGINT;
+			lfItalic*, lfUnderline*, lfStrikeOut*: BOOLEAN;
+			lfCharSet*, lfOutPrecision*, lfClipPrecision*, lfQuality*, lfPitchAndFamily*: SHORTINT;
+			lfFaceName*: ARRAY LFFaceSize OF CHAR
 		END;
-		LOGFONT* = RECORD
-			height*, width*, escapement*, orientation*, weight*: LONGINT;
-			italic*, underline*, strikeout*: SHORTINT;
-			charset*: SHORTINT;
-			outprec*, clipprec*: SHORTINT;
-			quality*: SHORTINT;
-			pitchAndFamily*: SHORTINT;
-			facename*: ARRAY 32 OF CHAR
+
+		(** The ENUMLOGFONT structure defines the attributes of a font, the complete name of a font, and the style of a font. *)
+		EnumLogFont* = RECORD [NOTAG]
+			elfLogFont*: LogFont;
+			elfFullName*: ARRAY LFFullFaceSize OF CHAR;
+			elfStyle*: ARRAY LFFaceSize OF CHAR
 		END;
-		ENUMLOGFONT* = RECORD (LOGFONT)
-		    fullName*: ARRAY 64 OF CHAR;
-		    style*: ARRAY 32 OF CHAR 
+
+		(** The TEXTMETRIC structure contains basic information about a physical font. *)
+		TextMetric* = RECORD [NOTAG]
+			tmHeight*, tmAscent*, tmDescent*, tmInternalLeading*, tmExternalLeading*: LONGINT;
+			tmAveCharWidth*, tmMaxCharWidth*, tmWeight*, tmOverhang*: LONGINT;
+			tmDigitizedAspectX*, tmDigitizedAspectY*: LONGINT;
+			tmFirstChar*, tmLastChar*, tmDefaultChar*, tmBreakChar*: CHAR;
+			tmItalic*, tmUnderlined*, tmStruckOut*: BOOLEAN;
+			tmPitchAndFamily*, tmCharSet*: SHORTINT
+		END;
+
+		(** The EnumFontFamProc function is an application definedßcallback function used with the EnumFontFamilies
+			function. *)
+		EnumFontFamProc* = PROCEDURE [WINAPI] (lpelf: EnumLogFont; lpntm: TextMetric; FontType: SET; lParam: User32.LParam): LONGINT;
+
+		(** The EnumFontsProc function is an application definedßcallback function that processes font data from the EnumFonts
+			function. *)
+		EnumFontsProc* = PROCEDURE [WINAPI] (lplf: LogFont; lptm: TextMetric; dwType: SET; lpData: User32.LParam): LONGINT;
+
+		(** The ABC structure contains the width of a character in a TrueType font. *)
+		ABC* = RECORD [NOTAG]
+			abcA*, abcB*, abcC*: LONGINT
+		END;
+
+		(** The BITMAPINFOHEADER structure contains information about the dimensions and color format of a DIB. *)
+		BitmapInfoHeader* = RECORD [NOTAG] 
+			biSize*, biWidth*, biHeight*: LONGINT;
+			biPlanes*, biBitCount*: INTEGER;
+			biCompression*, biSizeImage*: LONGINT;
+			biXPelsPerMeter*, biYPelsPerMeter*: LONGINT;
+			biClrUsed*, biClrImportant*: LONGINT
 		END; 
-		TEXTMETRIC* = RECORD
-			height*, ascent*, descent*: LONGINT;
-			intLead*, extLead*: LONGINT;
-			avgCharWidth*, maxCharWidth*: LONGINT;
-			weight*, overhang*: LONGINT;
-			aspectX*, aspectY*: LONGINT;
-			firstCh*, lastCh*, defaultCh*, breakCh*: CHAR;
-			italic*, underlined*, struckout*: SHORTINT;
-			pitchAndFamily*, charset*: SHORTINT
+
+		(** The BITMAPINFO structure defines the dimensions and color information for a Win32 DIB. *)
+		BitmapInfo* = RECORD [NOTAG]
+			bmiHeader*: BitmapInfoHeader
 		END;
-		BITMAPINFOHEADER* = RECORD
-			size*, width*, height*: LONGINT;
-			planes*, bits*: INTEGER;
-			compression*, sizeImage*, xPelsPerMeter*, yPelsPerMeter*, clrUsed*, clrImportant*: LONGINT
+
+		(** The DOCINFO structure contains the input and output file names and other information used by the StartDoc
+			function. *)
+		DocInfo* = RECORD [NOTAG]
+			cbSize*: LONGINT;
+			lpszDocName*, lpszOutput*, lpszDatatype*: Kernel32.LPSTR;
+			fwType*: LONGINT 
 		END;
-		DocInfo* = RECORD
-			size*: LONGINT;
-			docName*, output*: LONGINT
+
+		(** The PALETTEENTRY structure specifies the color and usage of an entry in a logical palette. *)
+		PaletteEntry* = RECORD [NOTAG]
+			peRed*, peGreen*, peBlue*, peFlags*: CHAR
 		END;
-		EnumFontsProc* = PROCEDURE (lplf, lptm, type, data: LONGINT): LONGINT;
-		EnumFontFamProc* = PROCEDURE (lpelf, lpntm, type, data: LONGINT): LONGINT;
+ 
+		(** The LOGPALETTE structure defines a logical palette. *)
+		LogPalette* = RECORD [NOTAG]
+			palVersion*, palNumEntries*: INTEGER;
+			palPalEntry*: ARRAY 1 OF PaletteEntry
+		END;
+
+		(** The GLYPHMETRICS structure contains information about the placement and orientation of a glyph in a character
+			cell. *)
+		GlyphMetrics* = RECORD [NOTAG]
+			gmBlackBoxX*, gmBlackBoxY*: LONGINT;
+			gmptGlyphOrigin*: User32.Point;
+			gmCellIncX*, gmCellIncY*: INTEGER
+		END;
+
+		(** The FIXED structure contains the integral and fractional parts of a fixed-point real number. *)
+		Fixed* = RECORD [NOTAG]
+			fract*, value*: INTEGER
+		END;
+
+		(** The MAT2 structure contains the values for a transformation matrix used by the GetGlyphOutline function. *)
+		Mat2* = RECORD [NOTAG]
+			eM11*, eM12*: Fixed;
+			eM21*, eM22*: Fixed
+		END;
+
+		RgnDataHeader* = RECORD [NOTAG]
+			dwSize*, iType*, nCount*, nRgnSize*: LONGINT;
+			rcBound*: User32.Rect
+		END;
 
 	VAR
-		AddFontResource-: PROCEDURE (fileName: LONGINT): LONGINT;
-		AnimatePalette-: PROCEDURE (hpal, start, nofentries, ppe: LONGINT);
-		BitBlt-: PROCEDURE (hDC, x, y, w, h, hDCSrc, xSrc, ySrc, rop: LONGINT): LONGINT;
-		CreateBitmap-: PROCEDURE (w, h, planes, bitsPerPixel, bits: LONGINT): LONGINT;
-		CreateCompatibleBitmap-: PROCEDURE (hDC, w, h: LONGINT): LONGINT;
-		CreateCompatibleDC-: PROCEDURE (hDC: LONGINT): LONGINT;
-		CreateDC-: PROCEDURE (driver, device, output, initData: LONGINT): LONGINT;
-		CreateFontIndirect-: PROCEDURE (lplf: LONGINT): LONGINT;
-		CreateHatchBrush-: PROCEDURE (style, colRef: LONGINT): LONGINT;
-		CreatePalette-: PROCEDURE (logPal: LONGINT): LONGINT;
-		CreatePatternBrush-: PROCEDURE (hBm: LONGINT): LONGINT;
-		CreatePen-: PROCEDURE (style, width, colRef: LONGINT): LONGINT;
-		CreateRectRgn-: PROCEDURE (left, top, right, bottom: LONGINT): LONGINT;
-		CreateSolidBrush-: PROCEDURE (colRef: LONGINT): LONGINT;
-		DeleteDC-: PROCEDURE (hDC: LONGINT): LONGINT;
-		DeleteObject-: PROCEDURE (hObj: LONGINT): LONGINT;
-		Ellipse-: PROCEDURE (hDC, left, top, right, bottom: LONGINT): LONGINT;
-		EndDoc-: PROCEDURE (hDC: LONGINT): LONGINT;
-		EndPage-: PROCEDURE (hDC: LONGINT): LONGINT;
-		EnumFontFamilies-: PROCEDURE (hDC, family: LONGINT; fontFamProc: EnumFontFamProc; param: LONGINT): LONGINT;
-		EnumFonts-: PROCEDURE (hDC, faceName: LONGINT; fontFunc: EnumFontsProc; param: LONGINT): LONGINT;
-		GdiFlush-: PROCEDURE (): LONGINT;
-		GdiSetBatchLimit-: PROCEDURE (limit: LONGINT): LONGINT;
-		GetBitmapBits-: PROCEDURE (hbmp, buffer, bits: LONGINT): LONGINT;
-		GetCharABCWidths-: PROCEDURE (hDC, firstCh, lastCh, lpABC: LONGINT): LONGINT;
-		GetCharWidth32-: PROCEDURE (hDC, firstCh, lastCh, lpBuffer: LONGINT): LONGINT;
-		GetDeviceCaps-: PROCEDURE (hDC, index: LONGINT): LONGINT;
-		GetDIBits-: PROCEDURE [stdcall] (hdc, hbmp, uStartScanLine, cScanLines, lpvBits, lpbi, uUsage: LONGINT): LONGINT;
-		GetNearestColor-: PROCEDURE (hDC, colRef: LONGINT): LONGINT;
-		GetPaletteEntries-: PROCEDURE (hPal, start, entries, palEntries: LONGINT): LONGINT;
-		GetPixel-: PROCEDURE (hDC, x, y: LONGINT): LONGINT;
-		GetStockObject-: PROCEDURE (object: LONGINT): LONGINT;
-		GetSystemPaletteEntries-: PROCEDURE (hPal, start, entries, palEntries: LONGINT): LONGINT;
-		GetTextExtentPoint-: PROCEDURE (hDC, str, len, size: LONGINT): LONGINT;
-		GetTextMetrics-: PROCEDURE (hDC, lptm: LONGINT): LONGINT;
-		LineTo-: PROCEDURE (hDC, x, y: LONGINT): LONGINT;
-		MoveToEx-: PROCEDURE (hDC, x, y, point: LONGINT): LONGINT;
-		PatBlt-: PROCEDURE (hDC, x, y, w, h, rop: LONGINT): LONGINT;
-		RealizePalette-: PROCEDURE (hDC: LONGINT): LONGINT;
-		RemoveFontResource-: PROCEDURE (fileName: LONGINT): LONGINT;
-		SelectClipRgn-: PROCEDURE (hDC, hRgn: LONGINT): LONGINT;
-		SelectObject-: PROCEDURE (hDC, hObj: LONGINT): LONGINT;
-		SelectPalette-: PROCEDURE (hwDC, hPal, forceBack: LONGINT): LONGINT;
-		SetBkColor-: PROCEDURE (hDC, colRef: LONGINT): LONGINT;
-		SetBkMode-: PROCEDURE (hDC, mode: LONGINT): LONGINT;
-		SetDIBitsToDevice-: PROCEDURE [stdcall] (hdc, XDest, YDest, dwWidth, dwHeight, XSrc, YSrc, uStartScan, cScanLines, lpvBits, lpbmi, fuColorUse: LONGINT): LONGINT;
-		SetBrushOrgEx-: PROCEDURE (hDC, x, y, prev: LONGINT): LONGINT;
-		SetMapMode-: PROCEDURE (hDC, mapMode: LONGINT): LONGINT;
-		SetPaletteEntries-: PROCEDURE (hPal, start, entries, palEntries: LONGINT): LONGINT;
-		SetPixelV-: PROCEDURE (hDC, x, y, colRef: LONGINT): LONGINT;
-		SetSystemPaletteUse-: PROCEDURE (hdc, usage: LONGINT): LONGINT;
-		SetTextAlign-: PROCEDURE (hDC, mode: LONGINT): LONGINT;
-		SetTextColor-: PROCEDURE (hDC, colRef: LONGINT): LONGINT;
-		StartDoc-: PROCEDURE (hDC, lpDi: LONGINT): LONGINT;
-		StartPage-: PROCEDURE (hDC: LONGINT): LONGINT;
-		StretchDIBits-: PROCEDURE (hDC, dx, dy, dw, dh, sx, sy, sw, sh, bits, bmi, use, rop: LONGINT): LONGINT;
-		TextOut-: PROCEDURE (hDC, xStart, yStart, str, len: LONGINT): LONGINT;
-		T-, iT-: ARRAY 256 OF CHAR;
+		(** The AddFontResource function adds the font resource from the specified file to the system font table. *)
+		AddFontResource-: PROCEDURE [WINAPI] (lpszFilename: ARRAY [NOTAG] OF CHAR): LONGINT;
+		(** The BitBlt function performs a bit-block transfer of the color data corresponding to a rectangle of pixels from the
+			specified source device context into a destination device context. *)
+		BitBlt-: PROCEDURE [WINAPI] (hdcDest: User32.HDC; nXDest, nYDest, nWidth, nHeight: LONGINT; hdcSrc: User32.HDC; nXSrc, nYSrc, dwRop: LONGINT): Kernel32.BOOL;
+		(** The CloseEnhMetaFile function closes an enhanced-metafile device context and returns a handle that identifies an
+			enhanced-format metafile. *)
+		CloseEnhMetaFile-: PROCEDURE [WINAPI] (hdc: User32.HDC): HEnhMetafile;
+		(** The CloseMetaFile function closes a metafile device context and returns a handle that identifies a Windows-format
+			metafile. *)
+		CloseMetaFile-: PROCEDURE [WINAPI] (hdc: User32.HDC): HMetafile;
+		(** The CreateBitmap function creates a bitmap with the specified width, height, and color format
+			(color planes and bits-per-pixel). *)
+		CreateBitmap-: PROCEDURE [WINAPI] (nWidth, nHeight, cPlanes, cBitsPerPixel: LONGINT; VAR lpvBits: ARRAY [NOTAG] OF SYSTEM.BYTE): HBitmap;
+		(** The CreateCompatibleBitmap function creates a bitmap compatible with the device that is associated with the
+			specified device context. *)
+		CreateCompatibleBitmap-: PROCEDURE [WINAPI] (hdc: User32.HDC; nWidth, nHeight: LONGINT): HBitmap;
+		(** The CreateCompatibleDC function creates a memory device context (DC) compatible with the specified device. *)
+		CreateCompatibleDC-: PROCEDURE [WINAPI] (hdc: User32.HDC): User32.HDC;
+		(** The CreateDC function creates a device context (DC) for a device by using the specified name. *)
+		CreateDC-: PROCEDURE [WINAPI] (lpszDriver, lpszDevice, lpszOuput: ARRAY [NOTAG] OF CHAR; lpInitData: PTR): User32.HDC;
+		(** The CreateEnhMetaFile function creates a device context for an enhanced-format metafile. *)
+		CreateEnhMetaFile-: PROCEDURE [WINAPI] (hdcRef: User32.HDC; lpFilename: ARRAY [NOTAG] OF CHAR; lpRect: User32.Rect; lpDescription: ARRAY [NOTAG] OF CHAR): User32.HDC;
+		(** The CreateFontIndirect function creates a logical font that has the specified characteristics. *)
+		CreateFontIndirect-: PROCEDURE [WINAPI] (lplf: LogFont): HFont;
+		(** The CreateHatchBrush function creates a logical brush that has the specified hatch pattern and color. *)
+		CreateHatchBrush-: PROCEDURE [WINAPI] (fnStyle: LONGINT; clrref: ColorRef): HBrush;
+		(** The CreateMetaFile function creates a device context for a Windows-format metafile. *)
+		CreateMetaFile-: PROCEDURE [WINAPI] (lpszFile: ARRAY [NOTAG] OF CHAR): User32.HDC;
+		(** The CreatePatternBrush function creates a logical brush with the specified bitmap pattern. *)
+		CreatePatternBrush-: PROCEDURE [WINAPI] (hbmp: HBitmap): HBrush;
+		(** The CreatePen function creates a logical pen that has the specified style, width, and color. *)
+		CreatePen-: PROCEDURE [WINAPI] (fnPenStyle, nWidth: LONGINT; crColor: ColorRef): HPen;
+		(** The CreateSolidBrush function creates a logical brush that has the specified solid color. *)
+		CreateSolidBrush-: PROCEDURE [WINAPI] (crColor: ColorRef): HBrush;
+		(** The CreateRectRgn function creates a rectangular region. *)
+		CreateRectRgn-: PROCEDURE [WINAPI] (nLeftRect, nTopRect, nRightRect, nBottomRect: LONGINT): HRgn;
+		(** The CreateRectRgnIndirect function creates a rectangular region. *)
+		CreateRectRgnIndirect-: PROCEDURE [WINAPI] (lprc: User32.Rect): HRgn;
+		(** The DeleteDC function deletes the specified device context (DC). *)
+		DeleteDC-: PROCEDURE [WINAPI] (hdc: User32.HDC): Kernel32.BOOL;
+		(** The DeleteObject function deletes a logical pen, brush, font, bitmap, region, or palette, freeing all system
+			resources associated with the object. *)
+		DeleteObject-: PROCEDURE [WINAPI] (hObject: HGDIObj): Kernel32.BOOL;
+		(** The DPtoLP function converts device coordinates into logical coordinates. *)
+		DPtoLP-: PROCEDURE [WINAPI] (hdc: User32.HDC; lpPoints: ARRAY [NOTAG] OF User32.Point; nCount: LONGINT): Kernel32.BOOL;
+		(** The Ellipse function draws an ellipse. *)
+		Ellipse-: PROCEDURE [WINAPI] (hdc: User32.HDC; nLeftRect, nTopRect, nRightRect, nBottomRect: LONGINT): Kernel32.BOOL;
+		(** The EndDoc function ends a print job. *)
+		EndDoc-: PROCEDURE [WINAPI] (hdc: User32.HDC): LONGINT;
+		(** The EndPage function informs the device that the application has finished writing to a page. *)
+		EndPage-: PROCEDURE [WINAPI] (hdc: User32.HDC): LONGINT;
+		(** The EnumFontFamilies function enumerates the fonts in a specified font family that are available on a specified
+			device. *)
+		EnumFontFamilies-: PROCEDURE [WINAPI] (hdc: User32.HDC; lpszFamily: ARRAY [NOTAG] OF CHAR; lpEnumFontFamProc: EnumFontFamProc; lParam: User32.LParam): LONGINT;
+		(** The EnumFonts function enumerates the fonts available on a specified device. *)
+		EnumFonts-: PROCEDURE [WINAPI] (hdc: User32.HDC; lpFaceName: ARRAY [NOTAG] OF CHAR; lpFontFunc: EnumFontsProc; lParam: User32.LParam): LONGINT;
+		(** The ExtSelectClipRgn function combines the specified region with the current clipping region by using the
+			specified mode. *)
+		ExtSelectClipRgn-: PROCEDURE [WINAPI] (hdc: User32.HDC; hrgn: HRgn; fnMode: LONGINT): LONGINT;
+		(** The GdiFlush function flushes the calling thread's current batch. *)
+		GdiFlush-: PROCEDURE [WINAPI] (): Kernel32.BOOL;
+		(** The GetBitmapBits function copies the bitmap bits of a specified bitmap into a buffer. *)
+		GetBitmapBits-: PROCEDURE [WINAPI] (hbmp: HBitmap; cbBuffer: LONGINT; lpvBits: Kernel32.ADDRESS): LONGINT;
+		(** The GetCharABCWidths function retrieves the widths, in logical units, of consecutive characters in a specified range
+			from the current TrueType font. *)
+		GetCharABCWidths-: PROCEDURE [WINAPI] (hdc: User32.HDC; uFirstChar, uLastChar: LONGINT; VAR lpabc: ABC): Kernel32.BOOL;
+		(** The GetCharWidth32 function retrieves the widths, in logical coordinates, of consecutive characters in a specified
+			range from the current font. *)
+		GetCharWidth32-: PROCEDURE [WINAPI] (hdc: User32.HDC; iFirstChar, iLastChar: LONGINT; VAR lpBuffer: ARRAY [NOTAG] OF LONGINT): Kernel32.BOOL;
+		(** The GetClipBox function retrieves the dimensions of the tightest bounding rectangle that can be
+			drawn around the current visible area on the device. *)
+		GetClipBox-: PROCEDURE [WINAPI] (hdc: User32.HDC; VAR lprc: User32.Rect): LONGINT;
+		(** The GetClipRgn function retrieves a handle identifying the current application-defined clipping
+			region for the specified device context. *)
+		GetClipRgn-: PROCEDURE [WINAPI] (hdc: User32.HDC; hrgn: HRgn): LONGINT;
+		(** The GetDeviceCaps function retrieves device-specific information about the specified device. *)
+		GetDeviceCaps-: PROCEDURE [WINAPI] (hdc: User32.HDC; nIndex: LONGINT): LONGINT;
+		(** The GetDIBits function retrieves the bits of the specified bitmap and copies them into a buffer using the specified
+			format. *)
+		GetDIBits-: PROCEDURE [WINAPI] (hdc: User32.HDC; hbmp: HBitmap; uStartScanLine, cScanLines: LONGINT; lpvBits: Kernel32.ADDRESS; VAR lpbi: BitmapInfo; uUsage: LONGINT): LONGINT;
+		(** The GetGlyphOutline function retrieves the outline or bitmap for a character in the TrueType font that is selected
+			into the specified device context. *)
+		GetGlyphOutline-: PROCEDURE [WINAPI] (hdc: User32.HDC; uChar, uFormat: LONGINT; lpgm: GlyphMetrics; cbBuffer: LONGINT; VAR lpvBuffer: ARRAY [NOTAG] OF SYSTEM.BYTE; lpmat2: Mat2): LONGINT;
+		(** The GetMapMode function retrieves the current mapping mode. *)
+		GetMapMode-: PROCEDURE [WINAPI] (hdc: User32.HDC): LONGINT;
+		(** The GetNearestColor function retrieves a color value identifying a color from the system palette that
+			will be displayed when the specified color value is used. *)
+		GetNearestColor-: PROCEDURE [WINAPI] (hdc: User32.HDC; crColor: ColorRef): ColorRef;
+		(** The GetRegionData function fills the specified buffer with data describing a region. *)
+		GetRegionData-: PROCEDURE [WINAPI] (hRgn: HRgn; dwCount: LONGINT; VAR lpRgnData: RgnDataHeader): LONGINT;
+		(** The GetStockObject function retrieves a handle to one of the stock pens, brushes, fonts, or palettes. *)
+		GetStockObject-: PROCEDURE [WINAPI] (fnObject: LONGINT): HGDIObj;
+		(** The GetSystemPaletteEntries function retrieves a range of palette entries from the system palette that is associated
+			with the specified device context (DC). *)
+		GetSystemPaletteEntries-: PROCEDURE [WINAPI] (hdc: User32.HDC; iStartIndex, nEntries: LONGINT; VAR lppe: ARRAY [NOTAG] OF PaletteEntry): LONGINT;
+		(** The GetTextExtentPoint function computes the width and height of the specified string of text. *)
+		GetTextExtentPoint-: PROCEDURE [WINAPI] (hDC: User32.HDC; lpString: ARRAY [NOTAG] OF CHAR; cbString: LONGINT; VAR lpSize: User32.Size): Kernel32.BOOL;
+		(** The GetTextMetrics function fills the specified buffer with the metrics for the currently selected font. *)
+		GetTextMetrics-: PROCEDURE [WINAPI] (hDC: User32.HDC; VAR lptm: TextMetric): Kernel32.BOOL;
+		(** The IntersectClipRect function creates a new clipping region from the intersection of the current clipping region
+			and the specified rectangle. *)
+		IntersectClipRect-: PROCEDURE [WINAPI] (hDC: User32.HDC; nLeftRect, nTopRect, nRightRect, nBottomRect: LONGINT): LONGINT;
+		(** The LineTo function draws a line from the current position up to, but not including, the specified point. *)
+		LineTo-: PROCEDURE [WINAPI] (hdc: User32.HDC; nXEnd, nYEnd: LONGINT): Kernel32.BOOL;
+		(** The LPtoDP function converts logical coordinates into device coordinates. *)
+		LPtoDP-: PROCEDURE [WINAPI] (hdc: User32.HDC; lpPoints: ARRAY [NOTAG] OF User32.Point; nCount: LONGINT): Kernel32.BOOL;
+		(** The MoveToEx function updates the current position to the specified point and optionally returns the previous
+			position. *)
+		MoveToEx-: PROCEDURE [WINAPI] (hdc: User32.HDC; X, Y: LONGINT; VAR lpPoint: User32.Rect): Kernel32.BOOL;
+		(** The PatBlt function paints the specified rectangle using the brush that is currently selected into the specified device
+			context. *)
+		PatBlt-: PROCEDURE [WINAPI] (hdc: User32.HDC; nXLeft, nLeft, nWidth, nHeight, dwRop: LONGINT): Kernel32.BOOL;
+		(** The PlayEnhMetaFile function displays the picture stored in the specified enhanced-format metafile. *)
+		PlayEnhMetaFile-: PROCEDURE [WINAPI] (hdc: User32.HDC; hemf: HEnhMetafile; lpRect: User32.Rect): Kernel32.BOOL;
+		(** The PlayMetaFile function displays the picture stored in the given Windows-format metafile on the specified device. *)
+		PlayMetaFile-: PROCEDURE [WINAPI] (hdc: User32.HDC; hmf: HMetafile): Kernel32.BOOL;
+		(** The Rectangle function draws a rectangle. *)
+		Rectangle-: PROCEDURE [WINAPI] (hdc: User32.HDC; nLeftRect, nTopRect, nRightRect, nBottomRect: LONGINT): Kernel32.BOOL;
+		(** The RemoveFontResource function removes the fonts in the specified file from the system font table. *)
+		RemoveFontResource-: PROCEDURE [WINAPI] (lpFileName: ARRAY [NOTAG] OF CHAR): Kernel32.BOOL;
+		(** The RestoreDC function restores a device context (DC) to the specified state. *)
+		RestoreDC-: PROCEDURE [WINAPI] (hdc: User32.HDC; nSavedDC: LONGINT): Kernel32.BOOL; 
+		(** The SaveDC function saves the current state of the specified device context (DC) by copying data describing selected
+			objects and graphic modes (such as the bitmap, brush, palette, font, pen, region, drawing mode, and mapping mode)
+			to a context stack. *)
+		SaveDC-: PROCEDURE [WINAPI] (hdc: User32.HDC): LONGINT;
+		(** The SelectClipRgn function selects a region as the current clipping region for the specified device context. *)
+		SelectClipRgn-: PROCEDURE [WINAPI] (hdc: User32.HDC; hrgn: HRgn): LONGINT;
+		(** The SelectObject function selects an object into the specified device context (DC). *)
+		SelectObject-: PROCEDURE [WINAPI] (hdc: User32.HDC; hgdiobj: HGDIObj): HGDIObj;
+		(** The SetBkColor function sets the current background color to the specified color value, or to the nearest physical
+			color if the device cannot represent the specified color value. *)
+		SetBkColor-: PROCEDURE [WINAPI] (hdc: User32.HDC; crColor: ColorRef): ColorRef;
+		(** The SetBkMode function sets the background mix mode of the specified device context. *)
+		SetBkMode-: PROCEDURE [WINAPI] (hdc: User32.HDC; iBkMode: LONGINT): LONGINT;
+		(** The SetBrushOrgEx function sets the brush origin that GDI assigns to the next brush an application selects into the
+			specified device context. *)
+		SetBrushOrgEx-: PROCEDURE [WINAPI] (hdc: User32.HDC; nXOrg, nYOrg: LONGINT; VAR lppt: User32.Point): Kernel32.BOOL;
+		(** The SetDIBitsToDevice function sets the pixels in the specified rectangle on the device that is associated with the
+			destination device context using color data from a DIB. *)
+		SetDIBitsToDevice-: PROCEDURE [WINAPI] (hdc: User32.HDC; XDest, YDest, dwWidth, dwHeight, XSrc, YSrc, uStartScan, cScanLines: LONGINT; lpvBits: Kernel32.ADDRESS; lpbmi: BitmapInfo; fuColorUse: LONGINT): LONGINT;
+		(** The SetMapMode function sets the mapping mode of the specified device context. *)
+		SetMapMode-: PROCEDURE [WINAPI] (hdc: User32.HDC; fnMapMode: LONGINT): LONGINT;
+		(** The SetROP2 function sets the current foreground mix mode. *)
+		SetROP2-: PROCEDURE [WINAPI] (hdc: User32.HDC; fnDrawMode: LONGINT): LONGINT;
+		(** The SetTextAlign function sets the text-alignment flags for the specified device context. *)
+		SetTextAlign-: PROCEDURE [WINAPI] (hdc: User32.HDC; fMode: SET): LONGINT;
+		(** The SetTextColor function sets the text color for the specified device context to the specified color. *)
+		SetTextColor-: PROCEDURE [WINAPI] (hdc: User32.HDC; crColor: ColorRef): ColorRef;
+		(** The SetWindowExtEx function sets the horizontal and vertical extents of the window for a device context by using
+			the specified values. *)
+		SetWindowExtEx-: PROCEDURE [WINAPI] (hdc: User32.HDC; nXExtent, nYExtent: LONGINT; VAR lpSize: User32.Size): Kernel32.BOOL;
+		(** The SetWindowOrgEx function specifies which window point maps to the viewport origin (0,0). *)
+		SetWindowOrgEx-: PROCEDURE [WINAPI] (hdc: User32.HDC; X, Y: LONGINT; VAR lpPoint: User32.Point): Kernel32.BOOL;
+		(** The StartDoc function starts a print job. *)
+		StartDoc-: PROCEDURE [WINAPI] (hdc: User32.HDC; lpdi: DocInfo): LONGINT;
+		(** The StartPage function prepares the printer driver to accept data. *)
+		StartPage-: PROCEDURE [WINAPI] (hdc: User32.HDC): LONGINT;
+		(** The StretchDIBits function copies the color data for a rectangle of pixels in a DIB to the specified destination
+			rectangle. *)
+		(** The StretchBlt function copies a bitmap from a source rectangle into a destination rectangle, stretching or
+			compressing the bitmap to fit the dimensions of the destination rectangle, if necessary. *)
+		StretchBlt-: PROCEDURE [WINAPI] (hdc: User32.HDC; nXOriginDest, nYOriginDest, nWidthDest, nHeightDest: LONGINT; hdcSrc: User32.HDC; nXOriginSrc, nYOriginSrc, nWidthSrc, nHeightSrc, dwRop: LONGINT): Kernel32.BOOL;
+		StretchDIBits-: PROCEDURE [WINAPI] (hdc: User32.HDC; XDest, YDest, nDestWidth, nDestHeight, XSrc, YSrc, nSrcWidth, nSrcHeight: LONGINT; lpBits: Kernel32.ADDRESS; lpBitsInfo: BitmapInfo; iUsage, dwRop: LONGINT): LONGINT;
+		(** The TextOut function writes a character string at the specified location, using the currently selected font,
+			background color, and text color. *)
+		TextOut-: PROCEDURE [WINAPI] (hdc: User32.HDC; nXStart, nYStart: LONGINT; lpString: ARRAY [NOTAG] OF CHAR; cbString: LONGINT): Kernel32.BOOL;
+		T-: ARRAY 256 OF CHAR;
 
-	PROCEDURE RotateBytes*(VAR b: ARRAY OF S.BYTE);
-		VAR i: LONGINT;
+	(** RGB selects a red, green, blue (RGB) color based on the arguments supplied. *)
+	PROCEDURE RGB*(red, green, blue: LONGINT): ColorRef;
 	BEGIN
-		FOR i := 0 TO LEN(b)-1 DO b[i] := T[ORD(S.VAL(CHAR, b[i]))] END
-	END RotateBytes;
+		RETURN red + ASH(green, 8) + ASH(blue, 16)
+	END RGB;
 
-	PROCEDURE InitAPI();
-		VAR mod, i, j, k, bit, val: LONGINT;
+	(** The Red retrieves an intensity value for the red component of a red, green, blue (RGB) value. *)
+	PROCEDURE Red*(col: ColorRef): LONGINT;
 	BEGIN
-		mod := Kernel32.LoadLibrary("GDI32.DLL");
-		Kernel32.GetAdr(mod, "AddFontResourceA", S.VAL(LONGINT, AddFontResource));
-		Kernel32.GetAdr(mod, "AnimatePalette", S.VAL(LONGINT, AnimatePalette));
-		Kernel32.GetAdr(mod, "BitBlt", S.VAL(LONGINT, BitBlt));
-		Kernel32.GetAdr(mod, "CreateBitmap", S.VAL(LONGINT, CreateBitmap));
-		Kernel32.GetAdr(mod, "CreateCompatibleBitmap", S.VAL(LONGINT, CreateCompatibleBitmap));
-		Kernel32.GetAdr(mod, "CreateCompatibleDC", S.VAL(LONGINT, CreateCompatibleDC));
-		Kernel32.GetAdr(mod, "CreateDCA", S.VAL(LONGINT, CreateDC));
-		Kernel32.GetAdr(mod, "CreateFontIndirectA", S.VAL(LONGINT, CreateFontIndirect));
-		Kernel32.GetAdr(mod, "CreateHatchBrush", S.VAL(LONGINT, CreateHatchBrush));
-		Kernel32.GetAdr(mod, "CreatePalette", S.VAL(LONGINT, CreatePalette));
-		Kernel32.GetAdr(mod, "CreatePatternBrush", S.VAL(LONGINT, CreatePatternBrush));
-		Kernel32.GetAdr(mod, "CreatePen", S.VAL(LONGINT, CreatePen));
-		Kernel32.GetAdr(mod, "CreateRectRgn", S.VAL(LONGINT, CreateRectRgn));
-		Kernel32.GetAdr(mod, "CreateSolidBrush", S.VAL(LONGINT, CreateSolidBrush));
-		Kernel32.GetAdr(mod, "DeleteDC", S.VAL(LONGINT, DeleteDC));
-		Kernel32.GetAdr(mod, "DeleteObject", S.VAL(LONGINT, DeleteObject));
-		Kernel32.GetAdr(mod, "Ellipse", S.VAL(LONGINT, Ellipse));
-		Kernel32.GetAdr(mod, "EndDoc", S.VAL(LONGINT, EndDoc));
-		Kernel32.GetAdr(mod, "EndPage", S.VAL(LONGINT, EndPage));
-		Kernel32.GetAdr(mod, "EnumFontFamiliesA", S.VAL(LONGINT, EnumFontFamilies));
-		Kernel32.GetAdr(mod, "EnumFontsA", S.VAL(LONGINT, EnumFonts));
-		Kernel32.GetAdr(mod, "GdiFlush", S.VAL(LONGINT, GdiFlush));
-		Kernel32.GetAdr(mod, "GdiSetBatchLimit", S.VAL(LONGINT, GdiSetBatchLimit));
-		Kernel32.GetAdr(mod, "GetBitmapBits", S.VAL(LONGINT, GetBitmapBits));
-		Kernel32.GetAdr(mod, "GetCharABCWidthsA", S.VAL(LONGINT, GetCharABCWidths));
-		Kernel32.GetAdr(mod, "GetCharWidth32A", S.VAL(LONGINT, GetCharWidth32));
-		Kernel32.GetAdr(mod, "GetDeviceCaps", S.VAL(LONGINT, GetDeviceCaps));
-		Kernel32.GetAdr(mod, "GetDIBits", S.VAL(LONGINT, GetDIBits));
-		Kernel32.GetAdr(mod, "GetNearestColor", S.VAL(LONGINT, GetNearestColor));
-		Kernel32.GetAdr(mod, "GetPaletteEntries", S.VAL(LONGINT, GetPaletteEntries));
-		Kernel32.GetAdr(mod, "GetPixel", S.VAL(LONGINT,GetPixel));
-		Kernel32.GetAdr(mod, "GetStockObject", S.VAL(LONGINT, GetStockObject));
-		Kernel32.GetAdr(mod, "GetSystemPaletteEntries", S.VAL(LONGINT, GetSystemPaletteEntries));
-		Kernel32.GetAdr(mod, "GetTextExtentPointA", S.VAL(LONGINT, GetTextExtentPoint));
-		Kernel32.GetAdr(mod, "GetTextMetricsA", S.VAL(LONGINT, GetTextMetrics));
-		Kernel32.GetAdr(mod, "LineTo", S.VAL(LONGINT, LineTo));
-		Kernel32.GetAdr(mod, "MoveToEx", S.VAL(LONGINT, MoveToEx));
-		Kernel32.GetAdr(mod, "PatBlt", S.VAL(LONGINT, PatBlt));
-		Kernel32.GetAdr(mod, "RealizePalette", S.VAL(LONGINT, RealizePalette));
-		Kernel32.GetAdr(mod, "RemoveFontResourceA", S.VAL(LONGINT, RemoveFontResource));
-		Kernel32.GetAdr(mod, "SelectClipRgn", S.VAL(LONGINT, SelectClipRgn));
-		Kernel32.GetAdr(mod, "SelectObject", S.VAL(LONGINT, SelectObject));
-		Kernel32.GetAdr(mod, "SelectPalette", S.VAL(LONGINT, SelectPalette));
-		Kernel32.GetAdr(mod, "SetBkColor", S.VAL(LONGINT, SetBkColor));
-		Kernel32.GetAdr(mod, "SetBkMode", S.VAL(LONGINT, SetBkMode));
-		Kernel32.GetAdr(mod, "SetDIBitsToDevice", S.VAL(LONGINT, SetDIBitsToDevice));
-		Kernel32.GetAdr(mod, "SetBrushOrgEx", S.VAL(LONGINT, SetBrushOrgEx));
-		Kernel32.GetAdr(mod, "SetMapMode", S.VAL(LONGINT, SetMapMode));
-		Kernel32.GetAdr(mod, "SetPaletteEntries", S.VAL(LONGINT, SetPaletteEntries));
-		Kernel32.GetAdr(mod, "SetPixelV", S.VAL(LONGINT, SetPixelV));
-		Kernel32.GetAdr(mod, "SetSystemPaletteUse", S.VAL(LONGINT, SetSystemPaletteUse));
-		Kernel32.GetAdr(mod, "SetTextAlign", S.VAL(LONGINT, SetTextAlign));
-		Kernel32.GetAdr(mod, "SetTextColor", S.VAL(LONGINT, SetTextColor));
-		Kernel32.GetAdr(mod, "StartDocA", S.VAL(LONGINT, StartDoc));
-		Kernel32.GetAdr(mod, "StartPage", S.VAL(LONGINT, StartPage));
-		Kernel32.GetAdr(mod, "StretchDIBits", S.VAL(LONGINT, StretchDIBits));
-		Kernel32.GetAdr(mod, "TextOutA", S.VAL(LONGINT, TextOut));
-		i := 0;
-		WHILE i < 256 DO
-			k := i; bit := 0; val := 0;
-			WHILE bit < 8 DO
-				val := val * 2;
-				IF ODD(k) THEN INC(val) END;
-				k := k DIV 2; INC(bit)
+		RETURN col MOD 256
+	END Red;
+
+	(** The Green retrieves an intensity value for the green component of a red, green, blue (RGB) value. *)
+	PROCEDURE Green*(col: ColorRef): LONGINT;
+	BEGIN
+		RETURN ASH(col, -8) MOD 256
+	END Green;
+
+	(** The Blue retrieves an intensity value for the blue component of a red, green, blue (RGB) value. *)
+	PROCEDURE Blue*(col: ColorRef): LONGINT;
+	BEGIN
+		RETURN ASH(col, -16) MOD 256
+	END Blue;
+
+	PROCEDURE Init();
+		VAR i, p, v, x: LONGINT;
+	BEGIN
+		FOR i := 0 TO 255 DO
+			v := i; x := 0; p := 128;
+			WHILE v > 0 DO
+				x := x + p*(v MOD 2);
+				p := p DIV 2; v := v DIV 2
 			END;
-			j := (-i-1) MOD 256; iT[j] := CHR(val);
-			T[i] := CHR(val); INC(i)
+			T[i] := CHR(255-x)
 		END
-	END InitAPI;
+	END Init;
 
 BEGIN
-	InitAPI()
+	Init()
 END GDI32.

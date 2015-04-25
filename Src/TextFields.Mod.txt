@@ -1,22 +1,9 @@
-﻿(* OBERON System 3, Release 2.3.
-
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
-
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
-
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
+﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE TextFields; (** portable *)	(* jm 16.11.95 *)
 
-(**Module TextFields implements text captions and textfields.
-*)
+(** Module TextFields implements text captions and textfields. *)
 
 (*
 	JM 4.2.93 - Textfields sends update message down
@@ -49,7 +36,7 @@ CONST
 	MaxLen = 64; CarHeight = 14; CarWidth = 2; Yoffset = 5; Xoffset = 5;
 	
 TYPE
-	(** Captions  for displaying a text. *)
+	(** Captions for displaying a text. *)
 	Caption* = POINTER TO CaptionDesc;
 	CaptionDesc* = RECORD (Gadgets.FrameDesc)
 		focused*,	(** Has the keyboard focus or not ? *)
@@ -81,11 +68,9 @@ TYPE
 VAR
 	W: Texts.Writer;
 	invTF: INTEGER; (* focus & selection color for text fields *)
-
-VAR
 	linebuf: ARRAY 32 OF INTEGER;
 	lastfont, lastlib: Fonts.Font;
-	    
+
 PROCEDURE ForceString(F: Display.Frame; VAR M: Objects.AttrMsg);
 BEGIN Gadgets.framehandle(F, M);
 	IF M.res < 0 THEN M.class := Objects.String; M.s := ""; M.res := 0 END
@@ -190,8 +175,8 @@ BEGIN
 		IF plinew > pW THEN pW := plinew END;
 		
 		IF displayspace THEN
-			pW := SHORT(LONG(pW) * Printer.Unit DIV Display.Unit) + 1;
-			pH := SHORT(LONG(pH) * Printer.Unit DIV Display.Unit) + 1;
+			pW := SHORT(ENTIER(LONG(pW) * Printer.Unit/Display.Unit) + 1);
+			pH := SHORT(ENTIER(LONG(pH) * Printer.Unit/Display.Unit) + 1);
 			IF pW > W THEN W := pW END;
 			IF pH > H THEN H := pH END;
 		ELSE
@@ -303,7 +288,7 @@ BEGIN
 			END
 		ELSIF M.name = "Font" THEN
 			IF M.class = Objects.String THEN
-				IF M.s # "mixed"  THEN Texts.ChangeLooks(F.text, 0, F.text.len, {0}, Fonts.This(M.s), 0, 0) END;
+				IF M.s # "mixed" THEN Texts.ChangeLooks(F.text, 0, F.text.len, {0}, Fonts.This(M.s), 0, 0) END;
 				M.res :=0
 			END
 		ELSE
@@ -424,7 +409,7 @@ BEGIN
 		Gadgets.framehandle(F, M);
 	ELSIF (ver = 2) OR (ver = 3) THEN
 		Files.Read(M.R, chr); (* read TextBlockId *)
-		IF (chr = 01X) OR (chr  = Texts.TextBlockId) THEN
+		IF (chr = 01X) OR (chr = Texts.TextBlockId) THEN
 			Texts.Load(F.text, Files.Base(M.R), Files.Pos(M.R), len);
 			Files.Set(M.R, Files.Base(M.R), Files.Pos(M.R)+len);
 			Gadgets.framehandle(F, M);
@@ -432,7 +417,7 @@ BEGIN
 			Gadgets.framehandle(F, M);
 			 IF ver = 3 THEN Files.ReadInt(M.R, col) ELSE col := Display.FG END;
 			Files.ReadInt(M.R, i); Objects.GetName(F.lib.dict, i, name);
-			IF  name = "Elektra.Scn.Fnt" THEN name := "Electra.Scn.Fnt" END;
+			(* IF name = "Elektra.Scn.Fnt" THEN name := "Electra.Scn.Fnt" END; *)
 			fnt := Objects.ThisLibrary(name);
 			Texts.SetFont(W, fnt); Texts.SetColor(W, SHORT(col)); 
 			
@@ -482,13 +467,13 @@ BEGIN
 								M.res := 0;
 								IF keysum = {2, 0} THEN (* copy style over *)
 									Oberon.GetSelection(text, tbeg, tend, time);
-									IF time >= 0 THEN
+									IF time # -1 THEN
 										Texts.OpenReader(R, F.text, 0); Texts.Read(R, ch);
 										Texts.ChangeLooks(text, tbeg, tend, {0, 1, 2}, R.lib, R.col, R.voff);
 									END;
 								ELSIF keysum = {2, 1} THEN (* copy from selection *)
 									Oberon.GetSelection(text, tbeg, tend, time);
-									IF time >= 0 THEN
+									IF time # -1 THEN
 										NEW(buf); Texts.OpenBuf(buf);
 										Texts.Save(text, tbeg, tend, buf);
 										Texts.Insert(F.text, F.text.len, buf);
@@ -517,15 +502,21 @@ BEGIN
 							END
 						END
 					ELSIF M IS Oberon.ControlMsg THEN
-						WITH  M: Oberon.ControlMsg DO
+						WITH M: Oberon.ControlMsg DO
 							IF F.focused & ((M.id = Oberon.defocus) OR (M.id = Oberon.neutralize)) THEN
 								F.focused := FALSE; Gadgets.Update(F)
 							END
 						END
 					ELSIF M IS Display.SelectMsg THEN
-						WITH M:  Display.SelectMsg DO
+						WITH M: Display.SelectMsg DO
 							IF M.id = Display.set THEN F.time := Oberon.Time()-1 ELSE F.time := -1 END;
 							Gadgets.framehandle(F, M);
+						END
+					ELSIF M IS Display.ControlMsg THEN
+						WITH M: Display.ControlMsg DO
+							IF M.id = Display.newprinter THEN
+								lastfont := NIL; lastlib := NIL
+							END
 						END
 					ELSE Gadgets.framehandle(F, M)
 					END
@@ -539,7 +530,7 @@ BEGIN
 					ELSE Gadgets.framehandle(F, M)
 					END
 				ELSIF M.id = Objects.set THEN
-					IF (M.name = "Model")  & (M.obj IS Texts.Text) THEN F.text := M.obj(Texts.Text); M.res := 0;
+					IF (M.name = "Model") & (M.obj IS Texts.Text) THEN F.text := M.obj(Texts.Text); M.res := 0;
 						Update(F);
 					ELSE Gadgets.framehandle(F, M)
 					END
@@ -718,7 +709,7 @@ BEGIN
 			IF F.start > F.carpos THEN DEC(F.start); beg := -1 END;
 			UpdateTextField(F, beg)
 		END
-	ELSIF ch = 0A1X  THEN (* Delete right *)
+	ELSIF ch = 0A1X THEN (* Delete right *)
 		IF F.val[F.carpos] # 0X THEN
 			DeleteChar(F.val, F.carpos); beg := F.carpos;
 			IF F.selbeg >= 0 THEN F.selbeg := -1; beg := -1 END; Inval(F, beg);
@@ -837,7 +828,7 @@ BEGIN
 	END;
 	IF keysum = {2, 1} THEN
 		Oberon.GetSelection(text, beg, end, time);
-		IF time > 0 THEN
+		IF time # -1 THEN
 			hint := F.carpos;
 			p := beg; Texts.OpenReader(R, text, p);
 			LOOP
@@ -896,33 +887,33 @@ BEGIN
 		IF (pos >= spos) & (pos # epos) THEN
 			Oberon.FadeCursor(Oberon.Mouse);
 			IF (pos < epos) THEN
-				FlipSelection(R, F, x, y,  pos+1, epos+1);
+				FlipSelection(R, F, x, y, pos+1, epos+1);
 			ELSE
-				FlipSelection(R, F, x, y,  epos+1, pos+1);
+				FlipSelection(R, F, x, y, epos+1, pos+1);
 			END;
 			epos := pos;
 		END;
 		Oberon.DrawCursor(Oberon.Mouse, Effects.Arrow, mx, my);
 	END;
-	FlipSelection(R, F, x, y,  spos, epos+1);
+	FlipSelection(R, F, x, y, spos, epos+1);
 	F.selbeg := -1;
 	IF (keysum = {0}) & (spos # -1) THEN
 		F.time := Oberon.Time();
 		F.selbeg := spos; F.selend := epos+1;
-		Gadgets.Update(F);
+		Gadgets.Update(F)
 	ELSIF (keysum = {0, 1}) & (spos # -1) THEN (* copy out *)
 		F.selbeg := spos; F.selend := epos+1; F.time := Oberon.Time();
 		Gadgets.Update(F);
 		Oberon.GetSelection(C.text, C.beg, C.end, time);
 		C.F := NIL; C.res := -1;
-		Display.Broadcast(C);
+		Display.Broadcast(C)
 	ELSIF (keysum = {0, 2}) & (spos # -1) THEN (* delete *)
 		IF F.carpos < 0 THEN Oberon.Defocus END;
 		Delete(F.val, spos, epos+1); F.carpos := spos; Inval(F, time);
-		UpdateTextField(F, -1);
+		UpdateTextField(F, -1)
 	ELSE
-		Gadgets.Update(F);
-	END;
+		Gadgets.Update(F)
+	END
 END TrackSelection;
 
 PROCEDURE GetSelection(F: TextField; VAR text: Texts.Text; VAR beg, end, time: LONGINT);
@@ -1152,9 +1143,9 @@ PROCEDURE TextFieldHandler*(F: Objects.Object; VAR M: Objects.ObjMsg);
 VAR F2: TextField; x, y, w, h: INTEGER; R: Display3.Mask; ver: LONGINT; field: ARRAY 64 OF CHAR;
 BEGIN
 	WITH F: TextField DO
-		IF M IS  Objects.AttrMsg THEN
+		IF M IS Objects.AttrMsg THEN
 			WITH M: Objects.AttrMsg DO TextFieldAttr(F, M) END;
-		ELSIF M IS  Objects.FileMsg THEN
+		ELSIF M IS Objects.FileMsg THEN
 			WITH M: Objects.FileMsg DO
 				IF M.id = Objects.load THEN
 					Files.ReadNum(M.R, ver); IF (ver < 2) OR (ver > 4) THEN HALT(99) END;
@@ -1228,11 +1219,13 @@ BEGIN
 								Field(F, field); GetValue(F.obj, field, F.val)
 							END;
 							F.selbeg := -1; F.carpos := -1; F.consistent := TRUE;
+						ELSIF M.id = Display.newprinter THEN
+							lastfont := NIL; lastlib := NIL
 						END
 					END
 				ELSIF M IS Oberon.SelectMsg THEN
 					WITH M: Oberon.SelectMsg DO
-						IF (F.selbeg >=0) & (F.time > M.time) THEN GetSelection(F, M.text, M.beg, M.end, M.time) END
+						IF (F.selbeg >= 0) & (((M.time-F.time) < 0) OR (M.time = -1)) THEN GetSelection(F, M.text, M.beg, M.end, M.time) END
 					END
 				ELSIF M IS Oberon.ConsumeMsg THEN
 					WITH M: Oberon.ConsumeMsg DO

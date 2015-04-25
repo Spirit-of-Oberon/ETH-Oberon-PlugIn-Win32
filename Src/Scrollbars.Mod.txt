@@ -1,17 +1,5 @@
-﻿(* OBERON System 3, Release 2.3.
-
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
-
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
-
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
+﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE Scrollbars; (** portable *)	(** ps (based on sources of rv and Effects),  *)
 
@@ -57,7 +45,7 @@ MODULE Scrollbars; (** portable *)	(** ps (based on sources of rv and Effects), 
 			ELSE
 				r := (bx - x - bw DIV 2) * d DIV (w - bw);
 				r := min + r;
-				IF min > max THEN d :=  max; max := min; min := d END;
+				IF min > max THEN d := max; max := min; min := d END;
 				IF r > max THEN r := max ELSIF r < min THEN r := min END
 			END;
 			RETURN r
@@ -177,7 +165,7 @@ MODULE Scrollbars; (** portable *)	(** ps (based on sources of rv and Effects), 
 	END DrawKnob;
 
 	PROCEDURE RestoreFrame (F: Frame; Q: Display3.Mask; x, y, w, h: INTEGER);
-	VAR i : INTEGER;
+		VAR i: INTEGER;
 	BEGIN
 		Oberon.RemoveMarks(x, y, w, h);
 		Display3.FilledRect3D(Q, Display3.bottomC, Display3.topC, F.backC, x, y, w, h, 1, Display3.replace);
@@ -399,7 +387,7 @@ MODULE Scrollbars; (** portable *)	(** ps (based on sources of rv and Effects), 
 			IF ~(dodrag IN F.state0) THEN SetValueAndUpdate(F, npos, M.x, M.y, M.dlink) END
 		END;
 		IF keysum = {0, 1, 2} THEN SetValueAndUpdate(F, oldpos, M.x, M.y, M.dlink)
-		ELSIF keysum = {1} THEN Gadgets.ExecuteAttr(F, "Cmd", M.dlink, F, NIL)
+		ELSIF (keysum = {1}) OR (Oberon.New & (keysum = {2})) THEN Gadgets.ExecuteAttr(F, "Cmd", M.dlink, F, NIL)
 		END
 	END TrackFrame;
 
@@ -493,7 +481,7 @@ MODULE Scrollbars; (** portable *)	(** ps (based on sources of rv and Effects), 
 					M.res := 0
 				END
 			ELSIF M.name = "Max" THEN
-				IF M.class = Objects.Int  THEN
+				IF M.class = Objects.Int THEN
 					F.max := M.i;
 					IF F.maxO # NIL THEN Attributes.SetInt(F.maxO, "Value", F.max); Gadgets.Update(F.maxO)
 					ELSE AdjustKnoblen(F)
@@ -501,7 +489,7 @@ MODULE Scrollbars; (** portable *)	(** ps (based on sources of rv and Effects), 
 					M.res := 0
 				END
 			ELSIF M.name = "StepSize" THEN
-				IF M.class = Objects.Int  THEN
+				IF M.class = Objects.Int THEN
 					F.step := M.i;
 					IF F.stepO # NIL THEN Attributes.SetInt(F.stepO, "Value", F.step); Gadgets.Update(F.stepO) END;
 					M.res := 0
@@ -630,7 +618,8 @@ MODULE Scrollbars; (** portable *)	(** ps (based on sources of rv and Effects), 
 							END
 						ELSIF M IS Oberon.InputMsg THEN
 							WITH M: Oberon.InputMsg DO
-								IF (M.id = Oberon.track) & Gadgets.InActiveArea(F, M) & (M.keys = {1}) THEN
+								IF (M.id = Oberon.track) & Gadgets.InActiveArea(F, M) & 
+										((M.keys = {1}) OR (Oberon.New & (M.keys = {2}))) THEN
 									TrackFrame(F, x, y, w, h, M); M.res := 0
 								ELSE Gadgets.framehandle(F, M)
 								END
@@ -648,7 +637,7 @@ MODULE Scrollbars; (** portable *)	(** ps (based on sources of rv and Effects), 
 			ELSIF M IS Objects.CopyMsg THEN
 				WITH M: Objects.CopyMsg DO
 					IF M.stamp = F.stamp THEN M.obj := F.dlink
-					ELSE  NEW(F1); F.stamp := M.stamp; F.dlink := F1; CopyFrame(M, F, F1); M.obj := F1
+					ELSE NEW(F1); F.stamp := M.stamp; F.dlink := F1; CopyFrame(M, F, F1); M.obj := F1
 					END
 				END
 			ELSE Gadgets.framehandle(F, M)
@@ -670,6 +659,6 @@ MODULE Scrollbars; (** portable *)	(** ps (based on sources of rv and Effects), 
 	END New;
 
 BEGIN
-	WaitTime := 50 * Input.TimeUnit DIV 1000; HoldTime :=  500 * Input.TimeUnit DIV 1000;
+	WaitTime := 50 * Input.TimeUnit DIV 1000; HoldTime := 500 * Input.TimeUnit DIV 1000;
 	mayscroll := Oberon.Time()
 END Scrollbars.

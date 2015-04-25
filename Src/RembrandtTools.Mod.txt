@@ -1,17 +1,5 @@
-﻿(* OBERON System 3, Release 2.3.
-
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
-
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
-
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
+﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE RembrandtTools; (** portable *)
 (** Enthält alle Operationen zum Rembrandt-Editor *)
@@ -94,7 +82,7 @@ BEGIN
 			IF (Xachse IN symmetric) & (Yachse IN symmetric) THEN
 				IF grad45 IN symmetric THEN
 					Pictures.Dot(P, col, smx+y-smy, smy+x-smx, Display.replace);
-					Pictures.Dot(P, col, smx+y-smy, smy-x+smx,  Display.replace);
+					Pictures.Dot(P, col, smx+y-smy, smy-x+smx, Display.replace);
 					Pictures.Dot(P, col, smx-y+smy, smy+x-smx, Display.replace);
 					Pictures.Dot(P, col, smx-y+smy, smy-x+smx, Display.replace)
 				END;
@@ -215,31 +203,29 @@ END SetRectangle;
 
 PROCEDURE Fillarea(F: Rembrandt.Frame; x0, y0: INTEGER);
 (* fills the area around x0,y0*)
-CONST    size=10;
-
+CONST size=10;
 TYPE Stack=POINTER TO StackDesc;
 		StackDesc=RECORD
 			x, y: ARRAY size OF INTEGER;
 			prev, next: Stack;
 		END;
-
-VAR  st: Stack;
+VAR st: Stack;
 	bg: INTEGER; 
 	x, y, 	
 	l, r, 		(*left and right border of actual line*)
 	l0, r0, 	(*left and right border of previous line*)
 	l2, r2, 	
-	pos: INTEGER;  	(*stack pointer*)
+	pos: INTEGER; 	(*stack pointer*)
 	P : Pictures.Picture;
 	
 	PROCEDURE PUT(x, y: INTEGER);
 	(*put the pair x, y onto the stack*)
 	BEGIN
 		IF pos=size THEN
-			IF st.next=NIL THEN NEW(st.next);  st.next.prev:=st END;
-			st:=st.next;  pos:=0;
+			IF st.next=NIL THEN NEW(st.next); st.next.prev:=st END;
+			st:=st.next; pos:=0;
 		END; (*if*)
-		st.x[pos]:=x;  st.y[pos]:=y;
+		st.x[pos]:=x; st.y[pos]:=y;
 		INC(pos);
 	END PUT;
 	
@@ -247,18 +233,18 @@ VAR  st: Stack;
 	(*fetch the pair x, y from the stack, return FALSE<=>stack is empty*)
 	BEGIN
 		IF pos=0 THEN
-			st:=st.prev;  pos:=size;
+			st:=st.prev; pos:=size;
 		END;
 		IF st#NIL THEN
 			DEC(pos);
-			x:=st.x[pos];  y:=st.y[pos];
+			x:=st.x[pos]; y:=st.y[pos];
 			RETURN TRUE;
 		ELSE
 			RETURN FALSE;
 		END; (*if*)
 	END GET;
 
-	PROCEDURE ScanRight(x0, lim, y: INTEGER;  background : BOOLEAN): INTEGER;
+	PROCEDURE ScanRight(x0, lim, y: INTEGER; background : BOOLEAN): INTEGER;
 	(*scan line on y to first pixel in col, starting at x0*)
 	BEGIN
 		IF background THEN WHILE (x0<lim) & (bg # Pictures.Get(P,x0,y)) DO INC(x0) END;
@@ -266,15 +252,15 @@ VAR  st: Stack;
 		RETURN x0;
 	END ScanRight;
 	
-	PROCEDURE ScanLeft(x0, lim, y: INTEGER;  background : BOOLEAN): INTEGER;
+	PROCEDURE ScanLeft(x0, lim, y: INTEGER; background : BOOLEAN): INTEGER;
 	(*scan line on y to first pixel in col, starting at x0*)
 	BEGIN
-		IF background THEN WHILE (x0>lim) & (bg #  Pictures.Get(P,x0,y)) DO DEC(x0) END;
+		IF background THEN WHILE (x0>lim) & (bg # Pictures.Get(P,x0,y)) DO DEC(x0) END;
 		ELSE WHILE (x0>lim) & (bg = Pictures.Get(P,x0,y)) DO DEC(x0) END END;
 		RETURN x0;
 	END ScanLeft;
 	
-	PROCEDURE FillLine(x, y: INTEGER;  VAR l, r: INTEGER);
+	PROCEDURE FillLine(x, y: INTEGER; VAR l, r: INTEGER);
 	(*fill line starting at x, y with black, return left & right end of line*)
 	BEGIN
 		l:=ScanLeft(x, -1, y, FALSE)+1;
@@ -294,7 +280,7 @@ BEGIN
 	PUT(x0, y0);
 	WHILE GET(x, y) DO
 		WHILE (y>0) & (Pictures.Get(P,x, y-1)= bg) DO DEC(y) END;
-		r0:=x-1;  l0:=x+1;
+		r0:=x-1; l0:=x+1;
 		REPEAT
 			FillLine(x, y, l, r);
 			IF (r-r0>1) & (y>0) THEN	(*fill area to the right beneath y*)
@@ -303,7 +289,7 @@ BEGIN
 					l2:=ScanRight(l2, r+1, y-1, TRUE);
 					IF l2<=r THEN
 						r2:=ScanRight(l2, P.width, y-1, FALSE)-1;
-						PUT((l2+r2) DIV 2, y-1);  l2:=r2+1;
+						PUT((l2+r2) DIV 2, y-1); l2:=r2+1;
 					ELSE
 						EXIT;
 					END; (*if*)
@@ -314,7 +300,7 @@ BEGIN
 					l2:=ScanRight(l2, r0+1, y, TRUE);
 					IF l2<=r0 THEN
 						r2:=ScanRight(l2, P.width, y, FALSE)-1;
-						PUT((l2+r2) DIV 2, y);  l2:=r2+1;
+						PUT((l2+r2) DIV 2, y); l2:=r2+1;
 					ELSE
 						EXIT;
 					END; (*if*)
@@ -326,7 +312,7 @@ BEGIN
 					r2:=ScanLeft(r2, l-1, y-1, TRUE);
 					IF r2>=l THEN
 						l2:=ScanLeft(r2, -1, y-1, FALSE)+1;
-						PUT((l2+r2) DIV 2, y-1);  r2:=l2-1;
+						PUT((l2+r2) DIV 2, y-1); r2:=l2-1;
 					ELSE
 						EXIT;
 					END; (*if*)
@@ -337,14 +323,14 @@ BEGIN
 					r2:=ScanLeft(r2, l0-1, y, TRUE);
 					IF r2>=l0 THEN
 						l2:=ScanLeft(r2, -1, y, FALSE)+1;
-						PUT((l2+r2) DIV 2, y);  r2:=l2-1;
+						PUT((l2+r2) DIV 2, y); r2:=l2-1;
 					ELSE
 						EXIT;
 					END; (*if*)
 				END; (*loop*)
 			END; (*if*)
 			INC(y);
-			l0:=l;  r0:=r;
+			l0:=l; r0:=r;
 		UNTIL (y=P.height) OR (l>r);
 	END; (*while*)
 	Update(P,0,0,P.width,P.height);
@@ -366,7 +352,7 @@ BEGIN
 		IF direction= down THEN
 			maxy:= r; x:=0; d:= 2*r-1; dx:= 4*r; dy:=0;
 			WHILE x<r DO
-				WHILE d<= 0  DO DEC(maxy); DEC(dx, 4); INC(d, dx) END;
+				WHILE d<= 0 DO DEC(maxy); DEC(dx, 4); INC(d, dx) END;
 				IF maxy>= 1 THEN
 					FOR i:= 1 TO smearspeed DO
 						dr:= SHORT(ENTIER(Rembrandt0.Uniform()*maxy));
@@ -385,7 +371,7 @@ BEGIN
 		ELSIF direction = up THEN
 			maxy:= r; x:=0; d:= 2*r-1; dx:= 4*r; dy:=0;
 			WHILE x<r DO
-				WHILE d<= 0  DO DEC(maxy); DEC(dx, 4); INC(d, dx) END;
+				WHILE d<= 0 DO DEC(maxy); DEC(dx, 4); INC(d, dx) END;
 				IF maxy>= 1 THEN
 					FOR i:= 1 TO smearspeed DO
 						dr:= SHORT(ENTIER(Rembrandt0.Uniform()*maxy));
@@ -754,8 +740,8 @@ BEGIN
 			IF grad45 IN symmetric THEN
 				Update(F.pict, smx-smy+py0-r, smy-smx+px0-r, width, width);
 				Update(F.pict, smx-smy+py0-r, smy+smx-px0-r, width, width);
-				Update(F.pict, smx+smy-py0-r, smy-smx+px0-r,  width, width);
-				Update(F.pict, smx+smy-py0-r, smy+smx-px0-r,  width, width)
+				Update(F.pict, smx+smy-py0-r, smy-smx+px0-r, width, width);
+				Update(F.pict, smx+smy-py0-r, smy+smx-px0-r, width, width)
 			END;
 			Update(F.pict, 2*smx-px0-r, 2*smy-py0-r, width, width)
 		END
@@ -846,8 +832,8 @@ BEGIN
 		Rembrandt.ScreentoPict(F, x, y, M.X, M.Y, x0, y0);
 		Rembrandt.SavePicture(F.pict, 0, 0, F.pict.width, F.pict.height);
 		IF symmetric#{} THEN
-			IF Yachse IN symmetric THEN Fillarea(F,  2*smx-x0, y0) END;
-			IF Xachse IN symmetric THEN Fillarea(F,  x0, 2*smy-y0) END;
+			IF Yachse IN symmetric THEN Fillarea(F, 2*smx-x0, y0) END;
+			IF Xachse IN symmetric THEN Fillarea(F, x0, 2*smy-y0) END;
 			IF (Xachse IN symmetric) & (Yachse IN symmetric) THEN
 				IF grad45 IN symmetric THEN
 					Fillarea(F, smx-smy+y0, smy-smx+x0);
@@ -855,7 +841,7 @@ BEGIN
 					Fillarea(F, smx+smy-y0, smy-smx+x0);
 					Fillarea(F, smx+smy-y0, smy+smx-x0)
 				END;
-				Fillarea(F, 2*smx-x0,  2*smy-y0) END;
+				Fillarea(F, 2*smx-x0, 2*smy-y0) END;
 		END;
 		Fillarea(F, x0, y0);
 	END
@@ -888,7 +874,7 @@ BEGIN
 						Pictures.Dot(F.pict, Rembrandt0.color.col, smx+smy-py-dy, smy-smx+px+dx, Display.replace);
 						Pictures.Dot(F.pict, Rembrandt0.color.col, smx+smy-py-dy, smy+smx-px-dx, Display.replace)
 					END;
-					Pictures.Dot(F.pict, Rembrandt0.color.col, 2*smx-px-dx,  2*smy-py-dy, Display.replace) END;
+					Pictures.Dot(F.pict, Rembrandt0.color.col, 2*smx-px-dx, 2*smy-py-dy, Display.replace) END;
 			END;
 			INC(i)
 		END; 
@@ -919,7 +905,7 @@ PROCEDURE HandleSmear(F: Rembrandt.Frame; VAR M: Oberon.InputMsg; x, y: INTEGER)
 VAR keysum: SET; ox, oy, px, py: INTEGER;
 BEGIN
 	Rembrandt.SavePicture(F.pict, 0, 0, F.pict.width, F.pict.height);
-	ox:=M.X; oy:=M.Y;
+	ox:=M.X; oy:=M.Y; keysum := {};
 	REPEAT
 		IF (M.X#ox) OR (M.Y#oy) THEN
 			Rembrandt.ScreentoPict(F, x, y, M.X, M.Y, px, py);
@@ -949,7 +935,7 @@ BEGIN
 	Oberon.FadeCursor(Oberon.Mouse);
 	D3.Circle(Q, D3.FG, Display.solid, M.X+cdx, M.Y+cdy, r, 1, {2}, Display.invert);
 	D3.Circle(Q, D3.FG, Display.solid, M.X, M.Y, r, 1, {2}, Display.invert);
-	ox:=M.X; oy:=M.Y;
+	ox:=M.X; oy:=M.Y; keysum := {};
 	REPEAT
 		IF (M.X#ox) OR (M.Y#oy) THEN
 			Oberon.FadeCursor(Oberon.Mouse);
@@ -1032,7 +1018,7 @@ BEGIN
 	Delete(F, px, py);
 	Oberon.FadeCursor(Oberon.Mouse);
 	D3.Circle(Q, D3.FG, Display.solid, M.X, M.Y, r*zoom, 1, {0}, Display.invert);
-	ox:=M.X; oy:=M.Y;
+	ox:=M.X; oy:=M.Y; keysum := {};
 	REPEAT
 		IF (M.X#ox) OR (M.Y#oy) THEN
 			D3.Circle(Q, D3.FG, Display.solid, ox, oy, r*zoom, 1, {0}, Display.invert);
@@ -1069,8 +1055,8 @@ BEGIN
 			IF grad45 IN symmetric THEN
 				Update(F.pict, smx-smy+py0-r, smy-smx+px0-r, width, width);
 				Update(F.pict, smx-smy+py0-r, smy+smx-px0-r, width, width);
-				Update(F.pict, smx+smy-py0-r, smy-smx+px0-r,  width, width);
-				Update(F.pict, smx+smy-py0-r, smy+smx-px0-r,  width, width)
+				Update(F.pict, smx+smy-py0-r, smy-smx+px0-r, width, width);
+				Update(F.pict, smx+smy-py0-r, smy+smx-px0-r, width, width)
 			END;
 			Update(F.pict, 2*smx-px0-r, 2*smy-py0-r, width, width)
 		END
@@ -1087,7 +1073,7 @@ BEGIN
 			D3.Circle(Q, D3.FG, Display.solid, M.X, M.Y, r*zoom, 1, {0}, Display.invert);
 		END;
 		omx:= M.X; omy:= M.Y;
-		Input.Mouse(M.keys, M.X, M.Y);  
+		Input.Mouse(M.keys, M.X, M.Y);
 		keysum := keysum + M.keys
 	UNTIL M.keys = {};
 	D3.Circle(Q, D3.FG, Display.solid, omx, omy, r*zoom, 1, {0}, Display.invert);
@@ -1097,7 +1083,7 @@ END HandleErease;
 PROCEDURE HandlePick(F: Rembrandt.Frame; VAR M: Oberon.InputMsg; x, y: INTEGER);
 VAR keysum: SET; ox, oy, px, py: INTEGER; obj: Objects.Object; aM: Objects.AttrMsg;
 BEGIN
-	ox:=M.X; oy:=M.Y;
+	ox:=M.X; oy:=M.Y; keysum := {};
 	Rembrandt.ScreentoPict(F, x, y, M.X, M.Y, px, py);
 	Rembrandt0.color.col:= GetColor(F.pict, px, py);
 	Gadgets.Update(Rembrandt0.color);
@@ -1118,7 +1104,7 @@ BEGIN
 	obj:= Gadgets.FindObj(oldobj, "drawingtool");
 	IF obj#NIL THEN
 		aM.id:= Objects.set; aM.name:= "Value"; aM.class:= Objects.Int; aM.i:= oldval; aM.res:=-1;
-		obj.handle(obj, aM);  Gadgets.Update(obj); 
+		obj.handle(obj, aM); Gadgets.Update(obj); 
 	END;
 END HandlePick;
 
@@ -1161,7 +1147,7 @@ END FlipV;
 (** Generiert aus dem selektierten Bereich ein Picture der Grösse eines Icons *)
 PROCEDURE MakeIcon*;
 VAR P, S, D: Pictures.Picture; px, py, pw, ph, iconw, iconh, bw, bh, bwr, bhr, i, j, k, l, col, r, g, b, weight: INTEGER;
-		T: Texts.Scanner;  F: Rembrandt.Frame;
+		T: Texts.Scanner; F: Rembrandt.Frame;
 		wr, wg, wb: REAL; maxw, maxh, incbwr, incbhr: INTEGER;
 BEGIN
 	Texts.OpenScanner(T, Oberon.Par.text, Oberon.Par.pos);
@@ -1212,7 +1198,7 @@ BEGIN
 			END
 		END;
 		NEW(D); Pictures.Create(D, S.width, S.height, S.depth);
-		Rembrandt0.Floyd(S, D);  	 
+		Rembrandt0.Floyd(S, D);	 
 		RembrandtDocs.OpenPict(D, "") 
 	END				
 END MakeIcon;
@@ -1333,9 +1319,9 @@ END PickColor;
 
 (** Symmetriechsen einstellen *)
 PROCEDURE SetSymmXaxis*;
-VAR obj: Objects.Object;  M: Objects.AttrMsg;
+VAR obj: Objects.Object; M: Objects.AttrMsg;
 BEGIN
-    obj := Gadgets.FindObj(Gadgets.context, "xaxis");
+	obj := Gadgets.FindObj(Gadgets.context, "xaxis");
 	IF obj#NIL THEN	(* Wert lesen *)
 		M.id:= Objects.get; M.name:= "Value"; M.class:= Objects.Bool; M.res:=-1;
 		obj.handle(obj, M); 
@@ -1358,9 +1344,9 @@ BEGIN
 END SetSymmXaxis;
 
 PROCEDURE SetSymmYaxis*;
-VAR obj: Objects.Object;  M: Objects.AttrMsg;
+VAR obj: Objects.Object; M: Objects.AttrMsg;
 BEGIN
-    obj := Gadgets.FindObj(Gadgets.context, "yaxis");
+	obj := Gadgets.FindObj(Gadgets.context, "yaxis");
 	IF obj#NIL THEN	(* Wert lesen *)
 		M.id:= Objects.get; M.name:= "Value"; M.class:= Objects.Bool; M.res:=-1;
 		obj.handle(obj, M);
@@ -1383,9 +1369,9 @@ BEGIN
 END SetSymmYaxis;
 
 PROCEDURE SetSymmDeg45*;
-VAR obj: Objects.Object;  M: Objects.AttrMsg;
+VAR obj: Objects.Object; M: Objects.AttrMsg;
 BEGIN
-    obj:= Gadgets.FindObj(Gadgets.context, "deg45");
+	obj:= Gadgets.FindObj(Gadgets.context, "deg45");
 	IF obj#NIL THEN	(* Wert lesen *)
 		M.id:= Objects.get; M.name:= "Value"; M.class:= Objects.Bool; M.res:=-1;
 		obj.handle(obj, M); 
@@ -1417,7 +1403,7 @@ END SetSymmDeg45;
 PROCEDURE SetFilled*;
 VAR obj: Objects.Object; M: Objects.AttrMsg;
 BEGIN
-    obj:= Gadgets.FindObj(Gadgets.context, "filled");
+	obj:= Gadgets.FindObj(Gadgets.context, "filled");
 	IF obj#NIL THEN	(* Wert lesen *)
 		M.id:= Objects.get; M.name:= "Value"; M.class:= Objects.Bool; M.res:=-1;
 		obj.handle(obj, M);
@@ -1439,7 +1425,7 @@ END GetFilled;
 PROCEDURE Filled*(set: BOOLEAN);
 VAR obj: Objects.Object; M: Objects.AttrMsg;
 BEGIN
-    obj:= Gadgets.FindObj(Gadgets.context, "filled");
+	obj:= Gadgets.FindObj(Gadgets.context, "filled");
 	IF obj#NIL THEN	
 		M.id:= Objects.set; M.name:= "Value"; M.class:= Objects.Bool; M.b:= set; M.res:=-1;
 		obj.handle(obj, M);
@@ -1478,7 +1464,7 @@ END Width;
 PROCEDURE SetDouble*;
 VAR obj: Objects.Object; M: Objects.AttrMsg;
 BEGIN
-    obj:= Gadgets.FindObj(Gadgets.context, "double");
+	obj:= Gadgets.FindObj(Gadgets.context, "double");
 	IF obj#NIL THEN	(* Wert lesen *)
 		M.id:= Objects.get; M.name:= "Value"; M.class:= Objects.Bool; M.res:=-1;
 		obj.handle(obj, M);
@@ -1563,5 +1549,3 @@ BEGIN
 	sprayspeed:= 1; symmetric:= {}; smearspeed:= 1;
 	cdx:= 20; cdy:= 20;
 END RembrandtTools.
-
-

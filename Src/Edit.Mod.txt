@@ -1,17 +1,5 @@
-﻿(* OBERON System 3, Release 2.3.
-
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
-
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
-
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
+﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE Edit; (** portable *)	(*JG 4.4.95 / NW 24.1.91*)
 
@@ -27,7 +15,7 @@ MODULE Edit; (** portable *)	(*JG 4.4.95 / NW 24.1.91*)
 		M: INTEGER;
 		pat: ARRAY maxlen OF CHAR;
 		d: ARRAY 256 OF INTEGER;
-        textX, pagenoX, headerY, topY, botY: INTEGER;
+		textX, pagenoX, headerY, topY, botY: INTEGER;
 
 	PROCEDURE Max (i, j: LONGINT): LONGINT;
 	BEGIN IF i >= j THEN RETURN i ELSE RETURN j END
@@ -77,8 +65,7 @@ MODULE Edit; (** portable *)	(*JG 4.4.95 / NW 24.1.91*)
 			WHILE j # m DO buf[j] := buf[n + j]; INC(j) END;
 			WHILE j # M DO Texts.Read(R, buf[j]); INC(j) END
 		END Forward;
-
-    BEGIN
+	BEGIN
 		par := Oberon.Par;
 		Texts.OpenScanner(S, par.text, par.pos); Texts.Scan(S);
 		IF (S.class = Texts.Char) & (S.c = "^") OR (S.line # 0) THEN
@@ -168,7 +155,7 @@ MODULE Edit; (** portable *)	(*JG 4.4.95 / NW 24.1.91*)
 			END;
 			TextFrames.Mark(Text, 1)
 		END
-	END Store;        
+	END Store;
 
 	PROCEDURE CopyFont*;
 		VAR R: Texts.Reader;
@@ -247,7 +234,7 @@ MODULE Edit; (** portable *)	(*JG 4.4.95 / NW 24.1.91*)
 			TextFrames.Mark(Text, -1);
 			prevTime := time; Oberon.GetSelection(T, beg, end, time);
 			IF time > prevTime THEN
-                Texts.OpenReader(R, T, beg);
+				Texts.OpenReader(R, T, beg);
 				i := 0; pos := beg;
 				REPEAT Texts.Read(R, pat[i]); INC(i); INC(pos)
 				UNTIL (i = maxlen) OR (pos = end);
@@ -304,59 +291,59 @@ MODULE Edit; (** portable *)	(*JG 4.4.95 / NW 24.1.91*)
 		END
 	END Locate;
 
-    PROCEDURE AddPrefix*;
-      VAR  V: Viewers.Viewer;
-        S: Texts.Scanner; R: Texts.Reader; T: TextFrames.Frame;
-        pos, beg, end, time: LONGINT; ch: CHAR;
-    BEGIN
-      Texts.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos); Texts.Scan(S);
-      IF (S.class = Texts.Char) & (S.c = "^") THEN
-        Oberon.GetSelection(T.text, beg, end, time);
-        IF time >= 0 THEN Texts.OpenScanner(S, T.text, beg); Texts.Scan(S) END
-      END;
-      IF (S.class = Texts.Name) OR (S.class = Texts.String) THEN
-        V := Oberon.MarkedViewer();
-        IF (V.dsc # NIL) & (V.dsc.next IS TextFrames.Frame) THEN
-          T := V.dsc.next(TextFrames.Frame);
-          IF T.sel > 0 THEN
-            pos := T.selbeg.org; end := T.selend.pos;
-            REPEAT
-              Texts.WriteString(W, S.s); Texts.Insert(T.text, pos, W.buf);
-              Texts.OpenReader(R, T.text, pos); Texts.Read(R, ch); INC(pos);
-              WHILE (pos # end) & (ch # CR) DO Texts.Read(R, ch); INC(pos) END
-            UNTIL pos = end
-          END
-        END
-      END
-    END AddPrefix;
+	PROCEDURE AddPrefix*;
+		VAR V: Viewers.Viewer;
+			S: Texts.Scanner; R: Texts.Reader; T: TextFrames.Frame;
+			pos, beg, end, time: LONGINT; ch: CHAR;
+	BEGIN
+		Texts.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos); Texts.Scan(S);
+		IF (S.class = Texts.Char) & (S.c = "^") THEN
+			Oberon.GetSelection(T.text, beg, end, time);
+			IF time >= 0 THEN Texts.OpenScanner(S, T.text, beg); Texts.Scan(S) END
+		END;
+		IF (S.class = Texts.Name) OR (S.class = Texts.String) THEN
+			V := Oberon.MarkedViewer();
+			IF (V.dsc # NIL) & (V.dsc.next IS TextFrames.Frame) THEN
+				T := V.dsc.next(TextFrames.Frame);
+				IF T.sel > 0 THEN
+					pos := T.selbeg.org; end := T.selend.pos;
+					REPEAT
+						Texts.WriteString(W, S.s); Texts.Insert(T.text, pos, W.buf);
+						Texts.OpenReader(R, T.text, pos); Texts.Read(R, ch); INC(pos);
+						WHILE (pos # end) & (ch # CR) DO Texts.Read(R, ch); INC(pos) END
+					UNTIL pos = end
+				END
+			END
+		END
+	END AddPrefix;
 
-    PROCEDURE RemovePrefix*;
-      VAR  V: Viewers.Viewer;
-        S: Texts.Scanner; R: Texts.Reader; T: TextFrames.Frame;
-        pos, beg, end, time: LONGINT; i: INTEGER; ch: CHAR;
-    BEGIN
-      Texts.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos); Texts.Scan(S);
-      IF (S.class = Texts.Char) & (S.c = "^") THEN
-        Oberon.GetSelection(T.text, beg, end, time);
-        IF time >= 0 THEN Texts.OpenScanner(S, T.text, beg); Texts.Scan(S) END
-      END;
-      IF (S.class = Texts.Name) OR (S.class = Texts.String) THEN
-        V := Oberon.MarkedViewer();
-        IF (V.dsc # NIL) & (V.dsc.next IS TextFrames.Frame) THEN
-          T := V.dsc.next(TextFrames.Frame);
-          IF T.sel > 0 THEN
-            pos := T.selbeg.org; end := T.selend.pos;
-            REPEAT
-              Texts.OpenReader(R, T.text, pos); Texts.Read(R, ch); i := 0;
-              WHILE ~R.eot & (S.s[i] = ch) DO Texts.Read(R, ch); INC(i) END;
-              Texts.Delete(T.text, pos, pos + i);
-              Texts.OpenReader(R, T.text, pos); Texts.Read(R, ch); INC(pos);
-              WHILE ~R.eot & (ch # CR) DO Texts.Read(R, ch); INC(pos) END
-            UNTIL R.eot
-          END
-        END
-      END
-    END RemovePrefix;
+	PROCEDURE RemovePrefix*;
+		VAR V: Viewers.Viewer;
+			S: Texts.Scanner; R: Texts.Reader; T: TextFrames.Frame;
+			pos, beg, end, time: LONGINT; i: INTEGER; ch: CHAR;
+	BEGIN
+		Texts.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos); Texts.Scan(S);
+		IF (S.class = Texts.Char) & (S.c = "^") THEN
+			Oberon.GetSelection(T.text, beg, end, time);
+			IF time >= 0 THEN Texts.OpenScanner(S, T.text, beg); Texts.Scan(S) END
+		END;
+		IF (S.class = Texts.Name) OR (S.class = Texts.String) THEN
+			V := Oberon.MarkedViewer();
+			IF (V.dsc # NIL) & (V.dsc.next IS TextFrames.Frame) THEN
+				T := V.dsc.next(TextFrames.Frame);
+				IF T.sel > 0 THEN
+					pos := T.selbeg.org; end := T.selend.pos;
+					REPEAT
+						Texts.OpenReader(R, T.text, pos); Texts.Read(R, ch); i := 0;
+						WHILE ~R.eot & (S.s[i] = ch) DO Texts.Read(R, ch); INC(i) END;
+						Texts.Delete(T.text, pos, pos + i);
+						Texts.OpenReader(R, T.text, pos); Texts.Read(R, ch); INC(pos);
+						WHILE ~R.eot & (ch # CR) DO Texts.Read(R, ch); INC(pos) END
+					UNTIL R.eot
+				END
+			END
+		END
+	END RemovePrefix;
 
 	PROCEDURE Recall*;
 		VAR M: Oberon.RecallMsg;
@@ -472,7 +459,7 @@ MODULE Edit; (** portable *)	(*JG 4.4.95 / NW 24.1.91*)
 		IF S.class IN {Texts.Name,Texts.String} THEN
 			COPY(S.s, server);
 			IF S.nextCh = Oberon.OptionChar THEN
-				Texts.Scan(S);  Texts.Scan(S);
+				Texts.Scan(S); Texts.Scan(S);
 				IF S.class IN {Texts.Name,Texts.String} THEN COPY(S.s, options)
 				ELSE options := "" 
 				END
@@ -480,12 +467,12 @@ MODULE Edit; (** portable *)	(*JG 4.4.95 / NW 24.1.91*)
 			END;
 			Printer.Open(server, options);
 			IF Printer.res = 0 THEN
-                textX := Printer.Width DIV 10;
-                pagenoX := Printer.Width DIV 10 * 9;
-                headerY := Printer.Height DIV 20 * 19;
-                topY := Printer.Height DIV 10 * 9;
-                botY := Printer.Height DIV 20;
-                Texts.Scan(S);
+				textX := Printer.Width DIV 10;
+				pagenoX := Printer.Width DIV 10 * 9;
+				headerY := Printer.Height DIV 20 * 19;
+				topY := Printer.Height DIV 10 * 9;
+				botY := Printer.Height DIV 20;
+				Texts.Scan(S);
 				IF (S.class = Texts.Char) & (S.c = "%") THEN
 					listing := TRUE; Printer.UseListFont(Fonts.Default.name); Texts.Scan(S)
 				ELSE listing := FALSE
@@ -516,7 +503,6 @@ MODULE Edit; (** portable *)	(*JG 4.4.95 / NW 24.1.91*)
 					ELSIF Printer.res = 2 THEN Texts.WriteString(W, " no link")
 					ELSIF Printer.res = 3 THEN Texts.WriteString(W, " printer not ready")
 					ELSIF Printer.res = 4 THEN Texts.WriteString(W, " no permission")
-					ELSE Texts.WriteString(W, " unknown error")
 				END;
 				Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
 			END

@@ -1,0 +1,744 @@
+﻿(* Copyright (c) 1994 - 2000 Emil J. Zeller *)
+
+MODULE COM; (** non-portable / source: Win32.COM.Mod *)	(* ejz  *)
+	IMPORT SYSTEM, Kernel32, Kernel, Registry, FileDir, Modules, Threads, Strings, Displays, Texts, Oberon;
+
+(**
+	COM is the fundamental "object model" on which ActiveX controls and OLE are built.
+	This module defines all the basic functions needed to manipulate error codes (HRESULT),
+	GUIDs (Globally Unique IDdentifier) and interfaces.
+	This module provides some helper procedures to simplify the implementation of COM objects.
+*)
+
+	CONST
+		(** Success codes (HRESULT) *)
+		SOk* = 0H; STrue* = SOk; SFalse* = 1H;
+
+		(** Error codes (HRESULT) *)
+		ENotImpl* = 080004001H;
+		ENoInterface* = 080004002H;
+		EPointer* = 080004003H;
+		EAbort* = 080004004H;
+		EFail* = 080004005H;
+		EUnexpected* = 08000FFFFH;
+		EAccessDenied* = 080070005H;
+		EHandle* = 080070006H;
+		EOutOfMemory* = 08007000EH;
+		EInvalidArg * = 080070057H;
+		ClassENoAggregation* = 080040110H;
+		ClassEClassNotAvailable* = 080040111H;
+
+		(** Class context values for CoRegisterClassObject. *)
+    	CLSCTXInProcServer* = 1; CLSCTXLocalServer* = 4;
+
+		(** Type of connections flags for CoRegisterClassObject. *)
+    	REGCLSSingleUse* = 0; REGCLSMultipleUse* = 1; REGCLSMultiSeparate* = 2;
+
+		GUIDNULLStr = "{00000000-0000-0000-0000-000000000000}";
+
+		(* Standard IIDs *)
+		IIDIUnknownStr = "{00000000-0000-0000-C000-000000000046}";
+		IIDIClassFactoryStr = "{00000001-0000-0000-C000-000000000046}";
+
+		CLSIDStr = "{22240DB0-AC88-11D3-A2CA-005004435167}";
+
+	TYPE
+		(** Globally Unique IDdentifier *)
+		GUID* = RECORD [NOTAG]
+						data1: LONGINT;
+						data2, data3: INTEGER;
+						data4: ARRAY 8 OF CHAR
+					END;
+
+		(** Interface IDdentifier *)
+		IID* = GUID;
+
+		(** CLaSs IDdentifier *)
+		CLSID* = GUID;
+		LIBID* = GUID;
+
+		(** An opaque result handle defined to be zero for a successful return from a function and nonzero if error or status
+			information is returned. *)
+		HRESULT* = LONGINT;
+
+		Interface* = POINTER TO RECORD
+			vtbl*: IUnknownVTBL (** virtual function table *)
+		END;
+
+		(** The IUnknown interface lets clients get pointers to other interfaces on a given object through the QueryInterface
+			method, and manage the existence of the object through the IUnknown::AddRef and IUnknown::Release methods.
+			All other COM interfaces are inherited, directly or indirectly, from IUnknown. Therefore, the three methods in
+			IUnknown are the first entries in the VTable for every interface. *)
+		IUnknownVTBL* = POINTER TO RECORD
+			QueryInterface*: PROCEDURE [WINAPI] (this: Interface; VAR riid: IID; VAR ppvObject: Interface): HRESULT;
+			AddRef*: PROCEDURE [WINAPI] (this: Interface): LONGINT;
+			Release*: PROCEDURE [WINAPI] (this: Interface): LONGINT
+		END;
+
+		(** The IClassFactory interface contains two methods intended to deal with an entire class of objects, and so is
+			implemented on the class object for a specific class of objects (identified by a CLSID). The first method, CreateInstance,
+			creates an uninitialized object of a specified CLSID, and the second, LockServer, locks the object's server in memory,
+			allowing new objects to be created more quickly. *)
+		IClassFactoryVTBL* = POINTER TO RECORD (IUnknownVTBL)
+			CreateInstance*: PROCEDURE [WINAPI] (this: Interface; pUnkOuter: Interface; VAR riid: IID; VAR ppvObject: Interface): HRESULT;
+			LockServer*: PROCEDURE [WINAPI] (this: Interface; fLock: Kernel32.BOOL): HRESULT
+		END;
+
+		(** Base types for class factories and COM objects, see: Win32.OLEObjects.Mod for a complete example. *)
+
+		ObjectInterface* = POINTER TO RECORD (Interface)
+			obj*: Object
+		END;
+
+		Object* = POINTER TO RECORD (ObjectInterface)
+			refCount: LONGINT;
+			class-: Class; next-: Object
+		END;
+
+		ClassProc* = PROCEDURE [WINAPI] (class: Class): HRESULT;
+		CreateObjectProc* = PROCEDURE (class: Class; data: PTR): Object;
+		ReleaseObjectProc* = PROCEDURE (class: Class; obj: Object);
+
+		Class* = POINTER TO RECORD (Interface)
+			clsid*: CLSID; objs-: Object;
+			refCount, locks: LONGINT;
+			RegisterServer*, UnregisterServer*, CanUnloadNow*: ClassProc;
+			CreateObject*: CreateObjectProc;
+			ReleaseObject*: ReleaseObjectProc;
+			apartment: Threads.Thread;
+			reg: BOOLEAN; next: Class
+		END;
+
+	VAR
+		(** Creates a GUID, a unique 128-bit integer used for CLSIDs and interface identifiers. *)
+		CoCreateGuid-: PROCEDURE [WINAPI] (VAR pguid: GUID): HRESULT;
+		(** Called either to lock an object to ensure that it stays in memory, or to release such a lock. *)
+		CoLockObjectExternal-: PROCEDURE [WINAPI] (pUnk: Interface; fLock, fLastUnlockReleases: Kernel32.BOOL): HRESULT;
+		(** Registers an EXE class object with OLE so other applications can connect to it. *)
+		CoRegisterClassObject-: PROCEDURE [WINAPI] (rclsid: CLSID; pUnk: Interface; dwClsContext, flags: LONGINT; VAR lpdwRegister: LONGINT): HRESULT;
+		(** Informs OLE that a class object, previously registered with the CoRegisterClassObject function,
+			is no longer available for use. *)
+		CoRevokeClassObject-: PROCEDURE [WINAPI] (dwRegister: LONGINT): HRESULT;
+		GUIDNULL*: GUID;
+		(** Standard IIDs *)
+		IIDIUnknown*, IIDIClassFactory*: IID;
+		(** Class for temporary objects like IEnumXXXX, IDropSource, IDropTarget, ... *)
+		tempClass-: Class; tempClassVtbl: IClassFactoryVTBL;
+		ole32: Kernel32.HMODULE;
+		moduleCS: Threads.Mutex;
+		classes: Class;
+
+	(** Generic test for success on any status value (non-negative numbers indicate success). *)
+	PROCEDURE Succeeded*(status: HRESULT): BOOLEAN;
+	BEGIN
+		RETURN status >= 0
+	END Succeeded;
+
+	(** and the inverse *)
+	PROCEDURE Failed*(status: HRESULT): BOOLEAN;
+	BEGIN
+		RETURN status < 0
+	END Failed;
+
+	(** Determines whether two GUIDs are equal. *)
+	PROCEDURE IsEqualGUID*(VAR guid1, guid2: GUID): BOOLEAN;
+		VAR i: LONGINT;
+	BEGIN
+		IF (guid1.data1 = guid2.data1) & (guid1.data2 = guid2.data2) & (guid1.data3 = guid2.data3) THEN
+			FOR i := 0 TO 7 DO
+				IF guid1.data4[i] # guid2.data4[i] THEN
+					RETURN FALSE
+				END
+			END;
+			RETURN TRUE
+		ELSE
+			RETURN FALSE
+		END
+	END IsEqualGUID;
+
+	PROCEDURE HexDigit(i: LONGINT): CHAR;
+	BEGIN
+		IF i < 10 THEN
+			RETURN CHR(i+ORD("0"))
+		ELSE
+			RETURN CHR(i-10+ORD("A"))
+		END
+	END HexDigit;
+
+	PROCEDURE HexVal(ch: CHAR): LONGINT;
+	BEGIN
+		CASE ch OF
+			"0" .. "9": RETURN ORD(ch)-ORD("0")
+			|"A" .. "F": RETURN ORD(ch)-ORD("A")+10
+			|"a" .. "f": RETURN ORD(ch)-ORD("a")+10
+		END
+	END HexVal;
+
+	(** Converts a globally unique identifier (GUID) into a string of printable characters. *)
+	PROCEDURE StringFromGUID*(VAR guid: GUID; VAR str: ARRAY OF CHAR);
+		VAR i, j, v: LONGINT;
+	BEGIN
+		ASSERT(LEN(str) >= 39);
+		str[0] := "{"; v := guid.data1;
+		FOR i := 8 TO 1 BY -1 DO
+			str[i] := HexDigit(v MOD 16); v := v DIV 16
+		END;
+		str[9] := "-"; v := guid.data2;
+		FOR i := 13 TO 10 BY -1 DO
+			str[i] := HexDigit(v MOD 16); v := v DIV 16
+		END;
+		str[14] := "-"; v := guid.data3;
+		FOR i := 18 TO 15 BY -1 DO
+			str[i] := HexDigit(v MOD 16); v := v DIV 16
+		END;
+		str[19] := "-"; j := 20;
+		FOR i := 0 TO 1 DO
+			str[j] := HexDigit(ORD(guid.data4[i]) DIV 16); INC(j);
+			str[j] := HexDigit(ORD(guid.data4[i]) MOD 16); INC(j)
+		END;
+		str[24] := "-"; j := 25;
+		FOR i := 2 TO 7 DO
+			str[j] := HexDigit(ORD(guid.data4[i]) DIV 16); INC(j);
+			str[j] := HexDigit(ORD(guid.data4[i]) MOD 16); INC(j)
+		END;
+		str[37] := "}"; str[38] := 0X
+	END StringFromGUID;
+
+	(** Converts a string into a globally unique identifier (GUID). *)
+	PROCEDURE GUIDFromString*(str: ARRAY OF CHAR; VAR guid: GUID);
+		VAR i, j, v: LONGINT;
+	BEGIN
+		ASSERT(LEN(str) >= 39);
+		v := 0;
+		FOR j := 1 TO 8 DO
+			v := HexVal(str[j])+ASH(v, 4)
+		END;
+		guid.data1 := v;
+		v := 0;
+		FOR j := 10 TO 13 DO
+			v := HexVal(str[j])+ASH(v, 4)
+		END;
+		guid.data2 := SHORT(v);
+		v := 0;
+		FOR j := 15 TO 18 DO
+			v := HexVal(str[j])+ASH(v, 4)
+		END;
+		guid.data3 := SHORT(v);
+		j := 20;
+		FOR i := 0 TO 1 DO
+			v := HexVal(str[j]); INC(j);
+			v := HexVal(str[j])+ASH(v, 4); INC(j);
+			guid.data4[i] := CHR(v)
+		END;
+		j := 25;
+		FOR i := 2 TO 7 DO
+			v := HexVal(str[j]); INC(j);
+			v := HexVal(str[j])+ASH(v, 4); INC(j);
+			guid.data4[i] := CHR(v)
+		END
+	END GUIDFromString;
+
+	(** int.AddRef(); this := int *)
+	PROCEDURE OutInterface*(VAR this: Interface; int: Interface);
+	BEGIN
+		IF int # NIL THEN int.vtbl.AddRef(int) END;
+		this := int
+	END OutInterface;
+
+	(** int.AddRef(); this.Release(); this := int *)
+	PROCEDURE AssignInterface*(VAR this: Interface; int: Interface);
+	BEGIN
+		IF int # NIL THEN int.vtbl.AddRef(int) END;
+		IF this # NIL THEN this.vtbl.Release(this) END;
+		this := int
+	END AssignInterface;
+
+	(** Compares two components with their IUnknown interface pointer. *)
+	PROCEDURE SameObj*(a, b: Interface): BOOLEAN;
+		VAR aunk, bunk: Interface;
+	BEGIN
+		IF a = b THEN
+			RETURN TRUE
+		ELSIF (a = NIL) OR (b = NIL) THEN
+			RETURN FALSE
+		ELSE
+			a.vtbl.QueryInterface(a, IIDIUnknown, aunk);
+			b.vtbl.QueryInterface(b, IIDIUnknown, bunk);
+			AssignInterface(bunk, NIL);
+			AssignInterface(aunk, NIL);
+			RETURN aunk = bunk
+		END	
+	END SameObj;
+
+	(** Write a GUID to the Kernel32. *)
+	PROCEDURE ConsoleGUID*(VAR guid: GUID);
+		VAR str: ARRAY 64 OF CHAR;
+	BEGIN
+		StringFromGUID(guid, str);
+		Kernel32.Str(str)
+	END ConsoleGUID;
+
+	(** Write a CLSID to the Kernel32. *)
+	PROCEDURE ConsoleCLSID*(VAR riid: GUID);
+		VAR path, str: ARRAY 64 OF CHAR;
+	BEGIN
+		StringFromGUID(riid, str);
+		path := "CLSID\"; Strings.Append(path, str);
+		Registry.GetKeyValue(Registry.ClassesRoot, path, "", str);
+		IF (Registry.res = Registry.Done) & (str # "") THEN
+			Kernel32.Str(str)
+		ELSE
+			ConsoleGUID(riid)
+		END
+	END ConsoleCLSID;
+
+	(** Write a IID to the Kernel32. *)
+	PROCEDURE ConsoleIID*(VAR riid: GUID);
+		VAR path, str: ARRAY 64 OF CHAR;
+	BEGIN
+		StringFromGUID(riid, str);
+		path := "Interface\"; Strings.Append(path, str);
+		Registry.GetKeyValue(Registry.ClassesRoot, path, "", str);
+		IF (Registry.res = Registry.Done) & (str # "") THEN
+			Kernel32.Str(str)
+		ELSE
+			ConsoleGUID(riid)
+		END
+	END ConsoleIID;
+
+	(** Add a new object to a class. *)
+	PROCEDURE AddObject*(class: Class; obj: Object);
+	BEGIN
+Kernel32.Str("COM.AddObject "); ConsoleCLSID(class.clsid); Kernel32.Ln();
+		obj.refCount := 0; obj.class := class; obj.obj := obj;
+		Threads.Lock(moduleCS);
+		obj.next := class.objs; class.objs := obj;
+		Threads.Unlock(moduleCS)
+	END AddObject;
+
+	(** Release an object, thus the object is removed from it's classes list of objects. *)
+	PROCEDURE ReleaseObject*(class: Class; obj: Object);
+		VAR p, o: Object;
+	BEGIN
+Kernel32.Str("COM.ReleaseObject ");
+		ASSERT(class = obj.class);
+		class := obj.class; obj.class := NIL; obj.obj := NIL;
+ConsoleCLSID(class.clsid); Kernel32.Ln();
+		IF class # NIL THEN
+			Threads.Lock(moduleCS);
+			p := NIL; o := class.objs;
+			WHILE o # obj DO
+				p := o; o := o.next
+			END;
+			IF p # NIL THEN
+				p.next := obj.next
+			ELSE
+				class.objs := obj.next
+			END;
+			Threads.Unlock(moduleCS);
+			IF class.objs = NIL THEN class.CanUnloadNow(class) END
+		END
+	END ReleaseObject;
+
+	(** Implements IUnknown.AddRef for objects.
+			Returns this for IIDIUnknown, NIL else. *)
+	PROCEDURE [WINAPI] QueryInterface*(this: Interface; VAR riid: IID; VAR ppvObject: Interface): HRESULT;
+	BEGIN
+		IF IsEqualGUID(riid, IIDIUnknown) THEN
+			OutInterface(ppvObject, this); RETURN SOk
+		ELSE
+			ppvObject := NIL; RETURN ENoInterface
+		END
+	END QueryInterface;
+
+	(** Implements IUnknown.AddRef for objects.
+		Increment the internal reference count of an Object (this IS ObjectInterface). *)
+	PROCEDURE [WINAPI] AddRef*(this: Interface): LONGINT;
+	BEGIN
+		RETURN Kernel32.InterlockedIncrement(this(ObjectInterface).obj.refCount)
+	END AddRef;
+
+	(** Implements IUnknown.Release for objects.
+		Decrement the internal reference count of an Object (this IS ObjectInterface).
+		If the refcount reaches 0 the object is removed from it's class (class.ReleaseObject). *)
+	PROCEDURE [WINAPI] Release*(this: Interface): LONGINT;
+		VAR obj: Object;
+	BEGIN
+		obj := this(ObjectInterface).obj;
+		IF (Kernel32.InterlockedDecrement(obj.refCount) <= 0) & (obj.class # NIL) THEN
+			obj.class.ReleaseObject(obj.class, obj)
+		END;
+		RETURN obj.refCount
+	END Release;
+
+	(** Initialize a new class. *)
+	PROCEDURE InitClass*(class: Class);
+	BEGIN
+		class.refCount := 1; class.locks := 0;
+		class.reg := FALSE; class.objs := NIL
+	END InitClass;
+
+	(** Add a class to the list of loaded classes. This procedure is typically called by
+		a generator registered in the Oberon registry section COMClasses. *)
+	PROCEDURE RegisterClass*(class: Class);
+		VAR c: Class;
+	BEGIN
+Kernel32.Str("COM.RegisterClass "); ConsoleCLSID(class.clsid); Kernel32.Ln();
+		ASSERT(~class.reg); class.reg := TRUE;
+		Threads.Lock(moduleCS);
+		c := classes;
+		WHILE (c # NIL) & ~IsEqualGUID(class.clsid, c.clsid) DO
+			c := c.next
+		END;
+		ASSERT(c = NIL);
+		class.next := classes; classes := class;
+		Threads.Unlock(moduleCS)
+	END RegisterClass;
+
+	(** Remove class from the list of loaded classes. This procedure is typically called by
+		DllCanUnloadNow. *)
+	PROCEDURE UnregisterClass*(class: Class);
+		VAR p, c: Class; obj: Object;
+	BEGIN
+Kernel32.Str("COM.UnregisterClass "); ConsoleCLSID(class.clsid); Kernel32.Ln();
+		ASSERT(class.reg); class.reg := FALSE;
+		Threads.Lock(moduleCS);
+		p := NIL; c := classes;
+		WHILE (c # NIL) & (c # class) DO
+			p := c; c := c.next
+		END;
+		ASSERT(c # NIL);
+		IF p # NIL THEN
+			p.next := class.next
+		ELSE
+			classes := class.next
+		END;
+		Threads.Unlock(moduleCS);
+		obj := class.objs;
+		WHILE obj # NIL DO
+			class.ReleaseObject(class, obj); obj := obj.next
+		END;
+		IF class.apartment # NIL THEN
+Kernel32.Str("Threads.Unregister "); ConsoleCLSID(class.clsid); Kernel32.Ln();
+			Threads.Unregister(class.apartment); class.apartment := NIL
+		END
+	END UnregisterClass;
+
+	(** Check if class is allready in the list of loaded classes. *)
+	PROCEDURE IsClassRegistered*(class: Class): BOOLEAN;
+	BEGIN
+		RETURN class.reg
+	END IsClassRegistered;
+
+	(** Implements IUnknown.QueryInterface for classes. *)
+	PROCEDURE [WINAPI] ClassQueryInterface*(this: Interface; VAR riid: IID; VAR ppvObject: Interface): HRESULT;
+	BEGIN
+		IF IsEqualGUID(riid, IIDIUnknown) OR IsEqualGUID(riid, IIDIClassFactory) THEN
+			OutInterface(ppvObject, this); RETURN SOk
+		ELSE
+			ppvObject := NIL; RETURN ENoInterface
+		END
+	END ClassQueryInterface;
+
+	(** Implements IUnknown.AddRef for classes. *)
+	PROCEDURE [WINAPI] ClassAddRef*(this: Interface): LONGINT;
+	BEGIN
+		RETURN Kernel32.InterlockedIncrement(this(Class).refCount)
+	END ClassAddRef;
+
+	(** Implements IUnknown.Release for classes. *)
+	PROCEDURE [WINAPI] ClassRelease*(this: Interface): LONGINT;
+	BEGIN
+		RETURN Kernel32.InterlockedDecrement(this(Class).refCount)
+	END ClassRelease;
+
+	(** Implements IClassFactory.LockServer for classes. *)
+	PROCEDURE [WINAPI] ClassLockServer*(this: Interface; fLock: Kernel32.BOOL): HRESULT;
+		VAR class: Class;
+	BEGIN
+		class := this(Class);
+		IF fLock # Kernel32.False THEN
+			Kernel32.InterlockedIncrement(class.locks);
+			Kernel32.InterlockedIncrement(Kernel.lock)
+		ELSE
+			Kernel32.InterlockedDecrement(Kernel.lock);
+			Kernel32.InterlockedDecrement(class.locks)
+		END;
+		RETURN SOk
+	END ClassLockServer;
+
+	(** Checks if class can be unloaded. Calls UnregisterClass if SOk. *)
+	PROCEDURE [WINAPI] ClassCanUnloadNow*(class: Class): HRESULT;
+	BEGIN
+Kernel32.Str("COM.ClassCanUnloadNow"); Kernel32.Ln();
+		IF (class.locks <= 0) & (class.objs = NIL) THEN
+			IF class.reg THEN UnregisterClass(class) END;
+			RETURN SOk
+		ELSE
+			RETURN SFalse
+		END
+	END ClassCanUnloadNow;
+
+	(** Register a class in the registry. *)
+	PROCEDURE RegisterServer*(class: Class; progid, vprogid, desc: ARRAY OF CHAR);
+		VAR key, file: FileDir.FileName; clsid: ARRAY 64 OF CHAR;
+	BEGIN
+		StringFromGUID(class.clsid, clsid);
+
+		key := "CLSID\"; Strings.Append(key, clsid);
+		Registry.SetKeyValue(Registry.ClassesRoot, key, "", desc);
+		key := "CLSID\"; Strings.Append(key, clsid); Strings.Append(key, "\ProgID");
+		Registry.SetKeyValue(Registry.ClassesRoot, key, "", vprogid);
+		key := "CLSID\"; Strings.Append(key, clsid); Strings.Append(key, "\VersionIndependentProgID");
+		Registry.SetKeyValue(Registry.ClassesRoot, key, "", progid);
+		key := "CLSID\"; Strings.Append(key, clsid); Strings.Append(key, "\InprocServer32");
+		Kernel32.GetModuleFileName(Kernel.hInstance, file, SIZE(FileDir.FileName));
+		Strings.ChangeSuffix(file, "dll");
+		Registry.SetKeyValue(Registry.ClassesRoot, key, "", file);
+
+		key := "CLSID\"; Strings.Append(key, clsid); Strings.Append(key, "\LocalServer32");
+		Strings.ChangeSuffix(file, "exe");
+		Registry.SetKeyValue(Registry.ClassesRoot, key, "", file);
+
+		Registry.SetKeyValue(Registry.ClassesRoot, progid, "", desc);
+		COPY(progid, key); Strings.Append(key, "\CLSID");
+		Registry.SetKeyValue(Registry.ClassesRoot, key, "", clsid);
+		COPY(progid, key); Strings.Append(key, "\CurVer");
+		Registry.SetKeyValue(Registry.ClassesRoot, key, "", vprogid);
+
+		Registry.SetKeyValue(Registry.ClassesRoot, vprogid, "", desc);
+		COPY(vprogid, key); Strings.Append(key, "\CLSID");
+		Registry.SetKeyValue(Registry.ClassesRoot, key, "", clsid)
+	END RegisterServer;
+
+	(** Delete registry entries for class. *) 
+	PROCEDURE UnregisterServer*(class: Class; progid, vprogid: ARRAY OF CHAR);
+		VAR key: FileDir.FileName; clsid: ARRAY 64 OF CHAR;
+	BEGIN
+		StringFromGUID(class.clsid, clsid);
+		key := "CLSID\"; Strings.Append(key, clsid);
+		Registry.DeletePath(Registry.ClassesRoot, key);
+		Registry.DeletePath(Registry.ClassesRoot, progid);
+		Registry.DeletePath(Registry.ClassesRoot, vprogid)
+	END UnregisterServer;
+
+	PROCEDURE Command(VAR cmd: ARRAY OF CHAR);
+		VAR done: BOOLEAN;
+	BEGIN
+		IF Threads.This() # Threads.oberonLoop THEN
+			Threads.DisableGC();
+			done := Displays.PutCmd(NIL, NIL, cmd, Threads.Infinite);
+			Threads.EnableGC()
+		ELSE
+			Oberon.Execute(NIL, cmd)
+		END
+	END Command;
+
+	(** DLL entry point for inproc creation of COM objects. This procedure searches the internal list of
+		loaded (RegisterClass) classes for rclsid. If a rclsid is not found the Oberon registry section COMClasses
+		is queried for a matching generator procedure. *)
+	PROCEDURE [WINAPI] DllGetClassObject*(VAR rclsid: CLSID; VAR riid: IID; VAR ppv: Interface): HRESULT;
+		VAR class: Class; path, key, value: FileDir.FileName; hr: HRESULT;
+	BEGIN
+Kernel32.Str("COM.DllGetClassObject "); ConsoleCLSID(rclsid); Kernel32.Ln();
+		Threads.Lock(moduleCS);
+		class := classes;
+		WHILE (class # NIL) & ~IsEqualGUID(rclsid, class.clsid) DO
+			class := class.next
+		END;
+		Threads.Unlock(moduleCS);
+		ppv := NIL; hr := ClassEClassNotAvailable;
+		IF class = NIL THEN
+			Registry.OberonPath("COMClasses", path);
+			StringFromGUID(rclsid, key);
+			Registry.GetKeyValue(Registry.CurrentUser, path, key, value);
+			IF Registry.res = Registry.Done THEN
+				Command(value);
+				Threads.Lock(moduleCS);
+				class := classes;
+				WHILE (class # NIL) & ~IsEqualGUID(rclsid, class.clsid) DO
+					class := class.next
+				END;
+				Threads.Unlock(moduleCS)
+			END
+		END;
+		IF class # NIL THEN
+Kernel32.Str("Threads.Register "); ConsoleCLSID(class.clsid); Kernel32.Ln();
+			class.apartment := Threads.Register("COM Apartment");
+			hr := class.vtbl.QueryInterface(class, riid, ppv);
+			class.vtbl.Release(class)
+		ELSE
+Kernel32.Str("  ClassEClassNotAvailable"); Kernel32.Ln()
+		END;
+		RETURN hr
+	END DllGetClassObject;
+
+	PROCEDURE *LoadClass(key, value: ARRAY OF CHAR);
+	BEGIN
+		Command(value)
+	END LoadClass;
+
+	(** DLL entry point, calls the RegisterServer method of all available classes. *)
+	PROCEDURE [WINAPI] DllRegisterServer*(): HRESULT;
+		VAR class: Class; path: FileDir.FileName; hres, hr: HRESULT;
+	BEGIN
+		Registry.OberonPath("COMClasses", path);
+		Registry.EnumerateKeyValue(Registry.CurrentUser, path, LoadClass);
+		Threads.Lock(moduleCS);
+		class := classes; hres := SOk;
+		WHILE class # NIL DO
+			hr := class.RegisterServer(class);
+			IF Failed(hr) THEN
+Kernel32.Str("COM.DllRegisterServer "); ConsoleCLSID(class.clsid); Kernel32.Str(" failed "); Kernel32.Int(hr); Kernel32.Ln();
+				hres := hr
+			END;
+			class := class.next
+		END;
+		Threads.Unlock(moduleCS);
+		RETURN hres
+	END DllRegisterServer;
+
+	(** DLL entry point, calls the UnregisterServer method of all available classes. *)
+	PROCEDURE [WINAPI] DllUnregisterServer*(): HRESULT;
+		VAR class: Class; path: FileDir.FileName; hres, hr: HRESULT;
+	BEGIN
+		Registry.OberonPath("COMClasses", path);
+		Registry.EnumerateKeyValue(Registry.CurrentUser, path, LoadClass);
+		Threads.Lock(moduleCS);
+		class := classes; hres := SOk;
+		WHILE class # NIL DO
+			hr := class.UnregisterServer(class);
+			IF Failed(hr) THEN
+Kernel32.Str("COM.DllUnregisterServer "); ConsoleCLSID(class.clsid); Kernel32.Str(" failed "); Kernel32.Int(hr); Kernel32.Ln();
+				hres := hr
+			END;
+			class := class.next
+		END;
+		Threads.Unlock(moduleCS);
+		RETURN hres
+	END DllUnregisterServer;
+
+	(** DLL entry point, calls the CanUnloadNow method of all available classes. *)
+	PROCEDURE [WINAPI] DllCanUnloadNow*(): HRESULT;
+		VAR class, next: Class; hres, hr: HRESULT;
+	BEGIN
+		Threads.Lock(moduleCS);
+		class := classes; hres := SOk;
+		WHILE class # NIL DO
+			next := class.next;
+			Threads.Unlock(moduleCS);
+			hr := class.CanUnloadNow(class);
+			IF hr # SOk THEN hres := SFalse END;
+			Threads.Lock(moduleCS);
+			class := next
+		END;
+		IF (hres = SOk) & (Kernel.lock > 0) THEN hres := SFalse END;
+		Threads.Unlock(moduleCS);
+		RETURN hres
+	END DllCanUnloadNow;
+
+	(** Register a COM DLL, similar to the regsvr32 utility.
+		COM.RegisterDLL Oberon.DLL
+		COM.RegisterDLL \u Oberon.DLL *)
+	PROCEDURE RegisterDLL*;
+		VAR
+			W: Texts.Writer; S: Texts.Scanner;
+			mod: Kernel32.HMODULE;
+			register: PROCEDURE [WINAPI] (): HRESULT;
+			cmd: ARRAY 32 OF CHAR; hr: HRESULT;
+	BEGIN
+		Texts.OpenWriter(W); cmd := "DllRegisterServer";
+		Texts.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos); Texts.Scan(S);
+		IF (S.class = Texts.Char) & (S.c = Oberon.OptionChar) THEN
+			Texts.Scan(S);
+			IF (S.class = Texts.Name) & (CAP(S.s[0]) = "U") THEN cmd := "DllUnregisterServer" END;
+			Texts.Scan(S)
+		END;
+		IF S.class IN {Texts.Name, Texts.String} THEN
+			Texts.WriteString(W, "COM.RegisterDLL "); Texts.WriteString(W, S.s);
+			Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf);
+			mod := Kernel32.LoadLibrary(S.s);
+			IF mod # Kernel32.NULL THEN
+				Texts.WriteString(W, "  "); Texts.WriteString(W, cmd); Texts.Write(W, " ");
+				Kernel32.GetProcAddress(mod, cmd, SYSTEM.VAL(LONGINT, register));
+				IF register # NIL THEN
+					hr := register();
+					IF Succeeded(hr) THEN
+						Texts.WriteString(W, "succeeded")
+					ELSE
+						Texts.WriteString(W, "failed "); Texts.WriteHex(W, hr)
+					END
+				ELSE
+					Texts.WriteString(W, "not found")
+				END;
+				Kernel32.FreeLibrary(mod)
+			ELSE
+				Texts.WriteString(W, "  LoadLibrary failed")
+			END;
+			Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
+		END
+	END RegisterDLL;
+
+	(** Create a new GUID and write it to the Oberon log. *)
+	PROCEDURE GenGUID*;
+		VAR W: Texts.Writer; guid: GUID; str: ARRAY 64 OF CHAR;
+	BEGIN
+		Texts.OpenWriter(W); Texts.WriteString(W, "the new GUID is ");
+		CoCreateGuid(guid); StringFromGUID(guid, str);
+		Texts.WriteString(W, str);
+		Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
+	END GenGUID;
+
+(* temporary class *)
+
+	PROCEDURE [WINAPI] *TempClassProc(class: Class): HRESULT;
+	BEGIN
+		RETURN SOk
+	END TempClassProc;
+
+	PROCEDURE *TermMod();
+		VAR obj: Object;
+	BEGIN
+		obj := tempClass.objs;
+		WHILE obj # NIL DO
+			tempClass.ReleaseObject(tempClass, obj); obj := obj.next
+		END;
+		IF ole32 # Kernel32.NULL THEN
+			(* Kernel32.FreeLibrary(ole32); ??? *)
+			ole32 := Kernel32.NULL
+		END
+	END TermMod;
+
+	PROCEDURE Init();
+	BEGIN
+		NEW(tempClass); InitClass(tempClass);
+		GUIDFromString(CLSIDStr, tempClass.clsid);
+		tempClass.RegisterServer := TempClassProc;
+		tempClass.UnregisterServer := TempClassProc;
+		tempClass.CanUnloadNow := ClassCanUnloadNow;
+		tempClass.ReleaseObject := ReleaseObject;
+		NEW(tempClassVtbl); tempClass.vtbl := tempClassVtbl;
+		tempClassVtbl.QueryInterface := ClassQueryInterface;
+		tempClassVtbl.AddRef := ClassAddRef;
+		tempClassVtbl.Release := ClassRelease;
+		tempClassVtbl.CreateInstance := NIL;
+		tempClassVtbl.LockServer := ClassLockServer;
+		Modules.InstallTermHandler(TermMod)
+	END Init;
+
+	PROCEDURE InitAPI();
+	BEGIN
+		ole32 := Kernel32.LoadLibrary("OLE32.DLL");
+		Kernel32.GetProcAddress(ole32, "CoCreateGuid", SYSTEM.VAL(LONGINT, CoCreateGuid));
+		Kernel32.GetProcAddress(ole32, "CoLockObjectExternal", SYSTEM.VAL(LONGINT, CoLockObjectExternal));
+		Kernel32.GetProcAddress(ole32, "CoRegisterClassObject", SYSTEM.VAL(LONGINT, CoRegisterClassObject));
+		Kernel32.GetProcAddress(ole32, "CoRevokeClassObject", SYSTEM.VAL(LONGINT, CoRevokeClassObject))
+	END InitAPI;
+
+BEGIN
+	GUIDFromString(GUIDNULLStr, GUIDNULL);
+	GUIDFromString(IIDIUnknownStr, IIDIUnknown);
+	GUIDFromString(IIDIClassFactoryStr, IIDIClassFactory);
+	NEW(moduleCS); Threads.Init(moduleCS);
+	classes := NIL; InitAPI(); Init()
+END COM.

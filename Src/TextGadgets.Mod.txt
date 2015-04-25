@@ -1,17 +1,5 @@
-﻿(* OBERON System 3, Release 2.3.
-
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
-
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
-
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
+﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE TextGadgets; (** portable *)
 
@@ -37,7 +25,7 @@ MODULE TextGadgets; (** portable *)
 IMPORT Display3, TextGadgets0, Objects, Display, Gadgets, Texts, Oberon, Fonts, Files, Printer, Effects, Printer3, Input, Strings;
 
 CONST
-	left* = 1; middle* = 2; right* = 3; pad* = 4; pagebreak* = 5; wysiwyg* = 6; span* = 7; (* style modes *)
+	left* = 1; middle* = 2; right* = 3; pad* = 4; pagebreak* = 5; wysiwyg* = 6; span* = 7; printerW* = 8; frameW* = 9; (* style modes *)
 	
 	(* Frame controls *)
 	nocontrol* = 1;
@@ -77,12 +65,12 @@ VAR
 	lastfont: Fonts.Font; lastlib: Fonts.Font; (* for font lookup *)
 	
 	dummy: Fonts.Char;
-    BoxPat: ARRAY 12 OF SET;
-    
-    stylefnt: Fonts.Font; (* only loaded when shared styles are used *)
-    
-    dummyF: Display.Frame; dummydlink: Objects.Object; dx, dy: INTEGER;
-    dummyT: TextGadgets0.Frame; dTx, dTy: INTEGER;
+	BoxPat: ARRAY 12 OF SET;
+
+	stylefnt: Fonts.Font; (* only loaded when shared styles are used *)
+
+	dummyF: Display.Frame; dummydlink: Objects.Object; dx, dy: INTEGER;
+	dummyT: TextGadgets0.Frame; dTx, dTy: INTEGER;
 	dummyM: Display3.Mask;
 
 PROCEDURE ^newStyle*(): Style;
@@ -111,17 +99,17 @@ BEGIN
 END FindStyle;
 
 PROCEDURE Max(x, y: INTEGER): INTEGER;
-BEGIN IF x > y THEN RETURN x; ELSE RETURN y; END;
+BEGIN IF x > y THEN RETURN x ELSE RETURN y END
 END Max;
 
 PROCEDURE Below(x, y: INTEGER): INTEGER;
 BEGIN
-	IF x < y THEN RETURN y - x; ELSE RETURN 0 END;
+	IF x < y THEN RETURN y - x ELSE RETURN 0 END
 END Below;
 
 PROCEDURE Above(x, y: INTEGER): INTEGER;
 BEGIN
-	IF x > y THEN RETURN x - y; ELSE RETURN 0 END;
+	IF x > y THEN RETURN x - y ELSE RETURN 0 END
 END Above;
 
 PROCEDURE CurStyle(F: Frame; L: TextGadgets0.Line; VAR mode: SET; VAR leftM, width: INTEGER);
@@ -233,7 +221,7 @@ BEGIN
 		WITH obj: Fonts.Char DO
 			minY := Dev(L.minY); maxY := Dev(L.maxY); dx := Dev(obj.dx); y := Dev(obj.y); h := Dev(obj.h)
 		END
-	END;
+	END
 END Lookup;
 
 PROCEDURE Voff(obj: Objects.Object): INTEGER;
@@ -296,7 +284,7 @@ IF (org < 0) OR (org > F.text.len) THEN HALT(99) END;
 						IF R.voff # 0 THEN
 							L.dsr := Max(L.dsr, Below(R.voff + obj.y, 0));
 							L.asr := Max(L.asr, Above(R.voff + obj.y + obj.h, 0));
-							L.h := L.dsr + L.asr;
+							L.h := L.dsr + L.asr
 						END;
 
 						IF R.lib # lastfnt THEN
@@ -304,7 +292,7 @@ IF (org < 0) OR (org > F.text.len) THEN HALT(99) END;
 							L.asr := Max(L.asr, R.lib(Fonts.Font).maxY * 120 DIV 100);
 							lastfnt := R.lib;
 							L.h := L.dsr + L.asr;
-							Lookup(R.lib(Fonts.Font), ch, d, d, odx, d, d); (* get printer size *)
+							Lookup(R.lib(Fonts.Font), ch, d, d, odx, d, d) (* get printer size *)
 						ELSE
 							(* invariant: lastlib is the metric font *)
 							IF lastlib # NIL THEN
@@ -335,10 +323,10 @@ IF (org < 0) OR (org > F.text.len) THEN HALT(99) END;
 								 ELSE DEC(L.len);
 								 END;
 								 IF box # NIL THEN box.next := NIL ELSE L.box := NIL END; (* cut off! *)
-								EXIT;
+								EXIT
 							ELSE
 								IF (ch = " ") OR (ch = 09X) THEN
-									lastw := L.w; lastasr := L.asr; lastdsr := L.dsr;  lastlen := Texts.Pos(R) - org; INC(L.spaces); lastbox := box;
+									lastw := L.w; lastasr := L.asr; lastdsr := L.dsr; lastlen := Texts.Pos(R) - org; INC(L.spaces); lastbox := box;
 								END;
 								INC(L.w, dx); INC(pw, odx);
 							END
@@ -376,7 +364,7 @@ IF (org < 0) OR (org > F.text.len) THEN HALT(99) END;
 						IF box = NIL THEN (* no last box processed *)
 							box := L.box; (* get box out of line descriptor *)
 							IF box = NIL THEN NEW(box); L.box := box (* create first box *) END; (* none exists *)
-						ELSIF box.next  # NIL THEN box := box.next (* use box if available *)
+						ELSIF box.next # NIL THEN box := box.next (* use box if available *)
 						ELSE (* create a new box, extending the list *)
 							NEW(box.next); box := box.next;
 						END;
@@ -401,11 +389,11 @@ IF (org < 0) OR (org > F.text.len) THEN HALT(99) END;
 					L.dsr := Max(L.dsr, -dummy.y); 
 					L.asr := Max(L.asr, dummy.h);
 					L.h := L.dsr + L.asr;
-					INC(L.w, dummy.dx); INC(pw, Dev(dummy.dx));
+					INC(L.w, dummy.dx); INC(pw, Dev(dummy.dx))
 				END
 			END
 		END
-	END;
+	END
 END Format;
 
 PROCEDURE PrinterTabSize(obj: Objects.Object; w: INTEGER; VAR dx, pdx: INTEGER);
@@ -476,7 +464,7 @@ BEGIN
 							EXIT;
 						ELSE
 							IF (ch = " ") OR (ch = 09X) THEN
-								lastw := L.w; lastasr := L.asr; lastdsr := L.dsr;  lastlen := Texts.Pos(R) - org; INC(L.spaces); lastbox := box;
+								lastw := L.w; lastasr := L.asr; lastdsr := L.dsr; lastlen := Texts.Pos(R) - org; INC(L.spaces); lastbox := box;
 							END;
 							INC(L.w, odx); INC(sw, dx)
 						END;
@@ -490,7 +478,7 @@ BEGIN
 								EXIT 
 							END;
 							IF (L.obj # NIL) & (wysiwyg IN L.obj(Style).mode) THEN dx := obj.W ELSE dx := 0 END;
-							IF ((L.w + Dev(obj.W) > pmaxW) OR (sw + dx > maxW)) & ~(obj IS Style) & (L.len # 1)  THEN
+							IF ((L.w + Dev(obj.W) > pmaxW) OR (sw + dx > maxW)) & ~(obj IS Style) & (L.len # 1) THEN
 								IF lastlen > 0 THEN
 									L.len := lastlen; L.w := lastw; L.asr := lastasr; L.dsr := lastdsr; L.h := L.asr + L.dsr;
 									DEC(L.spaces); box := lastbox;
@@ -505,7 +493,7 @@ BEGIN
 							IF box = NIL THEN (* no last box processed *)
 								box := L.box; (* get box out of line descriptor *)
 								IF box = NIL THEN NEW(box); L.box := box (* create first box *) END; (* none exists *)
-							ELSIF box.next  # NIL THEN box := box.next (* use box if available *)
+							ELSIF box.next # NIL THEN box := box.next (* use box if available *)
 							ELSE (* create a new box, extending the list *)
 								NEW(box.next); box := box.next;
 							END;
@@ -555,7 +543,7 @@ PROCEDURE RestoreFrame0(x, y, w, h: INTEGER);
 VAR D: Display.DisplayMsg;
 BEGIN
 	ClipAgainst(x, y, w, h, dummyM.X, dummyM.Y, dummyM.W, dummyM.H);
-	D.device := Display.screen; D.id := Display.area; D.F := dummyF; D.x := dx  - dummyF.X; D.y := dy - dummyF.Y;
+	D.device := Display.screen; D.id := Display.area; D.F := dummyF; D.x := dx - dummyF.X; D.y := dy - dummyF.Y;
 	D.u := x - dx; D.v := y - (dy + dummyF.H - 1) ; D.w := w; D.h := h;
 	D.res := -1; Objects.Stamp(D); D.dlink := dummydlink;
 	Gadgets.Send(dummyT, dTx, dTy, dummyF, D);
@@ -622,7 +610,7 @@ BEGIN
 							IF spaces > 0 THEN INC(X, a) END; DEC(spaces); IF b > 0 THEN INC(X); DEC(b) END;
 						ELSIF obj.dx > 0 THEN
 							dx := obj.dx;
-							IF ch = 09X THEN TabSize(L.obj, X - (x +  F.left + leftM + offset), dx, d) END;
+							IF ch = 09X THEN TabSize(L.obj, X - (x + F.left + leftM + offset), dx, d) END;
 							IF pos >= start THEN
 								IF pos = start THEN
 									F.do.Background(F, M, x, y, X - x, L.base - L.dsr, F.W, L.h);
@@ -688,9 +676,8 @@ VAR X, Y: INTEGER; obj: Objects.Object; R: Texts.Reader; ch: CHAR; pos: LONGINT;
 	RR: Display3.Mask; OM: Display3.OverlapMsg;
 	
 	PROCEDURE Put(ch: CHAR; fnt: Objects.Library; voff, col: INTEGER);
-	VAR  d, dx: INTEGER;
+	VAR d, dx: INTEGER;
 	BEGIN
-		col := col MOD 256;	(* make positive and in range *)
 		IF (fnt # lastfnt) OR (voff # lastvoff) OR (col # lastcol) OR (ch = 0X) THEN (* new font or new vertical offset, break*)
 			IF bufp > 0 THEN (* something in buffer *)
 				buf[bufp] := 0X; Printer3.String(M, lastcol, pX, pY + Dev(lastvoff), lastfnt(Fonts.Font), buf, Display.paint);
@@ -780,7 +767,7 @@ VAR obj: Objects.Object; ox, dx: INTEGER; R: Texts.Reader; ch: CHAR; org: LONGIN
 	leftM, offset, width, a, b, d: INTEGER;
 BEGIN
 	WITH F: Frame DO
-		FindLine(F, y,  Y, org, loc.line); loc.org := org; loc.pos := org;
+		FindLine(F, y, Y, org, loc.line); loc.org := org; loc.pos := org;
 		
 		loc.line.obj := FindStyle(F.text, org);
 		DisplayParam(F, loc.line, leftM, offset, width, a, b);
@@ -795,7 +782,7 @@ BEGIN
 				IF obj IS Fonts.Char THEN
 					WITH obj: Fonts.Char DO
 						IF ch = " " THEN
-							IF (loc.line.spaces > 0) & (loc.pos = org +  loc.line.len - 1) THEN (* spaces has been adjusted *)
+							IF (loc.line.spaces > 0) & (loc.pos = org + loc.line.len - 1) THEN (* spaces has been adjusted *)
 								dx := TextGadgets0.eolW; EXIT
 							END;
 							dx := obj.dx;
@@ -943,30 +930,29 @@ BEGIN
 	END
 END LocateString;
 
-  PROCEDURE Call (F: TextGadgets0.Frame; pos: LONGINT; keysum: SET; dlink: Objects.Object);
-    VAR obj: Objects.Object;
-    	A: Objects.AttrMsg; R: Texts.Reader; ch: CHAR; 
-  BEGIN
-      Texts.OpenReader(R, F.text, pos);
-      Texts.Read(R, ch);
-      WHILE ~R.eot & ~(R.lib IS Fonts.Font) DO Texts.Read(R, ch) END; (* skip over objects *)
-      IF ~R.eot & (R.col # Display.FG) THEN (* special *)
-      	obj := NIL;
-      	WHILE ~R.eot & (R.lib IS Fonts.Font) & (R.col # Display.FG) DO Texts.Read(R, ch) END;
-  		IF ~R.eot THEN
-  			R.lib.GetObj(R.lib, ORD(ch), obj);
-  			IF (obj # NIL) & (obj IS Control) THEN
-  				A.id := Objects.get; A.name := "Cmd"; A.class := Objects.Inval; A.dlink := NIL; Objects.Stamp(A); A.s := ""; A.res := -1;
-  				obj.handle(obj, A);
-  				IF (A.res >= 0) & (A.class = Texts.String) & (A.s # "") THEN
-  					F.dlink := dlink; dlink := F;
-  					Gadgets.ExecuteAttr(obj(Gadgets.Frame), "Cmd", dlink, NIL, NIL); RETURN;
-  				END
-  			END
-      	END
-      END;
-      TextGadgets0.Call(F, pos, keysum, dlink)
-  END Call;
+PROCEDURE Call (F: TextGadgets0.Frame; pos: LONGINT; keysum: SET; dlink: Objects.Object);
+	VAR obj: Objects.Object; A: Objects.AttrMsg; R: Texts.Reader; ch: CHAR; 
+BEGIN
+	Texts.OpenReader(R, F.text, pos);
+	Texts.Read(R, ch);
+	WHILE ~R.eot & ~(R.lib IS Fonts.Font) DO Texts.Read(R, ch) END; (* skip over objects *)
+	IF ~R.eot & (R.col # Display.FG) THEN (* special *)
+		obj := NIL;
+		WHILE ~R.eot & (R.lib IS Fonts.Font) & (R.col # Display.FG) DO Texts.Read(R, ch) END;
+		IF ~R.eot THEN
+			R.lib.GetObj(R.lib, ORD(ch), obj);
+			IF (obj # NIL) & (obj IS Control) THEN
+				A.id := Objects.get; A.name := "Cmd"; A.class := Objects.Inval; A.dlink := NIL; Objects.Stamp(A); A.s := ""; A.res := -1;
+				obj.handle(obj, A);
+				IF (A.res >= 0) & (A.class = Texts.String) & (A.s # "") THEN
+					F.dlink := dlink; dlink := F;
+					Gadgets.ExecuteAttr(obj(Gadgets.Frame), "Cmd", dlink, NIL, NIL); RETURN
+				END
+			END
+		END
+	END;
+	TextGadgets0.Call(F, pos, keysum, dlink)
+END Call;
 
 PROCEDURE CopyFrame*(VAR M: Objects.CopyMsg; from, to: Frame);
 BEGIN TextGadgets0.CopyFrame(M, from, to); to.control := from.control
@@ -1050,6 +1036,47 @@ BEGIN
 	ELSE id := replace (* ejz *)
 	END
 END ConvertMsg;
+
+PROCEDURE StyleChange(F: Style);
+VAR A: Display.ModifyMsg;
+BEGIN
+	A.id := Display.move; A.mode := Display.display; A.F := F;
+	A.X := F.X; A.Y := F.Y; A.W := (*F.W*) F.leftM + F.width; A.H := F.H; A.dX := 0; A.dY := 0; A.dW := A.W - F.W; A.dH := 0;
+	Display.Broadcast(A)
+END StyleChange;
+
+PROCEDURE AdjustStyle(F: Frame; style: Style; W: INTEGER);
+	VAR width, pw, fw: INTEGER;
+BEGIN
+	width := style.width; fw := width; pw := width;
+	IF frameW IN style.mode THEN
+		fw := W-F.right-F.left-style.leftM-2 (* 2 ??? *)
+	END;
+	IF printerW IN style.mode THEN
+		pw := SHORT(Printer.Unit * Printer.FrameW DIV Display.Unit)-style.leftM
+	END;
+	IF style.mode * {printerW, frameW} = {printerW, frameW} THEN
+		IF fw < pw THEN width := fw ELSE width := pw END
+	ELSIF printerW IN style.mode THEN
+		width := pw
+	ELSIF frameW IN style.mode THEN
+		width := fw
+	END;
+	IF width # style.width THEN
+		style.width := width; StyleChange(style)
+	END
+END AdjustStyle;
+
+PROCEDURE AdjustStyles(F: Frame; W: INTEGER);
+	VAR f: Texts.Finder; obj: Objects.Object;
+BEGIN
+	Texts.OpenFinder(f, F.text, 0);
+	Texts.FindObj(f, obj);
+	WHILE ~f.eot DO
+		IF obj IS Style THEN AdjustStyle(F, obj(Style), W) END;
+		Texts.FindObj(f, obj)
+	END
+END AdjustStyles;
 
 PROCEDURE FrameHandler*(F: Objects.Object; VAR M: Objects.ObjMsg);
 VAR F0: Frame; style: Style; id: INTEGER; beg, end, pos: LONGINT; L: TextGadgets0.Line; M0: Texts.UpdateMsg;
@@ -1139,12 +1166,15 @@ ELSIF M IS Display.FrameMsg THEN
 			IF (M.F # NIL) & (M.F IS Style) THEN
 				TextGadgets0.FrameHandler(F, M);
 				HandleStyleAdjust(F, M.F(Style))
-			ELSE TextGadgets0.FrameHandler(F, M)
+			ELSE
+				IF M.F = F THEN AdjustStyles(F, M(Display.ModifyMsg).W) END;
+				TextGadgets0.FrameHandler(F, M)
 			END
 		ELSIF M IS Display.ControlMsg THEN
 			WITH M: Display.ControlMsg DO
+				IF M.id IN {Display.restore, Display.newprinter} THEN AdjustStyles(F, F.W) END;
 				TextGadgets0.FrameHandler(F, M);
-				IF M.id = Display.newprinter THEN F.trailer := NIL; ClearCache END;
+				IF M.id = Display.newprinter THEN F.trailer := NIL; ClearCache END
 			END
 		(* no special treatment here
 		ELSIF M IS Display.ConsumeMsg THEN
@@ -1200,14 +1230,6 @@ END NewNote;
 
 (* ------------------------------- Style code ------------------------------ *)
 
-PROCEDURE StyleChange(F: Style);
-VAR A: Display.ModifyMsg;
-BEGIN
-		A.id := Display.move; A.mode := Display.display; A.F := F;
-		A.X := F.X; A.Y := F.Y; A.W := (*F.W*) F.leftM + F.width; A.H := F.H; A.dX := 0; A.dY := 0; A.dW := A.W - F.W; A.dH := 0;
-		Display.Broadcast(A)
-END StyleChange;
-
 PROCEDURE StyleAttr(F: Style; VAR M: Objects.AttrMsg);
 VAR i, j, k: INTEGER; val: LONGINT; nr: ARRAY 6 OF CHAR;
 BEGIN
@@ -1232,6 +1254,8 @@ BEGIN
 		ELSIF M.name = "Left" THEN M.class := Objects.Int; M.i := F.leftM; M.res := 0
 		ELSIF M.name = "Width" THEN M.class := Objects.Int; M.i := F.width; M.res := 0
 		ELSIF M.name = "Adjust" THEN M.class := Objects.Bool; M.b := span IN F.mode; M.res := 0
+		ELSIF M.name = "PrinterW" THEN M.class := Objects.Bool; M.b := printerW IN F.mode; M.res := 0
+		ELSIF M.name = "FrameW" THEN M.class := Objects.Bool; M.b := frameW IN F.mode; M.res := 0
 		ELSE Gadgets.framehandle(F, M)
 		END
 	ELSIF M.id = Objects.set THEN
@@ -1242,7 +1266,7 @@ BEGIN
 			END
 		ELSIF M.name = "WYSIWYG" THEN
 			IF M.class = Objects.Bool THEN
-				IF M.b THEN INCL(F.mode, wysiwyg) ELSE EXCL(F.mode, wysiwyg) END;
+				IF M.b THEN INCL(F.mode, wysiwyg); EXCL(F.mode, frameW) ELSE EXCL(F.mode, wysiwyg) END;
 				M.res := 0;
 			END
 		ELSIF M.name = "Tabs" THEN	(* ps - 27.6.96 *)
@@ -1274,14 +1298,25 @@ BEGIN
 				F.width:= SHORT(M.i); M.res := 0; StyleChange(F)
 			END
 		ELSIF M.name = "Adjust" THEN
-			IF (M.class = Objects.Bool) THEN
+			IF M.class = Objects.Bool THEN
 				IF M.b THEN INCL(F.mode, span) ELSE EXCL(F.mode, span) END;
+				M.res := 0
+			END
+		ELSIF M.name = "PrinterW" THEN
+			IF M.class = Objects.Bool THEN
+				IF M.b THEN INCL(F.mode, printerW) ELSE EXCL(F.mode, printerW) END;
+				M.res := 0
+			END
+		ELSIF M.name = "FrameW" THEN
+			IF M.class = Objects.Bool THEN
+				IF M.b THEN INCL(F.mode, frameW); EXCL(F.mode, wysiwyg) ELSE EXCL(F.mode, frameW) END;
 				M.res := 0
 			END
 		ELSE Gadgets.framehandle(F, M)
 		END
 	ELSIF M.id = Objects.enum THEN
-		M.Enum("Pagebreak"); M.Enum("WYSIWYG"); M.Enum("Adjust"); M.Enum("Tabs"); M.Enum("Left"); M.Enum("Width");
+		M.Enum("Pagebreak"); M.Enum("WYSIWYG"); M.Enum("Adjust"); M.Enum("PrinterW"); M.Enum("FrameW");
+		M.Enum("Tabs"); M.Enum("Left"); M.Enum("Width");
 		Gadgets.framehandle(F, M)
 	END
 END StyleAttr;
@@ -1345,7 +1380,8 @@ END CopyStyle;
 PROCEDURE Highlight(R: Display3.Mask; x, y, w, h: INTEGER): BOOLEAN;
 VAR X, Y: INTEGER; keys, keysum: SET;
 BEGIN
-	keysum := {};
+	IF w < 7 THEN w := 7 END; keysum := {};
+	Oberon.FadeCursor(Oberon.Mouse);
 	Display3.ReplConst(R, Display3.FG, x, y, w, h, Display.invert);
 	Input.Mouse(keys, X, Y);
 	WHILE keys # {} DO
@@ -1353,6 +1389,7 @@ BEGIN
 		keysum := keysum + keys;
 		Oberon.DrawCursor(Oberon.Mouse, Effects.Arrow, X, Y)
 	END;
+	Oberon.FadeCursor(Oberon.Mouse);
 	Display3.ReplConst(R, Display3.FG, x, y, w, h, Display.invert);
 	RETURN keysum = {1}
 END Highlight;
@@ -1385,7 +1422,7 @@ VAR bx, i, j: INTEGER; keysum: SET; do: BOOLEAN;
 	
 BEGIN
 	keysum := {1};
-	IF M.Y >=  y + F.H DIV 2 THEN (* above line *)
+	IF M.Y >= y + F.H DIV 2 THEN (* above line *)
 		IF (M.X >= x + F.leftM) & (M.X <= x + F.leftM + 7) THEN (* left button *)
 			bx := x + F.leftM;
 			TrackButton(bx, keysum, y + F.H DIV 2, 7, markerH);
@@ -1403,7 +1440,7 @@ BEGIN
 				IF F.width < 10 THEN F.width := 10 END;
 				StyleChange(F)
 			END
-		ELSIF (M.X >= x + F.leftM + 7) & (M.X <= x + F.leftM + F.width DIV 2) THEN (* left highlight *)
+		ELSIF (M.X >= x + F.leftM + 7) & (M.X <= x + F.leftM + F.width DIV 3) THEN (* left highlight *)
 			do := Highlight(R, x + F.leftM, y + F.H DIV 2, 7, markerH);
 			IF do THEN
 				IF (left IN F.mode) & (pad IN F.mode) THEN F.mode := F.mode - {left, pad} + {right}
@@ -1413,7 +1450,7 @@ BEGIN
 				END;
 				StyleChange(F);
 			END
-		ELSIF (M.X >= x + F.leftM + F.width DIV 2) & (M.X < x + F.leftM + F.width) THEN (* right highlight *)
+		ELSIF (M.X >= x + F.leftM + F.width DIV 3*2) & (M.X < x + F.leftM + F.width) THEN (* right highlight *)
 			do := Highlight(R, x + F.leftM + F.width - 6, y + F.H DIV 2, 7, markerH);
 			IF do THEN
 				IF (left IN F.mode) & (pad IN F.mode) THEN F.mode := F.mode - {left, pad} + {left}
@@ -1421,6 +1458,12 @@ BEGIN
 				ELSIF middle IN F.mode THEN F.mode := F.mode - {middle} + {right}
 				ELSIF right IN F.mode THEN F.mode := F.mode - {right} + {middle}
 				END;
+				StyleChange(F);
+			END
+		ELSIF (M.X > x + F.leftM + F.width DIV 3) & (M.X < x + F.leftM + F.width DIV 3*2) THEN (* middle highlight *)
+			do := Highlight(R, x + F.leftM + 7, y + F.H DIV 2, F.width - 2*7, markerH);
+			IF do THEN
+				F.mode := F.mode / {pagebreak};
 				StyleChange(F);
 			END
 		ELSE Gadgets.framehandle(F, M)
@@ -1474,7 +1517,7 @@ BEGIN
 				IF (M.F = NIL) OR (M.F = F) THEN	(* message addressed to this frame *)
 					x := M.x + F.X; y := M.y + F.Y; w := F.W; h := F.H; (* calculate display coordinates *)
 					IF M IS Display.DisplayMsg THEN
-						WITH M: Display.DisplayMsg  DO
+						WITH M: Display.DisplayMsg DO
 							IF M.device = Display.screen THEN
 								IF (M.id = Display.full) OR (M.F = NIL) THEN
 									Gadgets.MakeMask(F, x, y, M.dlink, R);
@@ -1540,6 +1583,10 @@ BEGIN
 						Files.ReadInt(M.R, F.width);
 						Gadgets.framehandle(F, M)
 					END;
+					IF printerW IN F.mode THEN
+						F.width := SHORT(Printer.Unit * Printer.FrameW DIV Display.Unit)-F.leftM;
+						F. W := F.width
+					END
 				END
 			END
 		ELSIF M IS Objects.CopyMsg THEN
@@ -1610,7 +1657,7 @@ BEGIN
 				IF (M.F = NIL) OR (M.F = F) THEN	(* message addressed to this frame *)
 					x := M.x + F.X; y := M.y + F.Y; w := F.W; h := F.H; (* calculate display coordinates *)
 					IF M IS Display.DisplayMsg THEN
-						WITH M: Display.DisplayMsg  DO
+						WITH M: Display.DisplayMsg DO
 							IF M.device = Display.screen THEN
 								IF (M.id = Display.full) OR (M.F = NIL) THEN
 									Gadgets.MakeMask(F, x, y, M.dlink, R);
@@ -1686,7 +1733,7 @@ END NewControl;
 
 BEGIN
 	NEW(methods); methods.Format := Format; methods.Display := DisplayLine; methods.Background := Background;
-	methods.LocateChar := LocateChar; methods.LocatePos := LocatePos;  methods.LocateString := LocateString;
+	methods.LocateChar := LocateChar; methods.LocatePos := LocatePos; methods.LocateString := LocateString;
 	methods.InSync := InSync;
 	methods.PrintFormat := PrintFormat; methods.Print := PrintLine;
 	methods.Call := Call;
@@ -1701,4 +1748,3 @@ BEGIN
 	
 	stylefnt := NIL
 END TextGadgets.
-

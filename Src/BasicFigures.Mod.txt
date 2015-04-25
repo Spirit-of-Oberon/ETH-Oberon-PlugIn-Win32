@@ -1,22 +1,9 @@
-﻿(* OBERON System 3, Release 2.3.
-
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
-
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
-
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
+﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE BasicFigures; (** portable *)	(* jm 27.4.95 *)
 
-(**Gadgets for basic geometric figures. This modules provides a base for creating further geometric gadgets based on the editing of control points.
-*)
+(** Gadgets for basic geometric figures. This modules provides a base for creating further geometric gadgets based on the editing of control points. *)
 
 (*
 	Taken from Figures by Karl Rege:
@@ -117,7 +104,7 @@ VAR c: INTEGER; q: Point;
 	BEGIN
 		IF ((Y >= y0) & (Y < y1)) OR ((Y >= y1) & (Y < y0)) THEN
 			IF y1 > y0 THEN RETURN x0 + (Y - y0) * (x1 -x0) DIV (y1 - y0) - X >= 0 
-			ELSIF y1 <  y0 THEN RETURN x0 + (Y - y0) * (x0 -x1) DIV (y0 - y1) - X >= 0
+			ELSIF y1 < y0 THEN RETURN x0 + (Y - y0) * (x0 -x1) DIV (y0 - y1) - X >= 0
 			ELSE RETURN (x0 > X) OR (x1 > X)
 			END
 		ELSE RETURN FALSE
@@ -206,7 +193,7 @@ END RestoreFigure;
 PROCEDURE PrintFigure (F: Figure; VAR M: Display.DisplayMsg);
 VAR Q: Display3.Mask;
 BEGIN
-  Gadgets.MakePrinterMask(F, M.x, M.y, M.dlink, Q); F.do.Print(F, Q, M.x, M.y);
+	Gadgets.MakePrinterMask(F, M.x, M.y, M.dlink, Q); F.do.Print(F, Q, M.x, M.y);
 END PrintFigure;
 
 PROCEDURE CopyFigure*(VAR M: Objects.CopyMsg; from, to: Figure);
@@ -277,7 +264,7 @@ BEGIN
 					IF (lastkeys = {1, 0}) & (M.keys = {1}) & (editpoints IN F.state0) THEN (* copy combination *)
 						NEW(q); q.x := p.x + M.X - mx; q.y := p.y + M.Y - my;
 						
-						p.x := ox; p.y := oy;  ox := q.x; oy := q.y;
+						p.x := ox; p.y := oy; ox := q.x; oy := q.y;
 						q.next := p.next; p.next := q;
 						q.prev := p; IF q.next # NIL THEN q.next.prev := q END;
 						
@@ -393,7 +380,7 @@ BEGIN
 				IF (M.F = NIL) OR (M.F = F) THEN	(* message addressed to this frame *)
 					x := M.x + F.X; y := M.y + F.Y; w := F.W; h := F.H; (* calculate display coordinates *)
 					IF M IS Display.DisplayMsg THEN
-						WITH M: Display.DisplayMsg  DO
+						WITH M: Display.DisplayMsg DO
 							IF M.device = Display.screen THEN
 								IF (M.id = Display.full) OR (M.F = NIL) THEN
 									Gadgets.MakeMask(F, x, y, M.dlink, R);
@@ -880,7 +867,7 @@ END NewRect3D;
 									
 			 TYPE Polynom = RECORD A, B, C, D: REAL END;
 			 VAR i, cs, smax, k1: INTEGER; px, py: Polynom; 
-					 x, dx1, dx2, dx3, y, dy1, dy2, dy3: REAL; L, B, R, T,dW  : INTEGER; 
+					 x, dx1, dx2, dx3, y, dy1, dy2, dy3: REAL; L, B, R, T,dW: INTEGER; 
 				
 				PROCEDURE GetPolynom((* VAR *) y1, y2, y1s, y2s: REAL; VAR p: Polynom);
 					VAR dx1, dyx: REAL;
@@ -893,16 +880,16 @@ END NewRect3D;
 					p.D := y1
 				END GetPolynom;
 				
-		BEGIN  
+		BEGIN
 			X[0] := SHORT(ENTIER(RX[1])); Y[0] := SHORT(ENTIER(RY[1])); 
-			L := MAX(INTEGER);  B := MAX(INTEGER); R := MIN(INTEGER); T := MIN(INTEGER);
+			L := MAX(INTEGER); B := MAX(INTEGER); R := MIN(INTEGER); T := MIN(INTEGER);
 			i := 1; WHILE i <= n DO
 				L := Min(L,SHORT(ENTIER(RX[i]))); B := Min(B,SHORT(ENTIER(RY[i])));
 				R := Max(R,SHORT(ENTIER(RX[i]))); T := Max(T,SHORT(ENTIER(RY[i])));
 				INC(i);
 			END;
 			
-			dW := Max(1,Min((Max(R-L ,T-B)  * 3 DIV n DIV 20),4));
+			dW := Max(1,Min((Max(R-L ,T-B) * 3 DIV n DIV 20),4));
 			i := 1; k := 1;
 			WHILE i < n DO
 				GetPolynom(RX[i], RX[i+1], RXstrich[i], RXstrich[i+1], px); 
@@ -921,9 +908,9 @@ END NewRect3D;
 					X[k] := SHORT(ENTIER(x)); Y[k] := SHORT(ENTIER(y)); 
 					k1 := k-1;
 					IF (ABS(X[k] - X[k1]) > dW) OR (ABS(Y[k] - Y[k1]) > dW) THEN INC(k) END;
-					x   := x + dx1;    y   := y + dy1; 
-					dx1 := dx1 + dx2;  dy1 := dy1 + dy2; 
-					dx2 := dx2 + dx3;  dy2 := dy2 + dy3;
+					x := x + dx1; y := y + dy1; 
+					dx1 := dx1 + dx2; dy1 := dy1 + dy2; 
+					dx2 := dx2 + dx3; dy2 := dy2 + dy3;
 					INC(cs);
 				END;
 				INC(i);
@@ -933,7 +920,7 @@ END NewRect3D;
 
 	PROCEDURE SplineToPoly(c: Point; closed: BOOLEAN; VAR X, Y: ARRAY OF INTEGER; VAR k: INTEGER);
 		TYPE RealVect = ARRAY 256 OF REAL; 
-		VAR   n, i: INTEGER; RS, RX, RY ,RXstrich, RYstrich : RealVect; dx, dy: REAL;
+		VAR n, i: INTEGER; RS, RX, RY ,RXstrich, RYstrich : RealVect; dx, dy: REAL;
 			helpR: REAL;
 
 		PROCEDURE NatSplineDerivates(VAR x, y, d: ARRAY OF REAL; n: INTEGER);
@@ -942,14 +929,14 @@ END NewRect3D;
 			PROCEDURE SolveTriDiag(VAR a, b, c: ARRAY OF REAL; n: INTEGER; VAR y: ARRAY OF REAL);
 				VAR i: INTEGER; t: REAL;
 			BEGIN i := 1;
-				WHILE i < n DO t := a[i]; c[i] := c[i]/t; helpR := c[i]*b[i]; a[i+1] := a[i+1] -  helpR; INC(i); END;
+				WHILE i < n DO t := a[i]; c[i] := c[i]/t; helpR := c[i]*b[i]; a[i+1] := a[i+1] - helpR; INC(i); END;
 				i := 2; 
 				WHILE i <= n DO helpR := c[i-1]*y[i-1]; y[i] := y[i] - helpR; INC(i); END;
 				t := a[n]; y[n] := y[n]/t; i := n-1;
-				WHILE i > 0 DO  t := y[i+1]; helpR :=y[i] - b[i]*t; y[i] := helpR/a[i]; DEC(i) END
+				WHILE i > 0 DO t := y[i+1]; helpR :=y[i] - b[i]*t; y[i] := helpR/a[i]; DEC(i) END
 			END SolveTriDiag;
 		
-			BEGIN  (* NatSplineDerivates *)
+			BEGIN (* NatSplineDerivates *)
 				IF x[1] # x[2] THEN b[1] := 1.0/(x[2] - x[1]); ELSE b[1] := 1.0 END;
 				a[1] := 2.0*b[1]; c[1] := b[1]; 
 				d1 := (y[2] - y[1])*3.0*b[1]*b[1]; 
@@ -980,8 +967,8 @@ END NewRect3D;
 				END;
 				i :=2;
 				WHILE i <= n DO
-					helpR := c[i-1]*y1[i-1];  y1[i] := y1[i] - helpR; 
-					helpR :=  c[i-1]*y2[i-1]; y2[i] := y2[i] - helpR;
+					helpR := c[i-1]*y1[i-1]; y1[i] := y1[i] - helpR; 
+					helpR := c[i-1]*y2[i-1]; y2[i] := y2[i] - helpR;
 					INC(i);
 				END;
 				t := a[n]; y1[n] := y1[n]/t; t := a[n]; y2[n] := y2[n]/t;
@@ -993,7 +980,7 @@ END NewRect3D;
 				END 
 			END SolveTriDiag2;
 	
-		BEGIN  (* ClSplineDerivates *)
+		BEGIN (* ClSplineDerivates *)
 			hn1 := 1.0/(x[n] - x[n-1]); 
 			dn1 := (y[n] - y[n-1])*3.0*hn1*hn1; 
 			IF x[2] # x[1] THEN
@@ -1036,7 +1023,7 @@ END NewRect3D;
 		IF closed THEN RX[n+1] := RX[1]; RY[n+1] := RY[1]; INC(n) ; END;
 		RS[1] := 0.0; i := 2;
 		WHILE i <= n DO
-			dx := RX[i] - RX[i-1];  dy := RY[i] - RY[i-1]; 
+			dx := RX[i] - RX[i-1]; dy := RY[i] - RY[i-1]; 
 			RS[i] := RS[i-1] + Math.sqrt(dx*dx + dy*dy);
 			INC(i);
 		END;
@@ -1086,7 +1073,7 @@ BEGIN
 	pat := GetPat(F.patno);
 	SplineToPoly(to, closed IN F.state0, u, v, n);
 	
-	FOR i := 0 TO n - 1 DO u[i] := u[i] + x; v[i] :=  v[i] + y END;
+	FOR i := 0 TO n - 1 DO u[i] := u[i] + x; v[i] := v[i] + y END;
 	IF filled IN F.state0 THEN Printer3.Poly(M, F.col, pat, u, v, n, Dev(F.width), {Display3.filled}, Display3.replace)
 	ELSE
 		IF (filled IN F.state0) THEN

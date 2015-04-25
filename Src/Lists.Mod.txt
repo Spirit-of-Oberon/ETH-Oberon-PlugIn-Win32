@@ -1,22 +1,10 @@
-﻿(* OBERON System 3, Release 2.3.
-
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
-
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
-
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
+﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE Lists; (** portable *)	(* jm 18.4.95 *)
 
-(**Implementation of scrollable lists.
-*)
+(** Implementation of scrollable lists. *)
+
 (*
 	6.5.94 - No more duplicates are allowed in the lists
 	4.11.94 - added support for LinkMsg, name = Model
@@ -63,8 +51,7 @@ TYPE
 VAR
 	W: Texts.Writer;
 	mayscroll, waittime: LONGINT;
-	pat, ss: ARRAY 32 OF CHAR;
-	pos: INTEGER;
+	ss: ARRAY 32 OF CHAR;
 
 (* ---------------------- SLIDER ------------------------- *)
 
@@ -117,7 +104,7 @@ BEGIN
 		(* Triangles *)
 		FOR i := -4 TO 1 DO
 			Display3.ReplConst(M, Display3.FG, x + bar.box DIV 3 - i, y + h DIV 2 + i, 1, -i*2, Display.replace);
-			Display3.ReplConst(M, Display3.FG, x + w -  bar.box DIV 3 + i, y + h DIV 2 + i, 1, -i*2, Display.replace);
+			Display3.ReplConst(M, Display3.FG, x + w - bar.box DIV 3 + i, y + h DIV 2 + i, 1, -i*2, Display.replace);
 		END;
 		
 		(* inside *)
@@ -286,14 +273,14 @@ BEGIN
 		F.bar.range := 1000; F.bar.size := 1000; 
 	ELSE
 		F.bar.range := F.noitems;
-		F.bar.size :=  space
+		F.bar.size := space
 (*
 		F.bar.range := F.noitems;
 		F.bar.size := H DIV (Fonts.Default.height + 2);
 		IF F.bar.range >= F.bar.size THEN
 			old := F.bar.range;
 			DEC(F.bar.range, F.bar.size - 1);
-			DEC(F.bar.size,  F.bar.size * F.bar.range DIV old);
+			DEC(F.bar.size, F.bar.size * F.bar.range DIV old);
 		ELSE F.bar.range := 1;
 		END;
 		IF F.bar.size > F.bar.range THEN F.bar.size := F.bar.range END;
@@ -585,7 +572,7 @@ BEGIN
 	END;
 	R.X := cx; R.Y := cy; R.W := cw; R.H := ch;
 	
-	IF Y > y  THEN
+	IF Y > y THEN
 		Printer3.ReplConst(R, Display3.textbackC, x+P(1), y, w-barW - P(2), Y - y, Display.replace);
 	END;
 	IF F.focus THEN
@@ -618,7 +605,7 @@ VAR i: Item;
 BEGIN
 	item := NIL;
 	IF MY >= y + F.H THEN Y := 1
-	ELSIF MY < y THEN  Y := -1
+	ELSIF MY < y THEN Y := -1
 	ELSE
 		Y := y + F.H - 1; i := F.beg;
 		WHILE (i # NIL) DO
@@ -676,7 +663,7 @@ BEGIN
 					RestoreList(F, R, x, y, w, h); scroll := TRUE
 				END
 			ELSIF Y = -1 THEN (* one item more *)
-				t := y + h - 1; lineh :=  Fonts.Default.height + 2;
+				t := y + h - 1; lineh := Fonts.Default.height + 2;
 				i := F.beg; WHILE (i # NIL) & (t - lineh > y) DO DEC(t, lineh); i := i.next END;
 				IF (F.beg.next # NIL) & (i # NIL) & ((i.next # NIL) OR (t > y)) THEN
 					F.beg := F.beg.next; INC(F.bar.pos);
@@ -701,7 +688,7 @@ BEGIN
 					RestoreList(F, R, x, y, w, h); scroll := TRUE
 				END
 			ELSIF Y = -1 THEN (* one item more *)
-				t := y + h - 1; lineh :=  Fonts.Default.height + 2;
+				t := y + h - 1; lineh := Fonts.Default.height + 2;
 				i := F.beg; WHILE (i # NIL) & (t - lineh > y) DO DEC(t, lineh); i := i.next END;
 				IF (F.beg.next # NIL) & (i # NIL) & ((i.next # NIL) OR (t > y)) THEN
 					WHILE (i # NIL) & ~i.sel DO i.sel := TRUE; i := i.prev END;
@@ -740,15 +727,13 @@ END DeleteSelection;
 (** Returns all selected entries as a text. Entries that contain spaces are quoted. *)
 PROCEDURE GetSelection*(F: List; VAR T: Texts.Text);
 VAR W: Texts.Writer; i: Item; count: INTEGER;
-
-  PROCEDURE WriteString(VAR W: Texts.Writer; s: ARRAY OF CHAR);
-  VAR i: INTEGER;
-  BEGIN i := 0;
-  	WHILE (s[i] >= " ") OR (s[i] = 9X) DO Texts.Write(W, s[i]); INC(i) END	(* << jm *)
-  END WriteString;
-
+	PROCEDURE WriteString(VAR W: Texts.Writer; s: ARRAY OF CHAR);
+		VAR i: INTEGER;
+	BEGIN i := 0;
+		WHILE (s[i] >= " ") OR (s[i] = 9X) DO Texts.Write(W, s[i]); INC(i) END	(* << jm *)
+	END WriteString;
 	PROCEDURE Space(VAR s: ARRAY OF CHAR): BOOLEAN;
-	VAR i: INTEGER;
+		VAR i: INTEGER;
 	BEGIN
 		i := 0;
 		WHILE s[i] # 0X DO
@@ -757,7 +742,6 @@ VAR W: Texts.Writer; i: Item; count: INTEGER;
 		END;
 		RETURN FALSE
 	END Space;
-	
 BEGIN
 	Texts.OpenWriter(W); i := F.items; NEW(T); Texts.Open(T, "");
 	count := 0;
@@ -767,7 +751,7 @@ BEGIN
 			ELSE Texts.WriteString(W, i.s)
 			END;
 			INC(count);
-			IF count MOD 10 =  0 THEN Texts.WriteLn(W)
+			IF count MOD 10 = 0 THEN Texts.WriteLn(W)
 			ELSE Texts.Write(W, " ")
 			END
 		END;
@@ -838,7 +822,7 @@ BEGIN
 			IF F.bar.pos >= F.noitems THEN F.bar.pos := 0 END;
 			(* Updatebar(F, h); *)
 			Update(F);
-			F.time := 0;
+			F.time := -1
 		ELSIF keysum = {0, 1} THEN (* copy over *)
 			GetSelection(F, T);
 			C.F := NIL; C.text := T; C.beg := 0; C.end := T.len; Display.Broadcast(C);
@@ -852,14 +836,14 @@ BEGIN
 			F.focus := TRUE; Gadgets.Update(F); keysum:= {};
 			REPEAT Effects.TrackMouse(M.keys, M.X, M.Y, Effects.Arrow); keysum := keysum + M.keys UNTIL M.keys = {}; 			IF keysum = {2, 1} THEN (* copy over *)
 				Oberon.GetSelection(T, beg, end, time);
-				IF time > 0 THEN InsertItems(F, T, beg, end) END
+				IF time # -1 THEN InsertItems(F, T, beg, end) END
 			END
 		ELSE
 			keysum:= {};
 			REPEAT Effects.TrackMouse(M.keys, M.X, M.Y, Effects.Arrow); keysum := keysum + M.keys UNTIL M.keys = {};
 			IF keysum = {2, 1} THEN (* copy over *)
 				Oberon.GetSelection(T, beg, end, time);
-				IF time > 0 THEN InsertItems(F, T, beg, end) END
+				IF time # -1 THEN InsertItems(F, T, beg, end) END
 			END
 		END;
 		M.res := 0;
@@ -895,7 +879,7 @@ BEGIN
 				IF (M.F = NIL) OR (M.F = F) THEN	(* message addressed to this frame *)
 					x := M.x + F.X; y := M.y + F.Y; w := F.W; h := F.H; (* calculate display coordinates *)
 					IF M IS Display.DisplayMsg THEN
-						WITH M: Display.DisplayMsg  DO
+						WITH M: Display.DisplayMsg DO
 							IF M.device = Display.screen THEN
 								IF (M.id = Display.full) OR (M.F = NIL) THEN
 									Gadgets.MakeMask(F, x, y, M.dlink, R);
@@ -930,19 +914,19 @@ BEGIN
 								IF F.focus THEN F.focus := FALSE; Gadgets.Update(F) END;
 							END;
 							IF M.id = Oberon.neutralize THEN 
-								DeselectList(F, redraw); F.time := 0; Search(F, 0X);
+								DeselectList(F, redraw); F.time := -1; Search(F, 0X);
 								IF redraw OR F.focus THEN F.focus := FALSE; Gadgets.Update(F) END
 							END;
 						END
 					ELSIF M IS Oberon.ConsumeMsg THEN
 						WITH M: Oberon.ConsumeMsg DO
-							IF F.focus THEN  InsertItems(F, M.text, M.beg, M.end); M.res := 0
+							IF F.focus THEN InsertItems(F, M.text, M.beg, M.end); M.res := 0
 							ELSIF M.F = F THEN InsertItems(F, M.text, M.beg, M.end); M.res := 0
 							END
 						END
 					ELSIF M IS Oberon.SelectMsg THEN
 						WITH M: Oberon.SelectMsg DO
-							IF (F.time > M.time) & (M.stamp # F.stamp) THEN
+							IF (((M.time-F.time) < 0) OR (M.time = -1)) & (M.stamp # F.stamp) THEN
 								F.stamp := F.time; GetSelection(F, T);
 								IF T.len # 0 THEN M.text := T; M.sel := F; M.beg := 0; M.end := T.len; M.time := F.time END
 							END
@@ -1078,19 +1062,19 @@ PROCEDURE GetDir(mask : ARRAY OF CHAR; text : Texts.Text);
 	VAR pre : ARRAY 32 OF CHAR; i : INTEGER; 
 BEGIN
 	i := 0;
-	WHILE (mask[i] > " ") & (mask[i] # "/") DO pat[i] := mask[i]; INC(i);  END;
+	WHILE (mask[i] > " ") & (mask[i] # "/") DO pat[i] := mask[i]; INC(i) END;
 	pat[i] := 0X;
 	i := 0;
 	WHILE pat[i] > "*" DO pre[i] := pat[i]; INC(i) END;
 	pre[i] := 0X; pos := i;
 	FileDir.Enumerate(pre,FALSE,ListFiles);
-	Texts.Append(text,W.buf);
+	Texts.Append(text,W.buf)
 END GetDir; *)
 
 (* Windows version *)
-PROCEDURE ListFiles(path, name: ARRAY OF CHAR; time, date, size: LONGINT; isdir: BOOLEAN);
+PROCEDURE ListFiles(path, name: ARRAY OF CHAR; time, date, size: LONGINT; attrs: SET);
 BEGIN
-	IF ~isdir THEN
+	IF ~(FileDir.Directory IN attrs) THEN
 		Texts.WriteString(W, name); Texts.WriteLn(W)
 	END
 END ListFiles;
@@ -1128,8 +1112,8 @@ PROCEDURE Copy(source : ARRAY OF CHAR; VAR dest : ARRAY OF CHAR);
 	VAR i,j : INTEGER;
 BEGIN
 	j := 0; WHILE (source[j] = " ") DO INC(j); END;
-	i := 0; dest[i] := source[j]; WHILE (source[j] # 0X) & (source[j] # " ")  DO INC(i); INC(j); dest[i] := source[j] END;
-	dest[i] := 0X;
+	i := 0; dest[i] := source[j]; WHILE (source[j] # 0X) & (source[j] # " ") DO INC(i); INC(j); dest[i] := source[j] END;
+	dest[i] := 0X
 END Copy;
 
 (** Used in the form:
@@ -1142,7 +1126,7 @@ PROCEDURE Directory*; (* "mask" "objname" *)
 VAR S: Attributes.Scanner; mask: ARRAY 32 OF CHAR; o: Objects.Object; text: Texts.Text;
 BEGIN
 	Attributes.OpenScanner(S, Oberon.Par.text, Oberon.Par.pos); Attributes.Scan(S); 
-	IF (S.class = Attributes.Name) OR (S.class = Attributes.String)  THEN Copy(S.s, mask);
+	IF (S.class = Attributes.Name) OR (S.class = Attributes.String) THEN Copy(S.s, mask);
 		Attributes.Scan(S);
 		IF (S.class = Attributes.Name) OR (S.class = Attributes.String) THEN 
 			Copy(S.s, S.s); o := Gadgets.FindObj(Gadgets.context, S.s);
@@ -1159,10 +1143,10 @@ END Directory;
 
 (* Native-Oberon version
 PROCEDURE Match(name,pat : ARRAY OF CHAR): BOOLEAN;
-	CONST  VAR i0, i1, j0, j1,pos: INTEGER; f: BOOLEAN; 
+	CONST VAR i0, i1, j0, j1,pos: INTEGER; f: BOOLEAN; 
 BEGIN pos := 0;
 	pos := 0; WHILE (pat[pos] # "*") & (pat[pos] # 0X) & (pat[pos] = name[pos]) DO INC(pos) END;
-	IF name[pos] = 0X THEN RETURN TRUE END;  
+	IF name[pos] = 0X THEN RETURN TRUE END;
 	i0 := pos; j0 := pos; f := TRUE;
 	LOOP
 		IF pat[i0] = "*" THEN INC(i0);
@@ -1192,52 +1176,10 @@ PROCEDURE *EntryHandler(name: ARRAY OF CHAR; date, time, size: LONGINT);
 BEGIN
 	IF (name[0] > " ") & (name[0] < CHR(127)) & Match(name,pat) THEN Texts.WriteString(W,name); Texts.WriteLn(W) END
 END EntryHandler;
+*)
 
-PROCEDURE GetDiskette(mask: ARRAY OF CHAR; text: Texts.Text);
-	VAR i, a, b: INTEGER; 
-BEGIN
-	i := 0;
-	WHILE (mask[i] > " ") & (mask[i] # "/") DO pat[i] := mask[i]; INC(i);  END;
-	pat[i] := 0X;
-	Floppy.OpenVol(a, b);
-	Floppy.Enumerate(EntryHandler);
-	Floppy.CloseVol();
-	Texts.Append(text,W.buf);
-END GetDiskette; *)
-
-(* Windows version *)
-PROCEDURE GetDiskette(mask: ARRAY OF CHAR; text: Texts.Text);
-	VAR  i : INTEGER; 
-BEGIN
-	i := 0;
-	WHILE (mask[i] > " ") & (mask[i] # "/") DO pat[i] := mask[i]; INC(i);  END;
-	pat[i] := 0X;
-	Texts.Append(text,W.buf);
-END GetDiskette;
-
-(** Same as Directory, except the files on Diskette are searched. This command is not functional on all platforms. *)
-PROCEDURE Diskette*; (* "mask" "objname" *)
-VAR S: Attributes.Scanner; mask: ARRAY 32 OF CHAR; o: Objects.Object;
-		text: Texts.Text;
-BEGIN	
-	Attributes.OpenScanner(S,Oberon.Par.text,Oberon.Par.pos); Attributes.Scan(S); 
-	IF (S.class = Attributes.Name) OR (S.class  = Attributes.String)  THEN Copy(S.s, mask);
-		Attributes.Scan(S);
-		IF (S.class = Attributes.Name) OR (S.class = Attributes.String) THEN 
-			Copy(S.s, S.s); o := Gadgets.FindObj(Gadgets.context, S.s);
-			IF (o # NIL) & (o IS List) THEN
-				WITH o: List DO
-					NEW(text); Texts.Open(text, ""); 
-					GetDiskette(mask, text); o.beg := NIL; o.items := NIL; o.noitems := 0;
-					InsertItems(o, text, 0, text.len);
-				END
-			END
-		END
-	END
-END Diskette;
-		
 PROCEDURE LibDir(name: ARRAY OF CHAR; text: Texts.Text);
-VAR  L: Objects.Library; ref, i: INTEGER; libName, objName: ARRAY 32 OF CHAR; 
+VAR L: Objects.Library; ref, i: INTEGER; libName, objName: ARRAY 32 OF CHAR; 
 BEGIN
 	i := 0; WHILE (name[i] # 0X) & (name[i] # ".") DO INC(i) END;
 	name[i] := 0X; COPY(name, libName);
@@ -1248,14 +1190,14 @@ BEGIN
 		ref := 0;
 		REPEAT
 			Objects.GetName(L.dict, ref, objName);
-			IF (objName[0] # 0X) & (objName[0] >= "A") & (objName[0] <=  "Z") THEN
+			IF (objName[0] # 0X) & (objName[0] >= "A") & (objName[0] <= "Z") THEN
 				Texts.WriteString(W, libName); Texts.Write(W, ".");
-				Texts.WriteString(W, objName); Texts.WriteLn(W);
-				END;
+				Texts.WriteString(W, objName); Texts.WriteLn(W)
+			END;
 			INC(ref)
 		UNTIL ref = L.maxref
 	END;
-	Texts.Append(text,W.buf);
+	Texts.Append(text,W.buf)
 END LibDir;
 
 (** Used in the form:
@@ -1268,7 +1210,7 @@ PROCEDURE Library*;	(* "lib" "objname" *)
 VAR S: Attributes.Scanner; name : ARRAY 32 OF CHAR; o: Objects.Object; text: Texts.Text;
 BEGIN
 	Attributes.OpenScanner(S,Oberon.Par.text,Oberon.Par.pos); Attributes.Scan(S);
-	IF (S.class = Attributes.Name) OR (S.class = Attributes.String)  THEN Copy(S.s, name); 
+	IF (S.class = Attributes.Name) OR (S.class = Attributes.String) THEN Copy(S.s, name); 
 		Attributes.Scan(S);
 		IF (S.class = Attributes.Name) OR (S.class = Attributes.String) THEN 
 			Copy(S.s, S.s); o := Gadgets.FindObj(Gadgets.context, S.s);

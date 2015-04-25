@@ -1,19 +1,6 @@
-﻿(* OBERON System 3, Release 2.3.
+﻿(* Copyright (c) 1994 - 2000 Emil J. Zeller *)
 
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
-
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
-
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
-
-MODULE BookCompiler; (** portable *)
+MODULE BookCompiler; (** portable *)	(* ejz  *)
 	IMPORT Oberon, Texts, Files, Display, Gadgets, TextGadgets, Fonts, Objects, Books, Books0, BookDocs,
 		Strings, Documents, Lists, TextFields, TextDocs, Desktops, Panels;
 	
@@ -216,7 +203,7 @@ MODULE BookCompiler; (** portable *)
 			COPY(ident, cl.name);
 			cl.next := labels;
 			labels := cl
-		ELSIF  l.frame.pos1 >= 0 THEN
+		ELSIF l.frame.pos1 >= 0 THEN
 			NEW(cl);
 			COPY(ident, cl.name);
 			cl.next := labels;
@@ -243,9 +230,7 @@ MODULE BookCompiler; (** portable *)
 	
 (* initialize all global data for a new tutorial *)
 	PROCEDURE NewBook(title: BOOLEAN);
-		VAR
-			beg: LONGINT;
-			cl: Label;
+		VAR beg: LONGINT; cl: Label;
 	BEGIN
 		labels := NIL;
 		imports := NIL;
@@ -1199,7 +1184,7 @@ MODULE BookCompiler; (** portable *)
 				Texts.Save(inText, begId, endId, B);
 				beg := curChap.text.len;
 				Texts.Append(curChap.text, B);
-				Expand(curChap.text, beg,  curChap.text.len);
+				Expand(curChap.text, beg, curChap.text.len);
 				IF lk = NIL THEN
 				ELSIF lk.mode = Books.note THEN
 					MarkText(curChap.text, beg, curChap.text.len, Books.note, Books.formatText IN options);
@@ -1874,7 +1859,7 @@ MODULE BookCompiler; (** portable *)
 		END;
 		IF S.class = Texts.Name THEN
 			COPY(S.s, il.name)
-		ELSIF (S.class =  Texts.Char) & (S.c = "^") THEN
+		ELSIF (S.class = Texts.Char) & (S.c = "^") THEN
 			Oberon.GetSelection(t, beg, end, time);
 			IF (t # NIL) & (time > 0) THEN
 				Texts.OpenScanner(S, t, beg);
@@ -1949,7 +1934,7 @@ MODULE BookCompiler; (** portable *)
 		WHILE el # NIL DO
 			IF el.mode = Books.note THEN
 				Texts.WriteString(Wr, "\Note{")
-			ELSIF  el.mode = Books.link THEN
+			ELSIF el.mode = Books.link THEN
 				Texts.WriteString(Wr, "\Label{")
 			END;
 			Texts.WriteString(Wr, el.name);

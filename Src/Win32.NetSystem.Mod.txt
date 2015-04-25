@@ -1,45 +1,27 @@
-﻿(* OBERON System 3, Release 2.3.
+﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
+(* Copyright (c) 1994 - 2000 Emil J. Zeller *)
 
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
-
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
-
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
-
-MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod *)	(* NetSystem for Oberon for Windows 95/NT, ejz  *)
-	IMPORT SYSTEM, Kernel, Kernel32, Console, Modules, Threads, User32, Win32, Input, Fonts, Texts, Oberon, Display, Display3,
-		Strings, Registry;
+MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod *)	(* ejz  *)
+	IMPORT SYSTEM, Kernel, Kernel32, Modules, Threads, User32, WSock32, Input, Fonts, Texts, Oberon, Display,
+		Display3, Strings, Registry, Displays, Windows;
 
 (** A Portable Oberon Interface to InterNet Protocols *)
-(* Base on NetSystem from mg 3.4.94, jm 3.4.95 adjusted for Windows 3.1/NT/tk 23.5.95/jm 21.6.95
-	31.1.96 - adapted for Windows 95/NT Threads (ejz)
-*)
 
 	CONST
-		WMGetHostInfo = User32.WMUser+1; WMConnect = User32.WMUser+2;
-		MAXGETHOSTSTRUCT = 1024;
-		PFInet = 2; SockStream = 1; IPProtoTCP = 6; SockDgram = 2; IPProtoUDP = 17; InvalidSocket = -1;
-		FDRead = 01H; FDWrite = 02H; FDAccept = 08H; FDConnect = 010H; FDClose = 020H;
-		WSABASEERR = 10000; WSAEINVAL = WSABASEERR+22; WSAEWOULDBLOCK = WSABASEERR+35;
-		WSAECONNABORTED = WSABASEERR+53; WSAECONNRESET = WSABASEERR+54; WSAENOBUFS = WSABASEERR+55;
-		FIONREAD = 4004667FH;
-		ConnTabSize = 64;
+		WMGetHostInfo = User32.WMUser+10; WMConnect = User32.WMUser+11;
+		ConnTabSize = 64; IPCacheSize = 8;
 		SendBufSize = 1460; RecBufSize = 1460; RecBufLimit = 1400;
-		IPCacheSize = 8;
-		CR = 0DX; LF = 0AX; ESC = 1BX;
+		IPAdrLen = 4; HostNameLen = 64;
+		MaxAccept = 5;
+
 		anyport* = 0; (** any port value *)
 	(** result values *)
 		done* = 0; (** everything went ok *)
 		error* = 1; (** failure occured *)
-(* timeout* = 2; (* opening a connection is timed out *) *)
+		(* timeout* = 2; (* opening a connection is timed out *) *)
 	(** return values of procedure State *)
+		(* undef* = -1; (* unknown state *) *)
 		closed* = 0; (** connection is closed (neither sending nor receiving) *)
 		listening* = 1; (** passive connection is listening for a request *)
 		in* = 2; (** receiving only *)
@@ -47,109 +29,59 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 		inout* = 4; (** sending and receiving is possible *)
 		waitCon* = 5; (** still waiting to be connected *)
 		errorCon* = 6; (** connecting failed *)
-(* undef* = -1; (* unknown state *) *)
-		IPAdrLen = 4; HostNameLen = 64;
-		MaxAccept = 5;
 
 	TYPE
-		WSAData = RECORD
-			wVersion, wHighVersion: INTEGER;
-			szDescription: ARRAY 257 OF CHAR;
-			szSystemStatus: ARRAY 129 OF CHAR;
-			iMaxSockets, iMaxUdpDg: INTEGER;
-			filler: LONGINT
-		END;
-
-		SockAddr = RECORD
-			family: INTEGER;
-			port: INTEGER;
-			internetAddr: LONGINT;
-			zero: ARRAY 8 OF CHAR
-		END;
-
-		Connection* = POINTER TO ConnectionDesc; (** handle for TCP connections *)
-		ConnectionDesc* = RECORD
-			sock: LONGINT;
-			lock: Threads.Mutex;
+		Connection* = POINTER TO RECORD (** handle for TCP connections *)
+			sock: WSock32.Socket;
 			event: Threads.Event;
-			nr, state: INTEGER;
+			nr, req: LONGINT;
 			sendBuf: ARRAY SendBufSize OF CHAR; (* send buffer *)
 			sendBufEnd: LONGINT;
 			recBuf: ARRAY RecBufSize OF CHAR; (* receive buffer *)
 			recBufPos, recBufEnd: LONGINT;
-			res*: INTEGER; (** result of last operation on a connection (error indication) *)
-			req: INTEGER
+			state, res*: INTEGER (** result of last operation on a connection (error indication) *)
 		END;
 
 		IPAdr* = LONGINT; (** IP address in network byte order *)
 
-		HostInfo* = POINTER TO HostInfoDesc; (** handle for asyncrouns GetIP and GetName *)	(** non-portable *)
-		HostInfoDesc* = RECORD	(** non-portable *)
-			handle: LONGINT;
-			hostentBuf: ARRAY MAXGETHOSTSTRUCT OF CHAR;
+		HostInfo = POINTER TO RECORD (* handle for asyncrouns GetIP and GetName *)
+			handle: Kernel32.HANDLE;
 			event: Threads.Event;
+			ip: IPAdr; (* the ip-number of host name *)
+			name: ARRAY HostNameLen OF CHAR; (* the host name for ip-number *)
+			err, getip: BOOLEAN; (* indicating success or failure *)
 			next: HostInfo;
-			ip-: IPAdr; (** the ip-number of host name *)
-			name-: ARRAY HostNameLen OF CHAR; (** the host name for ip-number *)
-			err-, getip: BOOLEAN (** indicating success or failure *)
+			hostentBuf: ARRAY WSock32.MAXGETHOSTSTRUCT OF CHAR
 		END;
 
-		Socket* = POINTER TO SocketDesc; (** handle for UDP "connections" *)
-		SocketDesc* = RECORD
-			sock: LONGINT;
-			lock: Threads.Mutex;
+		Socket* = POINTER TO RECORD (** handle for UDP "connections" *)
+			sock: WSock32.Socket;
 			res*: INTEGER (** result of last operation on a connection (error indication) *)
 		END;
 
-		Password = POINTER TO PasswordDesc;
-		PasswordDesc = RECORD
+		Password = POINTER TO RECORD
 			service, user, host, passwd: ARRAY HostNameLen OF CHAR;
 			next: Password
 		END;
 
 	VAR
-		WSAStartup: PROCEDURE (versionRequired: LONGINT; lpWSAData: LONGINT): LONGINT;
-		WSACleanup: PROCEDURE (): LONGINT;
-		WSACancelBlockingCall: PROCEDURE (): LONGINT;
-		WSAGetLastError: PROCEDURE (): LONGINT;
-		WSACancelAsyncRequest: PROCEDURE (handle: LONGINT): LONGINT;
-		WSAAsyncGetHostByName: PROCEDURE (hwnd, msg, name, buf, buflen: LONGINT): LONGINT;
-		WSAAsyncGetHostByAddr: PROCEDURE (hwnd, msg, addr, len, type, buf, buflen: LONGINT): LONGINT;
-		WSAAsyncSelect: PROCEDURE (socket, hwnd, msg, event: LONGINT): LONGINT;
-		socket: PROCEDURE (af, type, protocol: LONGINT): LONGINT;
-		bind: PROCEDURE (socket, name, namelen: LONGINT): LONGINT;
-		connect: PROCEDURE (socket, name, namelen: LONGINT): LONGINT;
-		closesocket: PROCEDURE (s: LONGINT): LONGINT;
-		gethostname: PROCEDURE (adr, len: LONGINT): LONGINT;
-		gethostbyname: PROCEDURE (name: LONGINT): LONGINT;
-		getpeername: PROCEDURE (socket, sockaddr, lenadr: LONGINT): LONGINT;
-		send: PROCEDURE (socket, bufaddr, buflen, flags: LONGINT): LONGINT;
-		recv: PROCEDURE (socket, bufaddr, buflen, flags: LONGINT): LONGINT;
-		ioctlsocket: PROCEDURE (socket, cmd, argptr: LONGINT): LONGINT;
-		listen: PROCEDURE (socket, backlog: LONGINT): LONGINT;
-		accept: PROCEDURE (socket, addr, addrlen: LONGINT): LONGINT;
-		sendto: PROCEDURE (socket, bufaddr, buflen, flags, addrptr, addrsize: LONGINT): LONGINT;
-		recvfrom: PROCEDURE (socket, bufaddr, buflen, flags, addrptr, addrsizeptr: LONGINT): LONGINT;
-		htons: PROCEDURE (x: INTEGER): INTEGER;
-		htonl: PROCEDURE (x: LONGINT): LONGINT;
-		ntohs: PROCEDURE (x: INTEGER): INTEGER;
-		ntohl: PROCEDURE (x: LONGINT): LONGINT;
 		ConnTab: ARRAY ConnTabSize OF LONGINT;
-		anyIP*, localhost: IPAdr; (** "NIL" ip-number *)
-		allIP*: IPAdr; (** broadcast ip-number *)
-		hostIP*: IPAdr; (** ip-number of local machine *)
-		hostName*: ARRAY HostNameLen OF CHAR; (** name of local machine *)
+		GetIPTimeOut, GetNameTimeOut, OpenConnectionTimeOut, SendTimeOut, ReceiveTimeOut: LONGINT;
 		IPCache: ARRAY IPCacheSize OF RECORD
 			host: ARRAY HostNameLen OF CHAR;
 			ip: IPAdr
 		END;
-		curIP, sockDll: LONGINT;
+		curIP: LONGINT;
 		hostInfos: HostInfo;
-		tcpMtx: Threads.Mutex;
-		ready, started: BOOLEAN;
 		passwords: Password;
-		GetIPTimeOut, GetNameTimeOut, OpenConnectionTimeOut, SendTimeOut, ReceiveTimeOut: LONGINT;
+		tcpMtx: Threads.Mutex;
 		W: Texts.Writer;
+		ready: BOOLEAN;
+
+		anyIP*, (** "NIL" ip-number *)
+		allIP*, (** broadcast ip-number *)
+		hostIP*: IPAdr; (** ip-number of local machine *)
+		hostName*: ARRAY HostNameLen OF CHAR; (** name of local machine *)
 
 	PROCEDURE FindConnection(sock: LONGINT): Connection;
 		VAR i: LONGINT; C: Connection;
@@ -163,6 +95,19 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 		RETURN NIL
 	END FindConnection;
 
+	PROCEDURE *ConnectionFinalizer(C: PTR);
+	BEGIN
+		WITH C: Connection DO
+			IF C.sock # WSock32.InvalidSocket THEN
+				WSock32.WSAAsyncSelect(C.sock, Windows.dummyWin.hWnd, 0, 0);
+				WSock32.closesocket(C.sock); C.sock := WSock32.InvalidSocket
+			END;
+			IF C.nr < ConnTabSize THEN
+				ConnTab[C.nr] := SYSTEM.VAL(LONGINT, NIL); C.nr := ConnTabSize
+			END
+		END
+	END ConnectionFinalizer;
+
 	PROCEDURE stop();
 		VAR i: LONGINT; C: Connection;
 	BEGIN
@@ -171,95 +116,73 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 			FOR i := 0 TO ConnTabSize-1 DO
 				C := SYSTEM.VAL(Connection, ConnTab[i]);
 				IF C # NIL THEN
-					IF C.sock # InvalidSocket THEN
-						WSAAsyncSelect(C.sock, Win32.Display, 0, 0);
-						C.sock := InvalidSocket; C.state := closed
-					END;
-					C.nr := ConnTabSize; ConnTab[i] := SYSTEM.VAL(LONGINT, NIL)
+					ConnectionFinalizer(C);
+					C.state := closed
 				END
 			END;
 			tcpMtx := NIL
 		END;
-		IF started THEN
-			WSACancelBlockingCall(); WSACleanup(); started := FALSE
-		END;
-		hostIP := localhost;
-		IF sockDll # Kernel32.NULL THEN
-			Kernel32.FreeLibrary(sockDll); sockDll := Kernel32.NULL
-		END
+		WSock32.WSACleanup()
 	END stop;
 
-	PROCEDURE *WndProc(window, msg, uParam, lParam: LONGINT): LONGINT;
+	PROCEDURE [WINAPI] *WindowHandler(win: Windows.Window; uMsg: LONGINT; wParam: User32.WParam; lParam: User32.LParam): User32.LResult;
 		VAR
-			res, err, event, adr, i: LONGINT;
-			C: Connection;
-			P, H: HostInfo;
+			res, err, event, i: LONGINT;
+			adr: Kernel32.ADDRESS;
+			C: Connection; P, H: HostInfo;
 			ch: CHAR;
 	BEGIN
 		res := 0;
-		IF msg = WMConnect THEN
-			err := Kernel32.HiWord(lParam); event := Kernel32.LoWord(lParam);
-			C := FindConnection(uParam);
+		IF uMsg = WMConnect THEN
+			err := SYSTEM.LSH(lParam, -16); event := lParam MOD ASH(1, 16);
+			C := FindConnection(wParam);
 			IF C # NIL THEN
 				CASE event OF
-					FDWrite: IF err = 0 THEN
+					WSock32.FDWrite: IF err = 0 THEN
 										IF C.state IN {in, waitCon} THEN
 											C.state := inout
 										ELSIF ~(C.state IN {inout, closed}) THEN
 											C.state := out
 										END
-									ELSE
-										Console.Str("FDWrite error "); Console.Int(err); Console.Ln()
 									END
-					|FDAccept: IF err = 0 THEN
-											INC(C.req)
-										ELSE
-											Console.Str("FDAccept error "); Console.Int(err); Console.Ln()
-										END
-					|FDConnect: IF err # 0 THEN
-											Console.Str("FDConnect error "); Console.Int(err); Console.Ln();
-											C.state := errorCon;
-											IF C.sock # InvalidSocket THEN
-												res := WSAAsyncSelect(C.sock, Win32.Display, 0, 0);
-												res := closesocket(C.sock); C.sock := InvalidSocket
-											END
+					|WSock32.FDAccept: IF err = 0 THEN INC(C.req) END
+					|WSock32.FDConnect: IF err # 0 THEN
+											ConnectionFinalizer(C);
+											C.state := errorCon
 										ELSE
 											C.state := inout
 										END
-					|FDClose: C.state := closed; C.req := 0
-					|FDRead: IF err = 0 THEN
+					|WSock32.FDClose: C.state := closed; C.req := 0
+					|WSock32.FDRead: IF err = 0 THEN
 										IF C.state IN {out, waitCon} THEN
 											C.state := inout
 										ELSIF ~(C.state IN {inout, closed}) THEN
 											C.state := in
 										END
-									ELSE
-										Console.Str("FDRead error "); Console.Int(err); Console.Ln()
 									END
 				ELSE
-					Console.Str("FDEvent "); Console.Int(event); Console.Ln()
 				END;
 				Threads.Set(C.event)
 			ELSE
 			END
-		ELSIF msg = WMGetHostInfo THEN
-			Threads.Lock(tcpMtx); err := Kernel32.HiWord(lParam);
+		ELSIF uMsg = WMGetHostInfo THEN
+			err := SYSTEM.LSH(lParam, -16); Threads.Lock(tcpMtx);
 			P := NIL; H := hostInfos;
-			WHILE (H # NIL) & (H.handle # uParam) DO
+			WHILE (H # NIL) & (H.handle # wParam) DO
 				P := H; H := H.next
 			END;
 			Threads.Unlock(tcpMtx);
 			IF H # NIL THEN
 				IF err = 0 THEN
 					IF H.getip THEN
-						SYSTEM.MOVE(SYSTEM.ADR(H.hostentBuf)+12, SYSTEM.ADR(adr), 4);
+						SYSTEM.GET(SYSTEM.ADR(H.hostentBuf)+12, adr);
 						SYSTEM.GET(adr, adr); SYSTEM.GET(adr, adr);
 						SYSTEM.MOVE(SYSTEM.ADR(adr), SYSTEM.ADR(H.ip), IPAdrLen);
 						curIP := (curIP+1) MOD IPCacheSize;
 						COPY(H.name, IPCache[curIP].host);
 						IPCache[curIP].ip := H.ip
 					ELSE
-						SYSTEM.MOVE(SYSTEM.ADR(H.hostentBuf), SYSTEM.ADR(adr), 4);
+						SYSTEM.GET(SYSTEM.ADR(H.hostentBuf), adr);
 						i := 0; SYSTEM.GET(adr, ch); INC(adr);
 						WHILE (ch # 0X) & (i < (HostNameLen-1)) DO
 							H.name[i] := ch; INC(i);
@@ -277,11 +200,11 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 				END;
 				H.err := (err # 0); Threads.Set(H.event)
 			END
-		ELSIF msg = User32.WMClose THEN
+		ELSIF (uMsg = User32.WMClose) & (win = Windows.dummyWin) THEN
 			stop()
 		END;
 		RETURN res
-	END WndProc;
+	END WindowHandler;
 
 (** -- Adressing/Naming section. *)
 
@@ -301,7 +224,7 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 			adr := adr*256+n;
 			done := done & (n <= 256); INC(j)
 		END;
-		adr := htonl(adr);
+		adr := WSock32.htonl(adr);
 		done := done & (j = 4) & (num[i] = 0X)
 	END ToHost;
 
@@ -327,37 +250,35 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 		num[j-1] := 0X
 	END ToNum;
 
-(** Procedure delivers the ip-number of a named host. If a symbolic name is given, it will be resolved by use of domain name
+(* Procedure delivers the ip-number of a named host. If a symbolic name is given, it will be resolved by use of domain name
 	servers. *)
-	PROCEDURE AsyncGetIP*(VAR hostInfo: HostInfo; name: ARRAY OF CHAR);	(** non-portable *)
+	PROCEDURE AsyncGetIP(VAR hostInfo: HostInfo; name: ARRAY OF CHAR);	(** non-portable *)
 		VAR i: LONGINT;
 	BEGIN
-		hostInfo := NIL;
-		IF ready THEN
-			NEW(hostInfo); Strings.Lower(name, name);
-			NEW(hostInfo.event); Threads.Create(hostInfo.event, FALSE, FALSE);
-			hostInfo.getip := TRUE; hostInfo.next := NIL; COPY(name, hostInfo.name);
-			hostInfo.err := TRUE; hostInfo.handle := 0; Threads.Lock(tcpMtx);
-			FOR i := 0 TO IPCacheSize-1 DO
-				IF IPCache[i].host = name THEN
-					hostInfo.ip := IPCache[i].ip; hostInfo.err := FALSE;
-					curIP := i; Threads.Set(hostInfo.event);
-					Threads.Unlock(tcpMtx); RETURN
-				END
-			END;
-			IF (name[0] >= "0") & (name[0] <= "9") THEN
-				ToHost(name, hostInfo.ip, hostInfo.err);
-				hostInfo.err := ~hostInfo.err; Threads.Set(hostInfo.event)
+		hostInfo := NIL; ASSERT(ready);
+		NEW(hostInfo); Strings.Lower(name, name);
+		NEW(hostInfo.event); Threads.Create(hostInfo.event);
+		hostInfo.getip := TRUE; hostInfo.next := NIL; COPY(name, hostInfo.name);
+		hostInfo.err := TRUE; hostInfo.handle := 0; Threads.Lock(tcpMtx);
+		FOR i := 0 TO IPCacheSize-1 DO
+			IF IPCache[i].host = name THEN
+				hostInfo.ip := IPCache[i].ip; hostInfo.err := FALSE;
+				curIP := i; Threads.Set(hostInfo.event);
+				Threads.Unlock(tcpMtx); RETURN
+			END
+		END;
+		IF (name[0] >= "0") & (name[0] <= "9") THEN
+			ToHost(name, hostInfo.ip, hostInfo.err);
+			hostInfo.err := ~hostInfo.err; Threads.Set(hostInfo.event)
+		ELSE
+			hostInfo.handle := WSock32.WSAAsyncGetHostByName(Windows.dummyWin.hWnd, WMGetHostInfo, hostInfo.name, hostInfo.hostentBuf, WSock32.MAXGETHOSTSTRUCT);
+			IF hostInfo.handle # 0 THEN
+				hostInfo.next := hostInfos; hostInfos := hostInfo
 			ELSE
-				hostInfo.handle := WSAAsyncGetHostByName(Win32.Display, WMGetHostInfo, SYSTEM.ADR(hostInfo.name), SYSTEM.ADR(hostInfo.hostentBuf), MAXGETHOSTSTRUCT);
-				IF hostInfo.handle # 0 THEN
-					hostInfo.next := hostInfos; hostInfos := hostInfo
-				ELSE
-					Threads.Set(hostInfo.event)
-				END
-			END;
-			Threads.Unlock(tcpMtx)
-		END
+				Threads.Set(hostInfo.event)
+			END
+		END;
+		Threads.Unlock(tcpMtx)
 	END AsyncGetIP;
 
 (** Procedure delivers the ip-number of a named host. If a symbolic name is given, it will be resolved by use of domain name
@@ -365,56 +286,38 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 	PROCEDURE GetIP*(name: ARRAY OF CHAR; VAR IP: IPAdr);
 		VAR hostInfo: HostInfo;
 	BEGIN
-		IP := anyIP;
-		IF ready THEN
-			AsyncGetIP(hostInfo, name);
-			IF hostInfo # NIL THEN
-				Threads.Wait(hostInfo.event, GetIPTimeOut);
-				IF ~hostInfo.err THEN
-					IP := hostInfo.ip
-				END
-			END
-		END
+		IP := anyIP; ASSERT(ready);
+		AsyncGetIP(hostInfo, name);
+		IF (hostInfo # NIL) & Threads.Wait(hostInfo.event, GetIPTimeOut) & ~hostInfo.err THEN IP := hostInfo.ip END
 	END GetIP;
 
-(** GetName is the reverse of GetIP. Given an ip-number, it delivers the name of a host. *)
-	PROCEDURE AsyncGetName*(VAR hostInfo: HostInfo; IP: IPAdr);	(** non-portable *)
+(* GetName is the reverse of GetIP. Given an ip-number, it delivers the name of a host. *)
+	PROCEDURE AsyncGetName(VAR hostInfo: HostInfo; IP: IPAdr);	(** non-portable *)
 	BEGIN
-		hostInfo := NIL;
-		IF ready THEN
-			NEW(hostInfo); NEW(hostInfo.event); Threads.Create(hostInfo.event, FALSE, FALSE);
-			hostInfo.getip := FALSE; hostInfo.next := NIL; SYSTEM.MOVE(SYSTEM.ADR(IP), SYSTEM.ADR(hostInfo.ip), IPAdrLen);
-			hostInfo.err := TRUE; hostInfo.handle := 0; Threads.Lock(tcpMtx);
-			hostInfo.handle := WSAAsyncGetHostByAddr(Win32.Display, WMGetHostInfo, SYSTEM.ADR(hostInfo.ip), IPAdrLen, PFInet, SYSTEM.ADR(hostInfo.hostentBuf), MAXGETHOSTSTRUCT);
-			IF hostInfo.handle # 0 THEN
-				hostInfo.next := hostInfos; hostInfos := hostInfo
-			ELSE
-				Threads.Set(hostInfo.event)
-			END;
-			Threads.Unlock(tcpMtx)
-		END
+		hostInfo := NIL; ASSERT(ready);
+		NEW(hostInfo); NEW(hostInfo.event); Threads.Create(hostInfo.event);
+		hostInfo.getip := FALSE; hostInfo.next := NIL; SYSTEM.MOVE(SYSTEM.ADR(IP), SYSTEM.ADR(hostInfo.ip), IPAdrLen);
+		hostInfo.err := TRUE; hostInfo.handle := 0; Threads.Lock(tcpMtx);
+		hostInfo.handle := WSock32.WSAAsyncGetHostByAddr(Windows.dummyWin.hWnd, WMGetHostInfo, hostInfo.ip, IPAdrLen, WSock32.PFINet, hostInfo.hostentBuf, WSock32.MAXGETHOSTSTRUCT);
+		IF hostInfo.handle # Kernel32.InvalidHandleValue THEN
+			hostInfo.next := hostInfos; hostInfos := hostInfo
+		ELSE
+			Threads.Set(hostInfo.event)
+		END;
+		Threads.Unlock(tcpMtx)
 	END AsyncGetName;
 
 (** GetName is the reverse of GetIP. Given an ip-number, it delivers the name of a host. *)
 	PROCEDURE GetName*(IP: IPAdr; VAR name: ARRAY OF CHAR);
 		VAR hostInfo: HostInfo;
 	BEGIN
-		COPY("", name);
-		IF ready THEN
-			AsyncGetName(hostInfo, IP);
-			IF hostInfo # NIL THEN
-				Threads.Wait(hostInfo.event, GetNameTimeOut);
-				IF ~hostInfo.err THEN
-					COPY(hostInfo.name, name)
-				END
-			END
-		END
+		COPY("", name); ASSERT(ready);
+		AsyncGetName(hostInfo, IP);
+		IF (hostInfo # NIL) & Threads.Wait(hostInfo.event, GetNameTimeOut) & ~hostInfo.err THEN COPY(hostInfo.name, name) END
 	END GetName;
 
-	PROCEDURE FreeConnTabEntry(): INTEGER;
-		VAR
-			i: INTEGER;
-			firstTry: BOOLEAN;
+	PROCEDURE FreeConnTabEntry(): LONGINT;
+		VAR i: LONGINT; firstTry: BOOLEAN;
 	BEGIN
 		firstTry := TRUE;
 		LOOP
@@ -433,101 +336,72 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 		END
 	END FreeConnTabEntry;
 
-	PROCEDURE *ConnectionFinalizer(C: PTR);
-	BEGIN
-		WITH C: Connection DO
-			IF C.sock # InvalidSocket THEN
-				WSAAsyncSelect(C.sock, Win32.Display, 0, 0);
-				closesocket(C.sock); C.sock := InvalidSocket
-			END;
-			IF C.nr < ConnTabSize THEN
-				ConnTab[C.nr] := SYSTEM.VAL(LONGINT, NIL); C.nr := ConnTabSize
-			END
-		END
-	END ConnectionFinalizer;
-
-	PROCEDURE ^ Start*;
-	PROCEDURE ^ Stop*;
-
 	PROCEDURE OpenConn(VAR C: Connection; locPort: INTEGER; remIP: IPAdr; remPort: INTEGER; VAR res: INTEGER);
-		VAR
-			sadr: SockAddr;
-			ret, err: LONGINT;
-			oldC: Connection;
+		VAR sadr: WSock32.SockAddrIN; ret, err: LONGINT;
 	BEGIN
-		IF ~ready OR (hostIP = localhost) THEN Stop(); Start() END;
+		ASSERT(ready);
 		Threads.Lock(tcpMtx);
 		res := error; C := NIL;
-		IF ready THEN
-			IF remPort = anyport THEN
-				IF locPort # anyport THEN
-					ret := FreeConnTabEntry();
-					NEW(C); C.nr := SHORT(ret);
-					NEW(C.lock); Threads.Init(C.lock); Threads.Lock(C.lock);
-					NEW(C.event); Threads.Create(C.event, FALSE, FALSE);
-					C.res := error; C.sock := socket(PFInet, SockStream, IPProtoTCP);
-					IF C.sock # InvalidSocket THEN
-						oldC := FindConnection(C.sock);
-						IF oldC # NIL THEN
-							Threads.Unlock(C.lock); Threads.Unlock(tcpMtx); HALT(99)
-						END;
-						sadr.family := PFInet; sadr.port := htons(locPort); sadr.internetAddr := 0;
-						ret := bind(C.sock, SYSTEM.ADR(sadr), SIZE(SockAddr));
-						IF ret # 0 THEN
-							closesocket(C.sock); C.sock := InvalidSocket
-						ELSE
-							C.state := waitCon; C.req := 0;
-							ConnTab[C.nr] := SYSTEM.VAL(LONGINT, C);
-							ret := WSAAsyncSelect(C.sock, Win32.Display, WMConnect, FDAccept);
-							IF ret = 0 THEN
-								ret := listen(C.sock, MaxAccept);
-								IF ret # 0 THEN
-									err := WSAGetLastError()
-								END;
-								IF (ret = 0) OR (err = WSAEWOULDBLOCK) THEN
-									Kernel.RegisterObject(C, ConnectionFinalizer, FALSE);
-									C.state := listening; res := done
-								END;
-								Threads.Set(C.event)
-							END
+		IF remPort = anyport THEN
+			IF locPort # anyport THEN
+				ret := FreeConnTabEntry();
+				NEW(C); C.nr := ret;
+				NEW(C.event); Threads.Create(C.event);
+				C.res := error; C.sock := WSock32.socket(WSock32.PFINet, WSock32.SockStream, WSock32.IPProtoTCP);
+				IF C.sock # WSock32.InvalidSocket THEN
+					IF FindConnection(C.sock) # NIL THEN Threads.Unlock(tcpMtx); HALT(99) END;
+					sadr.sinFamily := WSock32.PFINet; sadr.sinPort := WSock32.htons(locPort); sadr.sinAddr := 0;
+					ret := WSock32.bind(C.sock, sadr, SIZE(WSock32.SockAddrIN));
+					IF ret # 0 THEN
+						ConnectionFinalizer(C)
+					ELSE
+						C.state := waitCon; C.req := 0;
+						ConnTab[C.nr] := SYSTEM.VAL(LONGINT, C);
+						ret := WSock32.WSAAsyncSelect(C.sock, Windows.dummyWin.hWnd, WMConnect, WSock32.FDAccept);
+						IF ret = 0 THEN
+							ret := WSock32.listen(C.sock, MaxAccept);
+							IF ret # 0 THEN
+								err := WSock32.WSAGetLastError()
+							END;
+							IF (ret = 0) OR (err = WSock32.WSAEWouldBlock) THEN
+								Kernel.RegisterObject(C, ConnectionFinalizer, FALSE);
+								C.state := listening; res := done
+							END;
+							Threads.Set(C.event)
 						END
 					END
 				END
-			ELSE
-				ret := FreeConnTabEntry();
-				NEW(C); C.nr := SHORT(ret);
-				NEW(C.lock); Threads.Init(C.lock); Threads.Lock(C.lock);
-				NEW(C.event); Threads.Create(C.event, FALSE, FALSE);
-				C.res := error; C.sock := socket(PFInet, SockStream, IPProtoTCP);
-				IF C.sock # InvalidSocket THEN
-					oldC := FindConnection(C.sock);
-					IF oldC # NIL THEN
-						Threads.Unlock(C.lock); Threads.Unlock(tcpMtx); HALT(99)
-					END;
-					IF locPort # anyport THEN
-						sadr.family := PFInet; sadr.port := htons(locPort); sadr.internetAddr := 0;
-						ret := bind(C.sock, SYSTEM.ADR(sadr), SIZE(SockAddr));
+			END
+		ELSE
+			ret := FreeConnTabEntry();
+			NEW(C); C.nr := ret;
+			NEW(C.event); Threads.Create(C.event);
+			C.res := error; C.sock := WSock32.socket(WSock32.PFINet, WSock32.SockStream, WSock32.IPProtoTCP);
+			IF C.sock # WSock32.InvalidSocket THEN
+				IF FindConnection(C.sock) # NIL THEN Threads.Unlock(tcpMtx); HALT(99) END;
+				IF locPort # anyport THEN
+					sadr.sinFamily := WSock32.PFINet; sadr.sinPort := WSock32.htons(locPort); sadr.sinAddr := 0;
+					ret := WSock32.bind(C.sock, sadr, SIZE(WSock32.SockAddrIN));
+					IF ret # 0 THEN
+						ConnectionFinalizer(C)
+					END
+				END;
+				IF C.sock # WSock32.InvalidSocket THEN
+					C.state := waitCon; C.req := 0;
+					ConnTab[C.nr] := SYSTEM.VAL(LONGINT, C);
+					ret := WSock32.WSAAsyncSelect(C.sock, Windows.dummyWin.hWnd, WMConnect, WSock32.FDConnect+WSock32.FDRead+WSock32.FDWrite+WSock32.FDClose);
+					IF ret = 0 THEN
+						sadr.sinFamily := WSock32.PFINet; sadr.sinPort := WSock32.htons(remPort);
+						SYSTEM.MOVE(SYSTEM.ADR(remIP), SYSTEM.ADR(sadr.sinAddr), IPAdrLen);
+						ret := WSock32.connect(C.sock, sadr, SIZE(WSock32.SockAddrIN));
 						IF ret # 0 THEN
-							closesocket(C.sock); C.sock := InvalidSocket
-						END
-					END;
-					IF C.sock # InvalidSocket THEN
-						C.state := waitCon; C.req := 0;
-						ConnTab[C.nr] := SYSTEM.VAL(LONGINT, C);
-						ret := WSAAsyncSelect(C.sock, Win32.Display, WMConnect, FDConnect+FDRead+FDWrite+FDClose);
-						IF ret = 0 THEN
-							sadr.family := PFInet; sadr.port := htons(remPort);
-							SYSTEM.MOVE(SYSTEM.ADR(remIP), SYSTEM.ADR(sadr.internetAddr), IPAdrLen);
-							ret := connect(C.sock, SYSTEM.ADR(sadr), SIZE(SockAddr));
-							IF ret # 0 THEN
-								err := WSAGetLastError()
-							END;
-							IF (ret = 0) OR (err = WSAEWOULDBLOCK) THEN
-								ret := WSAAsyncSelect(C.sock, Win32.Display, WMConnect, FDConnect+FDRead+FDWrite+FDClose);
-								IF ret = 0 THEN
-									Kernel.RegisterObject(C, ConnectionFinalizer, FALSE);
-									res := done
-								END
+							err := WSock32.WSAGetLastError()
+						END;
+						IF (ret = 0) OR (err = WSock32.WSAEWouldBlock) THEN
+							ret := WSock32.WSAAsyncSelect(C.sock, Windows.dummyWin.hWnd, WMConnect, WSock32.FDConnect+WSock32.FDRead+WSock32.FDWrite+WSock32.FDClose);
+							IF ret = 0 THEN
+								Kernel.RegisterObject(C, ConnectionFinalizer, FALSE);
+								res := done
 							END
 						END
 					END
@@ -538,14 +412,9 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 		IF C # NIL THEN
 			IF res = done THEN
 				C.sendBufEnd := 0; C.recBufPos := 0; C.recBufEnd := 0;
-				C.res := done;
-				Threads.Unlock(C.lock)
+				C.res := done
 			ELSE
-				IF C.sock # InvalidSocket THEN
-					closesocket(C.sock); C.sock := InvalidSocket
-				END;
-				Threads.Unlock(C.lock); ConnTab[C.nr] := SYSTEM.VAL(LONGINT, NIL);
-				C := NIL
+				ConnectionFinalizer(C); C := NIL
 			END
 		END
 	END OpenConn;
@@ -557,24 +426,22 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 	anyport or remIP is equal to anyIP, a passive connection will be opened. After execution, C is a brand new connection.
 	res indicates any error. *)
 	PROCEDURE OpenConnection*(VAR C: Connection; locPort: INTEGER; remIP: IPAdr; remPort: INTEGER; VAR res: INTEGER);
+		VAR ok: BOOLEAN;
 	BEGIN
 		OpenConn(C, locPort, remIP, remPort, res);
 		IF res = done THEN
-			Threads.Lock(C.lock);
 			IF C.res = done THEN
-				Threads.Wait(C.event, OpenConnectionTimeOut)
+				ok := Threads.Wait(C.event, OpenConnectionTimeOut)
 			END;
-			Threads.Unlock(C.lock);
 			IF C.state IN {in, out, inout, listening, closed} THEN
-				res := done; RETURN
+				res := done
 			ELSE
-				res := error
-			END;
-			C := NIL
+				res := error; C := NIL
+			END
 		END
 	END OpenConnection;
 
-(** Like OpenConnection, but this procedure may return immediately and delay the actual opening of the connection.  
+(** Like OpenConnection, but this procedure may return immediately and delay the actual opening of the connection.
 	In this case State() should be checked to wait for the connection status to change from waitCon. *)
 	PROCEDURE AsyncOpenConnection*(VAR C: Connection; locPort: INTEGER; remIP: IPAdr; remPort: INTEGER; VAR res: INTEGER);
 	BEGIN
@@ -584,50 +451,36 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 	PROCEDURE FlushSendBuffer(C: Connection);
 		VAR ret, err, beg: LONGINT;
 	BEGIN
-		IF ready & (C.sendBufEnd > 0) & (C.state # listening) THEN
-			beg := 0;
-			WHILE C.sendBufEnd > beg DO
-				WSAAsyncSelect(C.sock, Win32.Display, WMConnect, FDRead+FDWrite+FDClose);
-				ret := send(C.sock, SYSTEM.ADR(C.sendBuf)+beg, C.sendBufEnd-beg, 0);
-				IF ret <= 0 THEN
-					err := WSAGetLastError();
-					IF err # WSAEWOULDBLOCK THEN
-						Console.Str("FlushSendBuffer error "); Console.Int(err); Console.Ln();
-						IF (err = WSAEINVAL) OR (err = WSAECONNABORTED) OR (err = WSAECONNRESET) THEN
-							C.state := closed; C.sendBufEnd := 0; C.res := error; RETURN
-						ELSE
-							C.res := error; Threads.Unlock(C.lock); HALT(99)
-						END
-					ELSIF C.state IN {in, out, inout} THEN
-						Threads.Wait(C.event, SendTimeOut)
-					ELSE
-						Console.Str("FlushSendBuffer state "); Console.Int(C.state); Console.Ln()
-					END
+		beg := 0;
+		WHILE (C.sendBufEnd > beg) & (C.res = done) DO
+			ret := WSock32.send(C.sock, C.sendBuf[beg], C.sendBufEnd-beg, 0);
+			IF ret <= 0 THEN
+				err := WSock32.WSAGetLastError();
+				IF err # WSock32.WSAEWouldBlock THEN
+					Kernel32.Str("FlushSendBuffer error "); Kernel32.Int(err); Kernel32.Ln();
+					IF (err = WSock32.WSAEInval) OR (err = WSock32.WSAEConnAborted) OR (err = WSock32.WSAEConnReset) THEN
+						C.state := closed; C.sendBufEnd := 0
+					END;
+					C.res := error
 				ELSE
-					INC(beg, ret)
+					WSock32.WSAAsyncSelect(C.sock, Windows.dummyWin.hWnd, WMConnect, WSock32.FDRead+WSock32.FDWrite+WSock32.FDClose);
+					IF ~Threads.Wait(C.event, SendTimeOut) THEN C.res := error END
 				END
-			END;
-			IF C.sendBufEnd # beg THEN
-				C.res := error; Threads.Unlock(C.lock); HALT(99)
 			ELSE
-				C.sendBufEnd := 0
+				INC(beg, ret)
 			END
-		END
+		END;
+		IF C.sendBufEnd = beg THEN C.sendBufEnd := 0 END
 	END FlushSendBuffer;
 
 (** Procedure closes the connection. Connection can not be used for send operations afterwards. *)
 	PROCEDURE CloseConnection*(C: Connection);
 	BEGIN
-		IF (C # NIL) & (C.sock # InvalidSocket) & ready THEN
-			Threads.Lock(C.lock);
-			IF (C.sendBufEnd > 0) & (C.state # listening) THEN
-				FlushSendBuffer(C); C.res := done
-			END;
-			WSAAsyncSelect(C.sock, Win32.Display, 0, 0);
-			closesocket(C.sock); C.sock := InvalidSocket;
-			C.state := closed;
-			Threads.Unlock(C.lock);
-			C.res := done
+		ASSERT(ready);
+		IF C.sock # WSock32.InvalidSocket THEN
+			FlushSendBuffer(C);
+			ConnectionFinalizer(C);
+			C.state := closed
 		END
 	END CloseConnection;
 
@@ -635,6 +488,7 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 	defined on passive connections. For active connections (State(C) # listen), it always delivers FALSE. *)
 	PROCEDURE Requested*(C: Connection): BOOLEAN;
 	BEGIN
+		ASSERT(ready);
 		RETURN C.req > 0
 	END Requested;
 
@@ -642,52 +496,38 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 	waiting, accept blocks until there is one or an error occurs. If C is not a passive connection, Accept does nothing
 	but res is set to Done. *)
 	PROCEDURE Accept*(C: Connection; VAR newC: Connection; VAR res: INTEGER);
-		VAR ret: LONGINT; oldC: Connection;
+		VAR ret: LONGINT;
 	BEGIN
+		ASSERT(ready);
 		newC := NIL; res := error;
-		IF ready THEN
-			IF (C # NIL) & (C.req > 0) THEN
-				Threads.Lock(tcpMtx); Threads.Lock(C.lock);
-				ret := FreeConnTabEntry();
-				NEW(newC); newC.nr := SHORT(ret);
-				NEW(newC.lock); Threads.Init(newC.lock); Threads.Lock(newC.lock);
-				NEW(newC.event); Threads.Create(newC.event, FALSE, FALSE);
-				newC.res := error; newC.sock := accept(C.sock, 0, 0); DEC(C.req);
-				IF newC.sock = InvalidSocket THEN
-					C.res := error; Threads.Unlock(newC.lock); newC := NIL
-				ELSE
-					C.res := done;
-					oldC := FindConnection(newC.sock);
-					IF oldC # NIL THEN
-						Threads.Unlock(C.lock); Threads.Unlock(newC.lock); Threads.Unlock(tcpMtx); HALT(99)
-					END;
-					newC.state := inout; newC.req := 0;
-					newC.recBufPos := 0; newC.recBufEnd := 0; newC.sendBufEnd := 0;
-					ConnTab[newC.nr] := SYSTEM.VAL(LONGINT, newC);
-					ret := WSAAsyncSelect(newC.sock, Win32.Display, WMConnect, FDRead+FDWrite+FDClose);
-					IF ret = 0 THEN
-						Kernel.RegisterObject(newC, ConnectionFinalizer, FALSE);
-						newC.res := done; res := done
-					ELSE
-						ConnTab[newC.nr] := SYSTEM.VAL(LONGINT, NIL);
-						closesocket(newC.sock); newC.sock := InvalidSocket
-					END;
-					Threads.Unlock(newC.lock)
-				END;
-				WSAAsyncSelect(C.sock, Win32.Display, WMConnect, FDAccept);
-				Threads.Unlock(C.lock); Threads.Unlock(tcpMtx)
-			END
+		IF C.req > 0 THEN
+			Threads.Lock(tcpMtx);
+			ret := FreeConnTabEntry();
+			NEW(newC); newC.nr := ret;
+			NEW(newC.event); Threads.Create(newC.event);
+			newC.res := error; newC.sock := WSock32.accept(C.sock, NIL, NIL); DEC(C.req);
+			IF newC.sock = WSock32.InvalidSocket THEN
+				C.res := error; newC := NIL
+			ELSE
+				C.res := done;
+				IF FindConnection(newC.sock) # NIL THEN Threads.Unlock(tcpMtx); HALT(99) END;
+				newC.state := inout; newC.req := 0;
+				newC.recBufPos := 0; newC.recBufEnd := 0; newC.sendBufEnd := 0;
+				ConnTab[newC.nr] := SYSTEM.VAL(LONGINT, newC);
+				WSock32.WSAAsyncSelect(newC.sock, Windows.dummyWin.hWnd, WMConnect, WSock32.FDRead+WSock32.FDWrite+WSock32.FDClose);
+				Kernel.RegisterObject(newC, ConnectionFinalizer, FALSE);
+				newC.res := done; res := done
+			END;
+			WSock32.WSAAsyncSelect(C.sock, Windows.dummyWin.hWnd, WMConnect, WSock32.FDAccept);
+			Threads.Unlock(tcpMtx)
 		END
 	END Accept;
 
 (** Procedure returns the state of a connection (see constant section). *)
 	PROCEDURE State*(C: Connection): INTEGER;
 	BEGIN
-		Threads.Lock(C.lock);
-		IF (C.sendBufEnd > 0) & ~(C.state IN {closed, listening}) THEN
-			FlushSendBuffer(C); C.res := done
-		END;
-		Threads.Unlock(C.lock);
+		ASSERT(ready);
+		IF C.sendBufEnd > 0 THEN FlushSendBuffer(C) END;
 		RETURN C.state
 	END State;
 
@@ -695,82 +535,60 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 	PROCEDURE Available*(C: Connection): LONGINT;
 		VAR err, ret, avail: LONGINT;
 	BEGIN
-		IF (C # NIL) & ready THEN
-			Threads.Lock(C.lock);
-			IF (C.sendBufEnd > 0) & (C.state # listening) THEN
-				FlushSendBuffer(C); C.res := done
+		ASSERT(ready);
+		IF C.sendBufEnd > 0 THEN FlushSendBuffer(C) END;
+		avail := C.recBufEnd-C.recBufPos;
+		IF (avail < RecBufLimit) & (C.sock # WSock32.InvalidSocket) THEN
+			IF avail <= 0 THEN
+				avail := 0;
+				ret := WSock32.recv(C.sock, C.recBuf[0], RecBufSize, 0)
+			ELSIF C.recBufPos = 0 THEN
+				ret := WSock32.recv(C.sock, C.recBuf[C.recBufEnd], RecBufSize-avail, 0)
+			ELSE
+				SYSTEM.MOVE(SYSTEM.ADR(C.recBuf[C.recBufPos]), SYSTEM.ADR(C.recBuf[0]), avail);
+				ret := WSock32.recv(C.sock, C.recBuf[avail], RecBufSize-avail, 0)
 			END;
+			IF ret < 0 THEN (* SocketError *)
+				err := WSock32.WSAGetLastError();
+				IF (err = WSock32.WSAEInval) OR (err = WSock32.WSAEConnAborted) OR (err = WSock32.WSAEConnReset) THEN
+					Kernel32.Str("Available error "); Kernel32.Int(err); Kernel32.Ln();
+					C.state := closed; C.res := error
+				ELSIF (err # WSock32.WSAEWouldBlock) & (err # WSock32.WSAENoBufs) THEN
+					C.res := error
+				END;
+				ret := 0
+			ELSE
+				WSock32.WSAAsyncSelect(C.sock, Windows.dummyWin.hWnd, WMConnect, WSock32.FDRead+WSock32.FDWrite+WSock32.FDClose)
+			END;
+			C.recBufPos := 0; C.recBufEnd := avail+ret;
 			avail := C.recBufEnd-C.recBufPos;
-			IF (avail < RecBufLimit) & (C.sock # InvalidSocket) THEN
-				WSAAsyncSelect(C.sock, Win32.Display, WMConnect, FDRead+FDWrite+FDClose);
-				IF avail <= 0 THEN
-					avail := 0;
-					ret := recv(C.sock, SYSTEM.ADR(C.recBuf[0]), RecBufSize, 0)
-				ELSIF C.recBufPos = 0 THEN
-					ret := recv(C.sock, SYSTEM.ADR(C.recBuf[C.recBufEnd]), RecBufSize-avail, 0)
-				ELSE
-					(* FOR ret := 0 TO avail-1 DO
-						C.recBuf[ret] := C.recBuf[ret+C.recBufPos]
-					END; *)
-					SYSTEM.MOVE(SYSTEM.ADR(C.recBuf[C.recBufPos]), SYSTEM.ADR(C.recBuf[0]), avail);
-					ret := recv(C.sock, SYSTEM.ADR(C.recBuf[avail]), RecBufSize-avail, 0)
-				END;
-				IF ret < 0 THEN
-					err := WSAGetLastError();
-					IF (err = WSAEINVAL) OR (err = WSAECONNABORTED) OR (err = WSAECONNRESET) THEN
-						Console.Str("Available error "); Console.Int(err); Console.Ln();
-						C.state := closed; C.res := error
-					ELSIF (err # WSAEWOULDBLOCK) & (err # WSAENOBUFS) THEN
-						C.res := error; Threads.Unlock(C.lock); HALT(99)
-					END;
-					ret := 0
-				ELSIF ret = 0 THEN
-					IF C.state IN {in, out, inout} THEN
-						Threads.Wait(C.event, ReceiveTimeOut)
-					ELSIF C.state # closed THEN
-						Console.Str("Available state "); Console.Int(C.state); Console.Ln()
-					END
-				END;
-				C.recBufPos := 0; C.recBufEnd := avail+ret;
-				avail := C.recBufEnd-C.recBufPos
-			END;
-			Threads.Unlock(C.lock);
-			RETURN avail
-		ELSE
-			RETURN 0
-		END
+			ASSERT(C.res = done)
+		END;
+		RETURN avail
 	END Available;
 
 (** Procedure delivers the ip-number and port number of a connection's remote partner. *)
 	PROCEDURE GetPartner*(C: Connection; VAR remIP: IPAdr; VAR remPort: INTEGER);
-		VAR
-			saddr: SockAddr;
-			ret, len: LONGINT;
+		VAR saddr: WSock32.SockAddrIN; ret, len: LONGINT;
 	BEGIN
-		IF (C # NIL) & (C.state IN {in, out, inout}) & ready THEN
-			Threads.Lock(C.lock);
-			len := SIZE(SockAddr);
-			ret := getpeername(C.sock, SYSTEM.ADR(saddr), SYSTEM.ADR(len));
-			Threads.Unlock(C.lock);
-			IF ret = 0 THEN
-				remPort := ntohs(saddr.port);
-				SYSTEM.MOVE(SYSTEM.ADR(saddr.internetAddr), SYSTEM.ADR(remIP), IPAdrLen);
-				C.res := done;
-				RETURN
-			ELSE
-				C.res := error
-			END
-		END;
-		remIP := anyIP; remPort := anyport
+		ASSERT(ready);
+		len := SIZE(WSock32.SockAddrIN);
+		ret := WSock32.getpeername(C.sock, saddr, len);
+		IF ret = 0 THEN
+			remPort := WSock32.ntohs(saddr.sinPort);
+			SYSTEM.MOVE(SYSTEM.ADR(saddr.sinAddr), SYSTEM.ADR(remIP), IPAdrLen);
+			C.res := done
+		ELSE
+			remIP := anyIP; remPort := anyport; C.res := error
+		END
 	END GetPartner;
 
 (** Blocking write len bytes of data (beginning at pos in buf) to C. *)
 	PROCEDURE WriteBytes*(C: Connection; pos, len: LONGINT; VAR x: ARRAY OF SYSTEM.BYTE);
 		VAR free, clen: LONGINT;
 	BEGIN
-		ASSERT(LEN(x) >= (pos+len));
-		Threads.Lock(C.lock); C.res := done;
-		WHILE (len > 0) & ready & (C.res = done) DO
+		ASSERT((LEN(x) >= (pos+len)) & ready);
+		WHILE (len > 0) & (C.res = done) DO
 			free := SendBufSize-C.sendBufEnd;
 			IF len <= free THEN
 				clen := len
@@ -782,8 +600,7 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 			IF C.sendBufEnd >= SendBufSize THEN
 				FlushSendBuffer(C)
 			END
-		END;
-		Threads.Unlock(C.lock)
+		END
 	END WriteBytes;
 
 (** Blocking write a single byte to C. *)
@@ -795,13 +612,13 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 (** Blocking write two bytes in network byte ordering to C. *)
 	PROCEDURE WriteInt*(C: Connection; x: INTEGER);
 	BEGIN
-		x := htons(x); WriteBytes(C, 0, 2, x)
+		x := WSock32.htons(x); WriteBytes(C, 0, 2, x)
 	END WriteInt;
 
 (** Blocking write four bytes in network byte ordering to C. *)
 	PROCEDURE WriteLInt*(C: Connection; x: LONGINT);
 	BEGIN
-		x := htonl(x); WriteBytes(C, 0, 4, x)
+		x := WSock32.htonl(x); WriteBytes(C, 0, 4, x)
 	END WriteLInt;
 
 (** Blocking write a string without "0X" and terminated by "CRLF" to C. *)
@@ -811,20 +628,16 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 		i := 0;
 		WHILE s[i] # 0X DO INC(i) END;
 		WriteBytes(C, 0, i, s);
-		Write(C, CR); Write(C, LF)
+		WriteBytes(C, 0, 2, Strings.CRLF)
 	END WriteString;
 
 (** Blocking read len bytes of data (beginning at pos in buf) to buf. *)
 	PROCEDURE ReadBytes*(C: Connection; pos, len: LONGINT; VAR x: ARRAY OF SYSTEM.BYTE);
 		VAR ret, err, free, clen: LONGINT;
 	BEGIN
-		ASSERT(LEN(x) >= (pos+len));
-		Threads.Lock(C.lock);
-		IF (C.sendBufEnd > 0) & (C.state # listening) THEN
-			FlushSendBuffer(C)
-		END;
-		C.res := done;
-		WHILE (len > 0) & ready & (C.state # listening) DO
+		ASSERT((LEN(x) >= (pos+len)) & ready);
+		IF C.sendBufEnd > 0 THEN FlushSendBuffer(C) END;
+		WHILE (len > 0) & (C.res = done) DO
 			free := C.recBufEnd-C.recBufPos;
 			IF free > 0 THEN
 				IF len <= free THEN
@@ -836,35 +649,28 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 				INC(C.recBufPos, clen); INC(pos, clen); DEC(len, clen)
 			ELSE
 				C.recBufPos := 0; C.recBufEnd := 0;
-				IF C.sock # InvalidSocket THEN
-					WSAAsyncSelect(C.sock, Win32.Display, WMConnect, FDRead+FDWrite+FDClose);
-					ret := recv(C.sock, SYSTEM.ADR(C.recBuf[0]), RecBufSize, 0);
-					IF ret < 0 THEN
-						err := WSAGetLastError();
-						IF (err = WSAEINVAL) OR (err = WSAECONNABORTED) OR (err = WSAECONNRESET) THEN
-							Console.Str("ReadBytes error "); Console.Int(err); Console.Ln();
+				IF C.sock # WSock32.InvalidSocket THEN
+					ret := WSock32.recv(C.sock, C.recBuf[0], RecBufSize, 0);
+					IF ret < 0 THEN (* SocketError *)
+						err := WSock32.WSAGetLastError();
+						IF (err = WSock32.WSAEInval) OR (err = WSock32.WSAEConnAborted) OR (err = WSock32.WSAEConnReset) THEN
+							Kernel32.Str("ReadBytes error "); Kernel32.Int(err); Kernel32.Ln();
 							C.state := closed; C.res := error
-						ELSIF (err # WSAEWOULDBLOCK) & (err # WSAENOBUFS) THEN
-							C.res := error; Threads.Unlock(C.lock); HALT(99)
+						ELSIF (err # WSock32.WSAEWouldBlock) & (err # WSock32.WSAENoBufs) THEN
+							C.res := error
 						END
 					ELSIF ret = 0 THEN
-						IF C.state IN {in, out, inout} THEN
-							Threads.Wait(C.event, ReceiveTimeOut)
-						ELSIF C.state # closed THEN
-							Console.Str("ReadBytes state "); Console.Int(C.state); Console.Ln()
-						END
+						WSock32.WSAAsyncSelect(C.sock, Windows.dummyWin.hWnd, WMConnect, WSock32.FDRead+WSock32.FDWrite+WSock32.FDClose);
+						IF ~Threads.Wait(C.event, ReceiveTimeOut) THEN C.res := error END
 					ELSE
 						C.recBufEnd := ret
 					END
 				ELSE
-					C.res := error; Threads.Unlock(C.lock); HALT(99)
+					C.res := error
 				END
 			END
 		END;
-		Threads.Unlock(C.lock);
-		IF len > 0 THEN
-			HALT(99)
-		END
+		ASSERT(C.res = done)
 	END ReadBytes;
 
 (** Blocking read a single byte. *)
@@ -876,20 +682,18 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 (** Blocking read two bytes in network byte ordering. *)
 	PROCEDURE ReadInt*(C: Connection; VAR x: INTEGER);
 	BEGIN
-		ReadBytes(C, 0, 2, x); x := ntohs(x);
+		ReadBytes(C, 0, 2, x); x := WSock32.ntohs(x);
 	END ReadInt;
 
 (** Blocking read four bytes in network byte ordering. *)
 	PROCEDURE ReadLInt*(C: Connection; VAR x: LONGINT);
 	BEGIN
-		ReadBytes(C, 0, 4, x); x := ntohl(x);
+		ReadBytes(C, 0, 4, x); x := WSock32.ntohl(x);
 	END ReadLInt;
 
 (** Blocking read a string terminated by ( [CR]LF | 0X ). *)
 	PROCEDURE ReadString*(C: Connection; VAR s: ARRAY OF CHAR);
-		VAR
-			i, l: LONGINT;
-			ch, ch0: CHAR;
+		VAR i, l: LONGINT; ch, ch0: CHAR;
 	BEGIN
 		i := 0; ch := 1X; ch0 := 1X; l := Available(C);
 		REPEAT
@@ -898,14 +702,12 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 				s[i] := ch; INC(i); DEC(l)
 			ELSE
 				l := Available(C);
-				(* IF l <= 0 THEN
-					Threads.Sleep(20)
-				END *)
+				Threads.Pass()
 			END
-		UNTIL (ch = 0X) OR (ch = LF) OR ((l <= 0) & ~(C.state IN {in, inout}));
-		IF (ch = LF) & (ch0 = CR) THEN
+		UNTIL (ch = 0X) OR (ch = Strings.LF) OR ((l <= 0) & ~(C.state IN {in, inout}));
+		IF (ch = Strings.LF) & (ch0 = Strings.CR) THEN
 			s[i-2] := 0X
-		ELSIF (ch = LF) OR (ch = CR) THEN
+		ELSIF (ch = Strings.LF) OR (ch = Strings.CR) THEN
 			s[i-1] := 0X
 		ELSE
 			s[i] := 0X
@@ -917,8 +719,8 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 	PROCEDURE *SockFinalizer(S: PTR);
 	BEGIN
 		WITH S: Socket DO
-			IF S.sock # InvalidSocket THEN
-				closesocket(S.sock); S.sock := InvalidSocket
+			IF S.sock # WSock32.InvalidSocket THEN
+				WSock32.closesocket(S.sock); S.sock := WSock32.InvalidSocket
 			END
 		END
 	END SockFinalizer;
@@ -926,26 +728,25 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 (** Opens a socket which is dedicated to datagram services. locPort is registered to receive datagrams
 	from any port and any host. *)
 	PROCEDURE OpenSocket*(VAR S: Socket; locPort: INTEGER; VAR res: INTEGER);
-		VAR ret: LONGINT; sadr: SockAddr;
+		VAR ret: LONGINT; sadr: WSock32.SockAddrIN;
 	BEGIN
-		IF ~ready OR (hostIP = localhost) THEN Stop(); Start() END;
+		ASSERT(ready);
 		NEW(S); res := error;
-		IF ready THEN
-			NEW(S.lock); Threads.Init(S.lock); Threads.Lock(S.lock);
+		S.sock := WSock32.socket(WSock32.PFINet, WSock32.SockDGram, WSock32.IPProtoUDP);
+		IF S.sock # WSock32.InvalidSocket THEN
+			sadr.sinFamily := WSock32.PFINet; sadr.sinAddr := 0;
 			IF locPort # anyport THEN
-				S.sock := socket(PFInet, SockDgram, IPProtoUDP);
-				IF S.sock # InvalidSocket THEN
-					sadr.family := PFInet; sadr.port := htons(locPort); sadr.internetAddr := 0;
-					ret := bind(S.sock, SYSTEM.ADR(sadr), SIZE(SockAddr));
-					IF ret # 0 THEN
-						SockFinalizer(S)
-					ELSE
-						res := done;
-						Kernel.RegisterObject(S, SockFinalizer, FALSE)
-					END
-				END
+				sadr.sinPort := WSock32.htons(locPort)
+			ELSE
+				sadr.sinPort := 0
 			END;
-			Threads.Unlock(S.lock)
+			ret := WSock32.bind(S.sock, sadr, SIZE(WSock32.SockAddrIN));
+			IF ret # 0 THEN
+				SockFinalizer(S)
+			ELSE
+				Kernel.RegisterObject(S, SockFinalizer, FALSE);
+				res := done
+			END
 		END;
 		IF res # done THEN S := NIL END
 	END OpenSocket;
@@ -953,49 +754,39 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 (** Closes the socket. You can not receive datagrams anymore. *)
 	PROCEDURE CloseSocket*(S: Socket);
 	BEGIN
-		Threads.Lock(S.lock);
-		SockFinalizer(S);
-		Threads.Unlock(S.lock)
+		ASSERT(ready);
+		SockFinalizer(S)
 	END CloseSocket;
 
 (** Sends len bytes of data (beginning at pos in buf) to the host specified by remIP and remPort. *)
 	PROCEDURE SendDG*(S: Socket; remIP: IPAdr; remPort: INTEGER; pos, len: LONGINT; VAR buf: ARRAY OF SYSTEM.BYTE);
-		VAR
-			ret: LONGINT;
-			sadr: SockAddr;
+		VAR ret: LONGINT; sadr: WSock32.SockAddrIN;
 	BEGIN
-		ASSERT(LEN(buf) >= (pos+len));
-		Threads.Lock(S.lock);
-		SYSTEM.MOVE(SYSTEM.ADR(remIP), SYSTEM.ADR(sadr.internetAddr), IPAdrLen);
-		sadr.family := PFInet; sadr.port := htons(remPort);
-		ret := sendto(S.sock, SYSTEM.ADR(buf[pos]), len, 0, SYSTEM.ADR(sadr), SIZE(SockAddr));
-		S.res := SHORT(ret);
-		Threads.Unlock(S.lock)
+		ASSERT((LEN(buf) >= (pos+len)) & ready);
+		SYSTEM.MOVE(SYSTEM.ADR(remIP), SYSTEM.ADR(sadr.sinAddr), IPAdrLen);
+		sadr.sinFamily := WSock32.PFINet; sadr.sinPort := WSock32.htons(remPort);
+		ret := WSock32.sendto(S.sock, buf[pos], len, 0, sadr, SIZE(WSock32.SockAddrIN));
+		S.res := SHORT(ret)
 	END SendDG;
 
 (** Stores an entire datagram in buf beginning at pos. On success, remIP and remPort indicate the sender, len indicate the
 	length of valid data. *)
 	PROCEDURE ReceiveDG*(S: Socket; VAR remIP: IPAdr; VAR remPort: INTEGER; pos: LONGINT; VAR len: LONGINT; VAR buf: ARRAY OF SYSTEM.BYTE);
-		VAR	
-			l: LONGINT;
-			sadr: SockAddr;
+		VAR l: LONGINT; sadr: WSock32.SockAddrIN;
 	BEGIN
-		ASSERT(pos <= LEN(buf));
-		Threads.Lock(S.lock);
-		l := SIZE(SockAddr);
-		len := recvfrom(S.sock, SYSTEM.ADR(buf[pos]), LEN(buf)-pos, 0, SYSTEM.ADR(sadr), SYSTEM.ADR(l));
-		remPort := ntohs(sadr.port);
-		SYSTEM.MOVE(SYSTEM.ADR(sadr.internetAddr), SYSTEM.ADR(remIP), IPAdrLen);
-		Threads.Unlock(S.lock)
+		ASSERT((pos <= LEN(buf)) & ready);
+		l := SIZE(WSock32.SockAddrIN);
+		len := WSock32.recvfrom(S.sock, buf[pos], LEN(buf)-pos, 0, sadr, l);
+		remPort := WSock32.ntohs(sadr.sinPort);
+		SYSTEM.MOVE(SYSTEM.ADR(sadr.sinAddr), SYSTEM.ADR(remIP), IPAdrLen)
 	END ReceiveDG;
 
 (** Returns the size of the first available datagram on the socket, otherwise <= 0. *)
 	PROCEDURE AvailableDG*(S: Socket): LONGINT;
 		VAR avail: LONGINT;
 	BEGIN
-		Threads.Lock(S.lock);
-		ioctlsocket(S.sock, FIONREAD, SYSTEM.ADR(avail));
-		Threads.Unlock(S.lock);
+		ASSERT(ready);
+		WSock32.ioctlsocket(S.sock, WSock32.FIONRead, avail);
 		RETURN avail
 	END AvailableDG;
 
@@ -1003,7 +794,7 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 	PROCEDURE PutInt*(VAR buf: ARRAY OF SYSTEM.BYTE; pos: INTEGER; x: INTEGER);
 	BEGIN
 		ASSERT(pos <= LEN(buf) - 2);
-		x := htons(x);
+		x := WSock32.htons(x);
 		SYSTEM.MOVE(SYSTEM.ADR(x), SYSTEM.ADR(buf[pos]), 2)
 	END PutInt;
 
@@ -1012,14 +803,14 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 	BEGIN
 		ASSERT(pos <= LEN(buf) - 2);
 		SYSTEM.MOVE(SYSTEM.ADR(buf[pos]), SYSTEM.ADR(x), 2);
-		x := ntohs(x)
+		x := WSock32.ntohs(x)
 	END GetInt;
 
 (** Write 4 bytes in network byte ordering to buf[pos]. *)
 	PROCEDURE PutLInt*(VAR buf: ARRAY OF SYSTEM.BYTE; pos: INTEGER; x: LONGINT);
 	BEGIN
 		ASSERT(pos <= LEN(buf) - 4);
-		x := htonl(x);
+		x := WSock32.htonl(x);
 		SYSTEM.MOVE(SYSTEM.ADR(x), SYSTEM.ADR(buf[pos]), 4)
 	END PutLInt;
 
@@ -1028,112 +819,79 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 	BEGIN
 		ASSERT(pos <= LEN(buf) - 4);
 		SYSTEM.MOVE(SYSTEM.ADR(buf[pos]), SYSTEM.ADR(x), 4);
-		x := ntohl(x)
+		x := WSock32.ntohl(x)
 	END GetLInt;
 
 (** -- Initialisation section. *)
 
-(** Command NetSystem.Stop ~  Shut down NetSystem. *)
+(** Command NetSystem.Stop ~ Shut down NetSystem. *)
 	PROCEDURE Stop*;
 	BEGIN
-		stop(); Win32.UnRegisterWndProc(WndProc)
+		stop();
+		Windows.UnregisterWindowHandler(WindowHandler)
 	END Stop;
 
 	PROCEDURE Init();
 		VAR i: LONGINT; done: BOOLEAN;
 	BEGIN
-		anyIP := 0; allIP := -1; ToHost("127.0.0.1", localhost, done);
+		anyIP := 0; allIP := -1; ToHost("127.0.0.1", hostIP, done);
 		FOR i := 0 TO ConnTabSize-1 DO
 			ConnTab[i] := SYSTEM.VAL(LONGINT, NIL)
 		END;
 		FOR i := 0 TO IPCacheSize-1 DO
 			IPCache[i].host := ""; IPCache[i].ip := anyIP
 		END;
-		curIP := 3
+		curIP := 0; Modules.InstallTermHandler(Stop)
 	END Init;
 
-	PROCEDURE InitAPI();
-		VAR mod: LONGINT;
-	BEGIN
-		mod := Kernel32.LoadLibrary("WSOCK32");
-		Kernel32.GetAdr(mod, "WSAStartup", SYSTEM.VAL(LONGINT, WSAStartup));
-		Kernel32.GetAdr(mod, "WSACleanup", SYSTEM.VAL(LONGINT, WSACleanup));
-		Kernel32.GetAdr(mod, "WSACancelBlockingCall", SYSTEM.VAL(LONGINT, WSACancelBlockingCall));
-		Kernel32.GetAdr(mod, "socket", SYSTEM.VAL(LONGINT, socket));
-		Kernel32.GetAdr(mod, "bind", SYSTEM.VAL(LONGINT, bind));
-		Kernel32.GetAdr(mod, "closesocket", SYSTEM.VAL(LONGINT, closesocket));
-		Kernel32.GetAdr(mod, "connect", SYSTEM.VAL(LONGINT, connect));
-		Kernel32.GetAdr(mod, "gethostname", SYSTEM.VAL(LONGINT, gethostname));
-		Kernel32.GetAdr(mod, "gethostbyname", SYSTEM.VAL(LONGINT, gethostbyname));
-		Kernel32.GetAdr(mod, "getpeername", SYSTEM.VAL(LONGINT, getpeername));
-		Kernel32.GetAdr(mod, "send", SYSTEM.VAL(LONGINT, send));
-		Kernel32.GetAdr(mod, "recv", SYSTEM.VAL(LONGINT, recv));
-		Kernel32.GetAdr(mod, "ioctlsocket", SYSTEM.VAL(LONGINT, ioctlsocket));
-		Kernel32.GetAdr(mod, "listen", SYSTEM.VAL(LONGINT, listen));
-		Kernel32.GetAdr(mod, "accept", SYSTEM.VAL(LONGINT, accept));
-		Kernel32.GetAdr(mod, "sendto", SYSTEM.VAL(LONGINT, sendto));
-		Kernel32.GetAdr(mod, "recvfrom", SYSTEM.VAL(LONGINT, recvfrom));
-		Kernel32.GetAdr(mod, "htons", SYSTEM.VAL(LONGINT, htons));
-		Kernel32.GetAdr(mod, "htonl", SYSTEM.VAL(LONGINT, htonl));
-		Kernel32.GetAdr(mod, "ntohs", SYSTEM.VAL(LONGINT, ntohs));
-		Kernel32.GetAdr(mod, "ntohl", SYSTEM.VAL(LONGINT, ntohl));
-		Kernel32.GetAdr(mod, "WSAGetLastError", SYSTEM.VAL(LONGINT, WSAGetLastError));
-		Kernel32.GetAdr(mod, "WSACancelAsyncRequest", SYSTEM.VAL(LONGINT, WSACancelAsyncRequest));
-		Kernel32.GetAdr(mod, "WSAAsyncGetHostByName", SYSTEM.VAL(LONGINT, WSAAsyncGetHostByName));
-		Kernel32.GetAdr(mod, "WSAAsyncGetHostByAddr", SYSTEM.VAL(LONGINT, WSAAsyncGetHostByAddr));
-		Kernel32.GetAdr(mod, "WSAAsyncSelect", SYSTEM.VAL(LONGINT, WSAAsyncSelect));
-		sockDll := mod
-	END InitAPI;
-
-(** Command NetSystem.Start ~  Start up NetSystem. *)
+(** Command NetSystem.Start ~ Start up NetSystem. *)
 	PROCEDURE Start*;
 		VAR
-			ret: LONGINT;
-			data: WSAData;
-			str: ARRAY 128 OF CHAR;
+			ret, i: LONGINT;
+			data: WSock32.WSAData;
+			str: ARRAY 256 OF CHAR;
 			hostInfo: HostInfo;
 			async: BOOLEAN;
 	BEGIN
-		IF sockDll = Kernel32.NULL THEN
-			InitAPI()
-		END;
 		IF ~ready THEN
-			Init(); hostInfos := NIL; ready := TRUE;
+			Init(); hostInfos := NIL;
 			NEW(tcpMtx); Threads.Init(tcpMtx);
-			Console.Str("WSAStartup: ");
-			ret := WSAStartup(101H, SYSTEM.ADR(data));
+			Kernel32.Str("WSAStartup: ");
+			ret := WSock32.WSAStartup(101H, data);
 			IF ret # 0 THEN
-				ready := FALSE; Console.Int(ret)
+				ready := FALSE; Kernel32.Int(ret)
 			ELSE
-				Modules.InstallTermHandler(Stop);
-				started := TRUE; ret := 0;
+				ret := 0; i := 0;
 				WHILE (ret <= 256) & (data.szDescription[ret] # 0X) DO
 					IF data.szDescription[ret] >= " " THEN
-						Console.Ch(data.szDescription[ret])
-					ELSIF (data.szDescription[ret] = CR) OR (data.szDescription[ret] = LF) THEN
-						Console.Ln()
+						str[i] := data.szDescription[ret]; INC(i)
+					ELSIF (data.szDescription[ret] = Strings.CR) OR (data.szDescription[ret] = Strings.LF) THEN
+						str[i] := 0X; i := 0; Kernel32.Str(str); Kernel32.Ln()
 					END;
 					INC(ret)
-				END
+				END;
+				str[i] := 0X; Kernel32.Str(str);
+				ready := TRUE
 			END;
 			IF ready THEN
-				Console.Ln();
-				Win32.RegisterWndProc(WMConnect, WndProc);
-				Win32.RegisterWndProc(WMGetHostInfo, WndProc);
+				Kernel32.Ln();
+				Windows.RegisterWindowHandler(WindowHandler, WMConnect);
+				Windows.RegisterWindowHandler(WindowHandler, WMGetHostInfo);
 				Registry.OberonPath("NetSystem", str);
 				Registry.GetKeyValue(Registry.CurrentUser, str, "HostName", hostName);
 				IF Registry.res # Registry.Done THEN
-					Console.Str("gethostname: ");
-					ret := gethostname(SYSTEM.ADR(hostName), LEN(hostName));
+					Kernel32.Str("gethostname: ");
+					ret := WSock32.gethostname(hostName, LEN(hostName));
 					ready := ret = 0
 				ELSE
-					Console.Str("NetSystem.HostName: ")
+					Kernel32.Str("NetSystem.HostName: ")
 				END;
 				IF ready THEN
-					Console.Str(hostName); Console.Ln();
+					Windows.UseDummyWin();
+					Kernel32.Str(hostName); Kernel32.Ln();
 					Registry.GetKeyValue(Registry.CurrentUser, str, "HostIP", str);
 					IF Registry.res = Registry.Done THEN
-						Console.Str("NetSystem.HostIP: ");
+						Kernel32.Str("NetSystem.HostIP: ");
 						ToHost(str, hostIP, ready)
 					ELSE
 						hostIP := anyIP;
@@ -1141,17 +899,12 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 						Registry.GetKeyValue(Registry.CurrentUser, str, "Async", str);
 						Strings.StrToBool(str, async);
 						IF async THEN
-							Console.Str("WSAAsyncGetHostByName: ");
+							Kernel32.Str("WSAAsyncGetHostByName: ");
 							AsyncGetIP(hostInfo, hostName);
-							IF hostInfo # NIL THEN
-								Threads.Wait(hostInfo.event, 10000);
-								IF ~hostInfo.err THEN
-									hostIP := hostInfo.ip
-								END
-							END
+							IF (hostInfo # NIL) & Threads.Wait(hostInfo.event, GetIPTimeOut) & ~hostInfo.err THEN hostIP := hostInfo.ip END
 						ELSE
-							Console.Str("gethostbyname: ");
-							ret := gethostbyname(SYSTEM.ADR(hostName));
+							Kernel32.Str("gethostbyname: ");
+							ret := WSock32.gethostbyname(hostName);
 							IF ret # Kernel32.NULL THEN
 								SYSTEM.GET(ret+12, ret); SYSTEM.GET(ret, ret);
 								SYSTEM.MOVE(ret, SYSTEM.ADR(hostIP), IPAdrLen)
@@ -1162,12 +915,12 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 			END;
 			IF ready & (hostIP # anyIP) THEN
 				ToNum(hostIP, str);
-				Console.Str(str)
+				Kernel32.Str(str)
 			ELSE
-				Console.Str("failed");
+				Kernel32.Str("failed");
 				ready := FALSE; Stop()
 			END;
-			Console.Ln()
+			Kernel32.Ln()
 		END
 	END Start;
 
@@ -1176,7 +929,7 @@ MODULE NetSystem; (** portable, except where noted / source: Win32.NetSystem.Mod
 PROCEDURE getPassword(msg, msg1: ARRAY OF CHAR; fnt: Fonts.Font; VAR pw: ARRAY OF CHAR; readable: BOOLEAN);
 	CONST TickSize = 6; TickSpace = 4;
 	VAR X, Y, x, y, T, pos, BoxW, BoxH, w1, w2, w3, h: INTEGER; keys: SET;
-	fin: BOOLEAN; ch: CHAR; M: Display3.Mask; updateDisplay: LONGINT; rect: User32.Rect;
+		done, fin: BOOLEAN; ch: CHAR; M: Display3.Mask; disp: Displays.Display;
 	PROCEDURE Feedback(count: INTEGER);
 		VAR len, x: INTEGER;
 	BEGIN
@@ -1200,8 +953,7 @@ PROCEDURE getPassword(msg, msg1: ARRAY OF CHAR; fnt: Fonts.Font; VAR pw: ARRAY O
 		Display3.StringSize(msg1, fnt, w2, h, tmp); IF w2 > BoxW THEN BoxW := w2 END;
 		IF w3 > BoxW THEN BoxW := w3 END;
 		BoxW := BoxW * 15 DIV 10; BoxH := h * 4 * 15 DIV 10;
-		X := Display.Width DIV 2 - BoxW DIV 2; Y := Display.Height DIV 2 - BoxH DIV 2;
-		rect.left := X; rect.right := X+BoxW; rect.bottom := Win32.DispH-Y; rect.top := rect.bottom-BoxH;
+		X := SHORT(disp.width DIV 2 - BoxW DIV 2); Y := SHORT(disp.height DIV 2 - BoxH DIV 2);
 		NEW(M); Display3.Open(M); Display3.Add(M, X+2, Y+2, BoxW-4, BoxH-4);
 		Display3.FilledRect3D(NIL, Display3.topC, Display3.bottomC, Display3.groupC, X, Y, BoxW, BoxH, 1, Display.replace);
 		T := Y + BoxH * 3 DIV 4;
@@ -1209,7 +961,7 @@ PROCEDURE getPassword(msg, msg1: ARRAY OF CHAR; fnt: Fonts.Font; VAR pw: ARRAY O
 		Display3.String(M, Display3.textC, X + BoxW DIV 2 - w2 DIV 2, T, fnt, msg1, Display.paint); DEC(T, h)
 	END Box;
 BEGIN
-	updateDisplay := Win32.updateDisplay;
+	disp := Display.cur;
 	Oberon.Defocus(); Box();
 	fin := FALSE; pos := 0;
 	REPEAT
@@ -1217,25 +969,21 @@ BEGIN
 		IF Input.Available() > 0 THEN
 			Input.Read(ch);
 			CASE ch OF
-				ESC: fin := TRUE; pos := 0;
+				1BX: fin := TRUE; pos := 0;
 				| 0DX: fin := TRUE;
 				| 7FX:
 					IF pos > 0 THEN DEC(pos); Feedback(pos) END
 			ELSE
 				IF pos < LEN(pw) - 1 THEN pw[pos] := ch; INC(pos); Feedback(pos) END
 			END
-		END;
-		IF Win32.updateDisplay > updateDisplay THEN
-			updateDisplay := Win32.updateDisplay;
-			Box(); Feedback(pos)
 		END
 	UNTIL fin;
 	pw[pos] := 0X;
-	User32.InvalidateRect(Win32.Display, SYSTEM.ADR(rect), Kernel32.False)
+	done := Displays.PutEvent(NIL, disp, Displays.redraw, 0)
 END getPassword;
 
-(** Retrieve the password for user using service on host.  Parameters service, host and user must be specified. 
-Parameter user is in/out.  If empty, it returns the first (user, password) pair found, otherwise it returns the
+(** Retrieve the password for user using service on host. Parameters service, host and user must be specified. 
+Parameter user is in/out. If empty, it returns the first (user, password) pair found, otherwise it returns the
 specified user's password. *)
 	PROCEDURE GetPassword*(service, host: ARRAY OF CHAR; VAR user, password: ARRAY OF CHAR);
 		VAR
@@ -1269,12 +1017,12 @@ specified user's password. *)
 		END;
 		COPY("", user); COPY("", password)
 	END GetPassword;
-	
+
 	(** Remove password for user using service on host. *)
 	PROCEDURE DelPassword*(service, user, host: ARRAY OF CHAR);
 		VAR ppass, pass: Password;
 	BEGIN
-		Strings.Lower(service, service);  Strings.Lower(host, host);
+		Strings.Lower(service, service); Strings.Lower(host, host);
 		ppass := NIL; pass := passwords;
 		WHILE (pass # NIL) & ((pass.service # service) & (pass.host # host) & (pass.user # user)) DO
 			ppass := pass; pass := pass.next
@@ -1327,12 +1075,12 @@ specified user's password. *)
 					END
 				ELSE
 					Texts.Write(W, "*"); Texts.Append(Oberon.Log, W.buf);
-					pwd[i] := ch;  INC(i)
+					pwd[i] := ch; INC(i)
 				END;
 				Input.Read(ch)
 			END;
 			pwd[i] := 0X;
-			Texts.WriteLn(W);  Texts.Append(Oberon.Log, W.buf)
+			Texts.WriteLn(W); Texts.Append(Oberon.Log, W.buf)
 		END ReadPwd;
 			
 		PROCEDURE Replace(p: Password);
@@ -1347,7 +1095,7 @@ specified user's password. *)
 				Texts.WriteString(W, p.user); Texts.Write(W, "@"); Texts.WriteString(W, p.host)
 			END;
 			IF q = NIL THEN
-				p.next := passwords;  passwords := p;
+				p.next := passwords; passwords := p;
 				IF verbose THEN Texts.WriteString(W, " password set") END
 			ELSE
 				COPY(p.passwd, q.passwd);
@@ -1366,9 +1114,9 @@ specified user's password. *)
 			IF ch = ":" THEN
 				Next(usr);
 				IF ch = "@" THEN	(* no password specified, prompt for password later *)
-					Next(host);  Strings.Lower(host, host);
+					Next(host); Strings.Lower(host, host);
 					IF host # "" THEN
-						NEW(pass);  pass.next := list; list := pass;	(* add to temp list *)
+						NEW(pass); pass.next := list; list := pass;	(* add to temp list *)
 						COPY(service, pass.service); COPY(host, pass.host); COPY(usr, pass.user);
 						ok := TRUE
 					END
@@ -1395,19 +1143,19 @@ specified user's password. *)
 		END
 	END SetUser;
 
-	(** Command NetSystem.ClearUser ~  Clear all passwords from memory. *)
+	(** Command NetSystem.ClearUser ~ Clear all passwords from memory. *)
 	PROCEDURE ClearUser*;
 	BEGIN
 		passwords := NIL
 	END ClearUser;
 
 BEGIN
-	Texts.OpenWriter(W); sockDll := Kernel32.NULL;
+	Texts.OpenWriter(W);
 	GetIPTimeOut := 30*Input.TimeUnit;
 	GetNameTimeOut := GetIPTimeOut;
 	OpenConnectionTimeOut := GetIPTimeOut;
 	SendTimeOut := 30*Input.TimeUnit;
 	ReceiveTimeOut := SendTimeOut;
-	InitAPI(); passwords := NIL;
-	ready := FALSE; started := FALSE; Start()
+	passwords := NIL;
+	ready := FALSE; Start()
 END NetSystem.

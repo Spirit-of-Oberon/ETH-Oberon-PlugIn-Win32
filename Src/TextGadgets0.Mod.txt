@@ -1,23 +1,10 @@
-﻿(* OBERON System 3, Release 2.3.
-
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
-
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
-
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
+﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE TextGadgets0; (** portable *)	(* jm 19.1.95 *)
 
-(**
-Scaffolding for an extensible text editor. Extension is best attempted when the source code be available.
-*)
+(** Scaffolding for an extensible text editor. Extension is best attempted when the source code be available. *)
+
 (* Still to be done:
 	- Search and replace, SearchDiff, StoreAscii
 	- Better scrolling
@@ -99,7 +86,7 @@ CONST
 	locked* = 16;		(** locked or not *)
 	autoscroll* = 17;	(** may scroll automatically in a log fashion *)
 	flat* = 18; 	(** frame does not have a 3D border *)
-	buflen = 128;  
+	buflen = 128;
 	sliderW* = 14;
 	
 	delete = 2; insert = 1; change = 0;
@@ -204,6 +191,7 @@ VAR
 	dummyFrame: Gadgets.Frame;
 	scrollhint: BOOLEAN;
 	printOpts*: SET; (** 0: page number, 1: document name *)
+	saved: Oberon.CaretMsg;
 
 PROCEDURE^ RestoreFrame*(F: Frame; M: Display3.Mask; x, y, w, h: INTEGER; dlink: Objects.Object);
 PROCEDURE^ AdjustSize(F: Frame; w, h: INTEGER);
@@ -423,7 +411,7 @@ BEGIN
 	IF F.car THEN FlipCaretMsg(F, F.carpos); F.car := FALSE; END;
 	F.do.LocatePos(F, pos, F.carpos);
 	F.car := TRUE; F.carX := F.carpos.x;
-	IF keepfont  IN F.state0 THEN SetFont(F.text, F.carpos.pos - 1) END;
+	IF keepfont IN F.state0 THEN SetFont(F.text, F.carpos.pos - 1) END;
 	FlipCaretMsg(F, F.carpos)
 END SetCaret;
 
@@ -557,7 +545,7 @@ BEGIN
 	
 	RestoreSlider(F, M, x, y, w, h);
 	
-	copy  := Display3.Rectangular(M, cx, cy, cw, ch);  ClipAgainst(cx, cy, cw, ch, M.X, M.Y, M.W, M.H);
+	copy := Display3.Rectangular(M, cx, cy, cw, ch); ClipAgainst(cx, cy, cw, ch, M.X, M.Y, M.W, M.H);
 	copy := copy & (cx = x) & (cy = y) & (cw = w) & (ch = h);
 	(* copy *)
 	IF d.L1 # NIL THEN
@@ -734,11 +722,11 @@ BEGIN
 	ELSE
 		(* F.do.LocateChar(F, x, y, x + 2000, t + s.line.base, endpos);*)
 		Flip(s.line, s.x, s.line.right (*F.W - F.right*) (*endpos.x + endpos.dx*), s.org, s.pos, s.org + s.line.len);
-		org := s.org;  org := org + s.line.len;
+		org := s.org; org := org + s.line.len;
 		l := s.line.next;
 		WHILE l # e.line DO
 			(* F.do.LocateChar(F, x, y, x, t + l.base, begpos); F.do.LocateChar(F, x, y, x + 2000, t + l.base, endpos); *)
-			Flip(l, l.left (*F.left *)(*begpos.x*),  l.right(*F.W - F.right*) (*endpos.x + endpos.dx*), org, org, org + l.len); org := org + l.len;
+			Flip(l, l.left (*F.left *)(*begpos.x*), l.right(*F.W - F.right*) (*endpos.x + endpos.dx*), org, org, org + l.len); org := org + l.len;
 			l := l.next;
 		END;
 		(* F.do.LocateChar(F, x, y, x, t + l.base, begpos); *)
@@ -793,7 +781,7 @@ BEGIN
 	Input.KeyState(modKeys);
 	IF Input.SHIFT IN modKeys THEN
 		M.id := Oberon.get; M.F := NIL; M.sel := NIL; M.text := NIL; M.time := -1; Display.Broadcast(M);
-		IF (M.time > 0) & (M.text = F.text) & (M.sel IS Frame) THEN
+		IF (M.time # -1) & (M.text = F.text) & (M.sel IS Frame) THEN
 			IF M.beg < s.pos THEN beg.pos := M.beg ELSE beg := s END;
 			IF M.end > e.pos THEN end.pos := M.end ELSE end := e END;
 			F0 := M.sel(Frame);
@@ -833,22 +821,25 @@ PROCEDURE GetSelection(F: Frame; VAR text: Texts.Text; VAR beg, end, time: LONGI
 VAR loc: Loc;
 BEGIN
 	IF F.sel & (F.selbeg.pos >= 0) THEN
-		IF F.time > time THEN	(* ps - 6.6.96 *)
+		IF ((time-F.time) < 0) OR (time = -1) THEN	(* ps - 6.6.96 *)
 			time := F.time; text := F.text; beg := F.selbeg.pos; end := F.selend.pos;
-			IF end > F.text.len THEN end :=  F.text.len END
+			IF end > F.text.len THEN end := F.text.len END
 		ELSIF F.text = text THEN
 			(* 7.4.98 - ps *)
 			F.do.LocateChar(F, 0, 0, F.W, 0, loc);
 			IF (F.selbeg.pos < beg) & (F.selend.pos >= loc.pos) THEN beg := F.selbeg.pos END;
 			IF (F.selend.pos > end) & (F.selbeg.pos = F.org) THEN end := F.selend.pos END;
-			IF end > F.text.len THEN end :=  F.text.len END
+			IF end > F.text.len THEN end := F.text.len END
 		END
 	END
 END GetSelection;
 
 PROCEDURE CopyStretch(text: Texts.Text; beg, end: LONGINT; VAR W: Texts.Writer; F: Frame);
-VAR R: Texts.Finder; obj, new: Objects.Object; M: Objects.CopyMsg;
+	VAR
+		R: Texts.Finder; obj, new: Objects.Object; M: Objects.CopyMsg;
+		r: Texts.Reader; ch: CHAR; col, voff: SHORTINT;
 BEGIN
+	col := W.col; voff := W.voff;
 	IF end > text.len THEN end := text.len END;
 	Texts.OpenFinder(R, text, beg);
 	WHILE R.pos < end DO
@@ -856,10 +847,13 @@ BEGIN
 		beg := R.pos; Texts.FindObj(R, obj);
 		IF (obj IS Display.Frame) THEN
 			M.id := Objects.shallow; Objects.Stamp(M); obj.handle(obj, M); new := M.obj;	(* copy *)
+			Texts.OpenReader(r, text, beg); Texts.Read(r, ch);
+			Texts.SetColor(W, r.col); Texts.SetOffset(W, r.voff);
 			Texts.WriteObj(W, new); INC(beg)
 		END
 	END;
-	IF beg < end THEN Texts.Save(text, beg, end, W.buf) END
+	IF beg < end THEN Texts.Save(text, beg, end, W.buf) END;
+	Texts.SetColor(W, col); Texts.SetOffset(W, voff)
 END CopyStretch;
 
 PROCEDURE CopyOver* (F: Frame; text: Texts.Text; beg, end: LONGINT);
@@ -952,48 +946,48 @@ BEGIN
 	RETURN (A.res >= 0) & (A.class = Objects.String) & (A.s # "") 
 END HasCmdAttr;
 
-  PROCEDURE Call* (F: Frame; pos: LONGINT; keysum: SET; dlink: Objects.Object);
-    VAR S: Texts.Scanner; res, i, j: INTEGER; oldcontext, obj: Objects.Object;
-    cx, cy, cw, chl: INTEGER; par: Oberon.ParList; A: Objects.AttrMsg;
-    R: Texts.Reader; ch: CHAR;
-    cmd: ARRAY 256 OF CHAR;
-  BEGIN
-    Display.GetClip(cx, cy, cw, chl); Display.ResetClip;
-    
-    (* we want to pass everything that is underlined to the TG Cmd *)
-    IF HasCmdAttr(F, "Cmd")  THEN
-    	Texts.OpenReader(R, F.text, pos);
-    	Texts.Read(R, ch); WHILE ~R.eot & (ch <= " ") DO Texts.Read(R, ch) END;
-    	IF ~R.eot THEN
-    		 i := 0;
-    		 WHILE (i < LEN(cmd) - 1) & (ch > " ") DO cmd[i] := ch; INC(i); Texts.Read(R, ch) END; cmd[i] := 0X;
-    		 IF cmd # "" THEN
-    		 	A.id := Objects.set; A.name := "Point"; A.class := Objects.String; A.dlink := NIL; Objects.Stamp(A);
+PROCEDURE Call* (F: Frame; pos: LONGINT; keysum: SET; dlink: Objects.Object);
+	VAR S: Texts.Scanner; res, i, j: INTEGER; oldcontext, obj: Objects.Object;
+		cx, cy, cw, chl: INTEGER; par: Oberon.ParList; A: Objects.AttrMsg;
+		R: Texts.Reader; ch: CHAR;
+		cmd: ARRAY 256 OF CHAR;
+BEGIN
+	Display.GetClip(cx, cy, cw, chl); Display.ResetClip;
+
+	(* we want to pass everything that is underlined to the TG Cmd *)
+	IF HasCmdAttr(F, "Cmd") THEN
+		Texts.OpenReader(R, F.text, pos);
+		Texts.Read(R, ch); WHILE ~R.eot & (ch <= " ") DO Texts.Read(R, ch) END;
+		IF ~R.eot THEN
+			i := 0;
+			WHILE (i < LEN(cmd) - 1) & (ch > " ") DO cmd[i] := ch; INC(i); Texts.Read(R, ch) END; cmd[i] := 0X;
+			IF cmd # "" THEN
+				A.id := Objects.set; A.name := "Point"; A.class := Objects.String; A.dlink := NIL; Objects.Stamp(A);
 				COPY(cmd, A.s); A.res := -1; F.handle(F, A);
 				Gadgets.ExecuteAttr(F, "Cmd", dlink, NIL, NIL);
 				RETURN
-    		 END
-    	END
-    ELSIF keysum = {0, 1} THEN
-    	Texts.OpenReader(R, F.text, pos);
-    	Texts.Read(R, ch); WHILE ~R.eot & (ch <= " ") DO Texts.Read(R, ch) END;
-    	IF ~R.eot THEN
-    		 COPY("Desktops.OpenDoc ", cmd); i := 0; WHILE cmd[i] # 0X DO INC(i) END;
-    		 WHILE (i < LEN(cmd) - 1) & (ch > " ") DO cmd[i] := ch; INC(i); Texts.Read(R, ch) END;
-    		 cmd[i] := 0X;
-			 Gadgets.Execute(cmd, F, dlink, NIL, NIL);
-			 RETURN
-    	END
-    END;
-    
-    Texts.OpenScanner(S, F.text, pos); Texts.Scan(S);
-    IF (S.line = 0) & (S.class = Texts.Name) THEN
-    	NEW(par);
+			END
+		END
+	ELSIF keysum = {0, 1} THEN
+		Texts.OpenReader(R, F.text, pos);
+		Texts.Read(R, ch); WHILE ~R.eot & (ch <= " ") DO Texts.Read(R, ch) END;
+		IF ~R.eot THEN
+			COPY("Desktops.OpenDoc ", cmd); i := 0; WHILE cmd[i] # 0X DO INC(i) END;
+			WHILE (i < LEN(cmd) - 1) & (ch > " ") DO cmd[i] := ch; INC(i); Texts.Read(R, ch) END;
+			cmd[i] := 0X;
+			Gadgets.Execute(cmd, F, dlink, NIL, NIL);
+			RETURN
+		END
+	END;
+
+	Texts.OpenScanner(S, F.text, pos); Texts.Scan(S);
+	IF (S.line = 0) & (S.class = Texts.Name) THEN
+		NEW(par);
 		Gadgets.executorObj := F; Gadgets.context := dlink; Gadgets.senderObj := NIL; Gadgets.receiverObj := NIL;
 		par.obj := F; par.text := F.text; par.pos := pos + S.len;
-		
+
 		oldcontext := F.dlink; F.dlink := dlink;
-		
+
 		IF Gadgets.context = NIL THEN Gadgets.context := F END; (* may be the outside most frame *)
 		obj := Gadgets.context;
 		LOOP
@@ -1005,8 +999,10 @@ END HasCmdAttr;
 		END;
 
 		i := 0; WHILE (i < S.len) & (S.s[i] # ".") DO INC(i) END;
+(*
 		j := i + 1; WHILE (j < S.len) & (S.s[j] # ".") DO INC(j) END;
-		IF (j >= S.len) & (S.s[i] = ".") THEN
+*)
+		IF (*(j >= S.len) &*) (S.s[i] = ".") THEN
 			Oberon.Call(S.s, par, 2 IN keysum, res);
 			IF res # 0 THEN
 				Texts.WriteString(Wmsg, "Call error: "); Texts.WriteString(Wmsg, Modules.resMsg);
@@ -1015,11 +1011,11 @@ END HasCmdAttr;
 		END;
 		F.dlink := oldcontext
 
-    END;
-    Display.SetClip(cx, cy, cw, chl);
-    Gadgets.executorObj := NIL; Gadgets.context := NIL; Gadgets.senderObj := NIL; Gadgets.receiverObj := NIL
-  END Call;
-  
+	END;
+	Display.SetClip(cx, cy, cw, chl);
+	Gadgets.executorObj := NIL; Gadgets.context := NIL; Gadgets.senderObj := NIL; Gadgets.receiverObj := NIL
+END Call;
+
  (* scroll in such a manner that L is at the bottom of the frame *)
 PROCEDURE ScrollUp(F: Frame; org: LONGINT);
 VAR heightUsed: INTEGER; begpos, startpos, p: LONGINT; K, L: Line;
@@ -1122,6 +1118,26 @@ BEGIN
 	SetCaret(F, pos)
 END Locate;
 
+PROCEDURE SaveCaret;
+BEGIN
+	saved.car := NIL; saved.text := NIL;
+	saved.id := Oberon.get; Display.Broadcast(saved)
+END SaveCaret;
+
+PROCEDURE RestoreCaret;
+BEGIN
+	IF (saved.car # NIL) & (saved.text # NIL) THEN
+		saved.id := Oberon.set; Display.Broadcast(saved)
+	END
+END RestoreCaret;
+
+PROCEDURE Pos (F: Frame; x, y, X, Y: INTEGER): LONGINT;
+	VAR loc: Loc;
+BEGIN
+	F.do.LocateChar(F, x, y, X, Y, loc);
+	RETURN loc.pos
+END Pos;
+
 PROCEDURE Edit*(F: Frame; R: Display3.Mask; x, y, w, h: INTEGER; VAR M: Oberon.InputMsg);
 VAR keysum: SET; text: Texts.Text; tbeg, tend, time, objtime, pos: LONGINT; C: Oberon.ConsumeMsg;
 	RR: Texts.Reader; chr: CHAR; g: Gadgets.Frame; S: Display.SelectMsg;
@@ -1129,7 +1145,7 @@ VAR keysum: SET; text: Texts.Text; tbeg, tend, time, objtime, pos: LONGINT; C: O
 BEGIN
 	IF (F.left > sliderW) & (M.X < x + sliderW) & (mayscroll IN F.state0) THEN
 		EditSlider(F, R, M, x, y, w, h);
-		RETURN;
+		RETURN
 	END;
 
 	IF F.trailer = NIL THEN FormatFrame(F) END;
@@ -1141,7 +1157,16 @@ BEGIN
 		M.res := I.res;
 		IF M.res >= 0 THEN RETURN END
 	END;
-	IF (M.keys = {2}) & (mayfocus IN F.state0) THEN (* left *)
+	IF (M.keys = {2}) & (mayfocus IN F.state0) & ~(Oberon.New & (locked IN F.state0)) THEN (* left *)
+		IF Oberon.New & F.car & (Pos(F, x, y, M.X, M.Y) = F.carpos.pos) THEN (*click on caret*)
+			Oberon.Defocus; RestoreCaret; TrackWord(F, R, keysum, x, y, w, h, pos); M.res := 0;
+			IF (pos >= 0) & (keysum # {0, 1, 2}) THEN
+				EXCL(keysum, 2); INCL(keysum, 1);	(* left acts like middle *)
+				F.do.Call(F, pos, keysum, M.dlink)
+			END;
+			RETURN
+		END;
+		IF Oberon.New THEN SaveCaret END;
 		IF ~F.car THEN
 			IF sizeadjust IN F.state0 THEN (* bring to the front *)
 				PM.F := F; PM.id := Gadgets.visible; PM.passon := FALSE; Display.Broadcast(PM)
@@ -1158,13 +1183,13 @@ BEGIN
 		pos := F.carpos.pos; SetCaretWithScroll(F, pos); F.car := TRUE; M.res := 0;
 		IF (keysum = {2, 1}) & ~(locked IN F.state0) THEN (* copy from selection *)
 			Oberon.GetSelection(text, tbeg, tend, time); Gadgets.GetSelection(obj, objtime);
-			IF (time >= 0) & (time > objtime) THEN
+			IF (time # -1) & (((objtime-time) < 0) OR (objtime = -1)) THEN
 				CopyStretch(text, tbeg, tend, W, F);
 				Texts.Insert(F.text, pos, W.buf);
 				SetCaretWithScroll(F, pos + (tend - tbeg))	(* ps - 7.5.97 *)
-			ELSIF (objtime >= 0) & (objtime > time) THEN
+			ELSIF (objtime # -1) & (((time-objtime) < 0) OR (time = -1)) THEN
 				CopyList(obj, Objects.shallow, obj0); Gadgets.Integrate(obj0)
-			ELSE
+			ELSE (* copy from delete buffer *)
 				Texts.Recall(W.buf);
 				tend := pos + W.buf.len;
 				Texts.Insert(F.text, pos, W.buf);
@@ -1172,13 +1197,13 @@ BEGIN
 			END
 		ELSIF keysum = {2, 0} THEN (* copy looks *)
 			Oberon.GetSelection(text, tbeg, tend, time);
-			IF (time >= 0) & (pos < F.text.len) THEN
+			IF (time # -1) & (pos < F.text.len) THEN
 				Texts.OpenReader(RR, F.text, pos); Texts.Read(RR, chr);
 				IF (RR.lib # NIL) & (RR.lib IS Fonts.Font) THEN
 					Texts.ChangeLooks(text, tbeg, tend, {0, 1, 2}, RR.lib, RR.col, RR.voff)
 				END
-			END;
-		END;
+			END
+		END
 	ELSIF (M.keys = {0}) & (mayselect IN F.state0) & ~(Gadgets.transparent IN F.state) THEN (* right *)
 		IF (b # NIL) & (b.f # NIL) & (b.f IS Gadgets.Frame) THEN (* tracking on a box *)
 			g := b.f(Gadgets.Frame);
@@ -1192,7 +1217,7 @@ BEGIN
 				(* ps - 29.8.96 *)
 				IF (keysum = {0, 2}) & (S.id = Display.set) & ~(locked IN F.state0) THEN (* RL delete selection *)
 					DeleteSelectedFrames(F.text);
-				ELSIF keysum = {0, 1} THEN  (* RM copy to focus *)
+				ELSIF keysum = {0, 1} THEN (* RM copy to focus *)
 					GetSelectedFrames(F.text, obj); CopyList(obj, Objects.shallow, obj0); Gadgets.Integrate(obj0);
 				ELSE F.frametime := Oberon.Time();
 				END
@@ -1209,7 +1234,7 @@ BEGIN
 					Oberon.GetSelection(text, tbeg, tend, time);
 					IF tend > F.text.len THEN tend := F.text.len END;
 					Texts.Delete(F.text, tbeg, tend); Oberon.Defocus; SetCaret(F, tbeg); F.car := TRUE;
-				ELSIF keysum = {0, 1}  THEN (* copy over *)
+				ELSIF keysum = {0, 1} THEN (* copy over *)
 					Oberon.GetSelection(text, tbeg, tend, time);
 					IF tend > F.text.len THEN tend := F.text.len END;
 					C.F := NIL; C.text := text; C.beg := tbeg; C.end := tend; C.res := -1;
@@ -1218,13 +1243,16 @@ BEGIN
 			END
 		ELSE Gadgets.framehandle(F, M)
 		END
-	ELSIF M.keys = {1} THEN (* middle *)
+	ELSIF (M.keys = {1}) OR (Oberon.New & (M.keys = {2})) THEN (* middle *)
 		IF (b # NIL) & (maymvchildren IN F.state0) & Effects.InBorder(M.X, M.Y, x + b.x, y + h - 1 + L.base + b.voff, b.f.W, b.f.H) THEN (* child did not take middle click, so move it *)
 			b.f.X := 0; b.f.Y := 0; M.x := x + b.x; M.y := y + h - 1 + L.base + b.voff;
-			Gadgets.MoveFrame(b.f, M); M.res := 0;
+			Gadgets.MoveFrame(b.f, M); M.res := 0
 		ELSIF (b = NIL) & Effects.Inside(M.X, M.Y, x + Effects.gravity, y + Effects.gravity, w - Effects.gravity*2, h - Effects.gravity*2) & (mayexecute IN F.state0) THEN (* execute a text command *)
 			TrackWord(F, R, keysum, x, y, w, h, pos); M.res := 0;
-			IF (pos >= 0) & (keysum # {0, 1, 2}) THEN F.do.Call(F, pos, keysum, M.dlink) END
+			IF (pos >= 0) & (keysum # {0, 1, 2}) THEN
+				IF Oberon.New & (keysum = {2}) THEN keysum := {1} END;
+				F.do.Call(F, pos, keysum, M.dlink)
+			END
 		ELSE
 			Gadgets.framehandle(F, M)
 		END
@@ -1233,7 +1261,7 @@ BEGIN
 	END
 END Edit;
 
-PROCEDURE Right(F: Frame; nbr: SHORTINT);
+PROCEDURE Right*(F: Frame; nbr: SHORTINT);
 VAR text: Texts.Text; beg, end, fLine, lLine: LONGINT; nr: SHORTINT; R: Texts.Reader; ch, dh: CHAR;
 	tW: Texts.Writer;
 	
@@ -1261,7 +1289,7 @@ BEGIN
 	END
 END Right;
 
-PROCEDURE Left(F: Frame; nbr: SHORTINT);
+PROCEDURE Left*(F: Frame; nbr: SHORTINT);
 VAR text: Texts.Text; beg, end, fLine, lLine: LONGINT; nr: SHORTINT;
 
 	PROCEDURE IsCh(T: Texts.Text; pos: LONGINT): BOOLEAN;
@@ -1308,24 +1336,34 @@ VAR pos, hpos, flushpos, len: LONGINT; loc: Loc; L: Line; carX: INTEGER; setCarX
 			Texts.Write(W, ch); INC(len)
 		END
 	END InsertChar;
-	
+
 	PROCEDURE Flush;
 	BEGIN
 		IF len > 0 THEN Texts.Insert(F.text, flushpos, W.buf); INC(flushpos, len); len := 0; END;
 	END Flush;
-	
+
+	PROCEDURE KeyState(this: SET): BOOLEAN;
+	VAR state: SET;
+	BEGIN
+		Input.KeyState(state);
+		RETURN state * this = this
+	END KeyState;
+
 BEGIN
 	pos := F.carpos.pos; flushpos := pos; len := 0; setCarX := FALSE;
 	LOOP
 		IF ch = LArrow THEN
-			IF F.sel THEN Left(F, 1); pos := F.selend.pos;
+			IF F.sel & KeyState({Input.CTRL}) THEN
+				Left(F, 1); pos := F.selend.pos
 			ELSE
 				Flush;
-				IF pos > F.org THEN pos := pos - 1 END;
+				IF pos > F.org THEN pos := pos - 1 END
 			END
 		ELSIF ch = RArrow THEN
-			IF F.sel THEN Right(F, 1); pos := F.selend.pos;
-			ELSE INC(pos)
+			IF F.sel & KeyState({Input.CTRL}) THEN
+				Right(F, 1); pos := F.selend.pos
+			ELSE
+				INC(pos)
 			END
 		ELSIF ch = 0C1X THEN (* up *)
 			Flush;
@@ -1484,7 +1522,7 @@ BEGIN
 				NEW(d.LL); d.LL^ := prevL^; d.LL.next := NIL; d.orgL := prevorg;
 				(* end of backup *)
 				
-				F.do.Format(F, prevorg, prevL);  (* does not allocate new box descriptors *)
+				F.do.Format(F, prevorg, prevL); (* does not allocate new box descriptors *)
 				IF prevorg + prevL.len # d.org0 THEN (* no sync *)
 					d.L0 := prevL; d.org0 := prevorg; d.Y0 := prevY
 				ELSE (* conventional backup *)
@@ -1555,7 +1593,7 @@ BEGIN
 	F.stamp := stamp; Oberon.RemoveMarks(x, y, w, h);
 	Gadgets.MakeMask(F, x, y, dlink, M);
 	
-	copy  := Display3.Rectangular(M, cx, cy, cw, ch);  ClipAgainst(cx, cy, cw, ch, M.X, M.Y, M.W, M.H);
+	copy := Display3.Rectangular(M, cx, cy, cw, ch); ClipAgainst(cx, cy, cw, ch, M.X, M.Y, M.W, M.H);
 	copy := copy & (cx = x) & (cy = y) & (cw = w) & (ch = h);
 	
 	IF beg >= F.org THEN
@@ -1589,7 +1627,7 @@ BEGIN
 			L := d.L0; org := d.org0;
 			
 			(* check for fast display *)
-			IF (org = d.orgL) & (L.base =  d.LL.base) & (L.h = d.LL.h) & (L.asr = d.LL.asr) & (L.dsr = d.LL.dsr) & (d.LL.spaces = 0) THEN
+			IF (org = d.orgL) & (L.base = d.LL.base) & (L.h = d.LL.h) & (L.asr = d.LL.asr) & (L.dsr = d.LL.dsr) & (d.LL.spaces = 0) THEN
 				L.draw := beg;
 			ELSE L.draw := 0
 			END;
@@ -1743,6 +1781,7 @@ BEGIN
 	org := F.org;
 	NEW(F.trailer);
 	L := F.trailer; NEW(L.next); L := L.next; 
+
 	F.do.Format(F, org, L); DEC(Y, L.asr); L.base := Y; DEC(Y, L.dsr); org := org + L.len;
 	LOOP
 		IF Y <= -F.H + F.bottom THEN EXIT END; (* ! *)
@@ -1764,17 +1803,16 @@ BEGIN
 	L := F.trailer.next; Y := -F.top + 1; org := F.org;
 	WHILE L # F.trailer DO
 		F.do.Display(F, M, x, y, org, L, dlink); DEC(Y, L.h); org := org + L.len;
-		L := L.next;
+		L := L.next
 	END;
-	
+
 	IF Y >= -F.H THEN
-		F.do.Background(F, M, x, y, F.left, -F.H + 1, F.W, Y - (-F.H + 1));
+		F.do.Background(F, M, x, y, F.left, -F.H + 1, F.W, Y - (-F.H + 1))
 	END;
-	
+
 	IF F.car THEN FlipCaret(F, M, x, y, w, h, F.carpos) END;
 	IF F.sel THEN FlipSelection(F, M, x, y, F.selbeg, F.selend) END;
-	
-	IF Gadgets.selected IN F.state THEN Display3.FillPattern(M, Display3.white, Display3.selectpat, x, y, x, y, w, h, Display.paint) END;
+	IF Gadgets.selected IN F.state THEN Display3.FillPattern(M, Display3.white, Display3.selectpat, x, y, x, y, w, h, Display.paint) END
 END RestoreFrame;
 
 PROCEDURE RestoreFrameArea*(F: Frame; M: Display3.Mask; x, y, w, h, U, V, W, H: INTEGER; dlink: Objects.Object);
@@ -1922,7 +1960,7 @@ END FrameLink;
 
 (** Return the size in which the frame's text will fit exactly *)
 PROCEDURE Dimensions*(F: Frame; VAR w, h: INTEGER);
-VAR l: Line;  end: LONGINT; R: Texts.Reader;
+VAR l: Line; end: LONGINT; R: Texts.Reader;
 BEGIN
 	h := 0; w := 0; 
 	l := F.trailer.next; end := F.org;
@@ -2016,7 +2054,7 @@ BEGIN
 				Pageno(pageno)
 			END			
 		END;
-		F.do.Print(F, R, PrinterleftX, 0, org, L, NIL); output := TRUE; DEC(Y, L.dsr); INC(org,  L.len);
+		F.do.Print(F, R, PrinterleftX, 0, org, L, NIL); output := TRUE; DEC(Y, L.dsr); INC(org, L.len);
 	END;
 	IF output THEN Printer.Page(1) END;
 END PrintText;
@@ -2051,7 +2089,7 @@ BEGIN
 		IF L.eot OR (Y < M.y) THEN EXIT END;
 		F.do.PrintFormat(F, org, L, pagebreak);
 		DEC(Y, L.asr); L.base := Y;
-		F.do.Print(F, R, M.x + left, M.y, org, L, M.dlink); DEC(Y, L.dsr); INC(org,  L.len);
+		F.do.Print(F, R, M.x + left, M.y, org, L, M.dlink); DEC(Y, L.dsr); INC(org, L.len);
 	END;
 END PrintTextGadget;
 
@@ -2097,9 +2135,9 @@ BEGIN
 				IF Y <= -M.H + F.bottom THEN EXIT END; (* ! *)
 				IF L.eot THEN EXIT END;
 				NEW(L.next); L := L.next;
-				F.do.Format(F, org, L); DEC(Y, L.asr); L.base := Y; DEC(Y, L.dsr); org := org + L.len;
+				F.do.Format(F, org, L); DEC(Y, L.asr); L.base := Y; DEC(Y, L.dsr); org := org + L.len
 			END;
-			L.next := F.trailer;
+			L.next := F.trailer
 		ELSIF M.dH < 0 THEN (* got smaller *)
 			DEC(Y, L.h); org := org + L.len; L := L.next;
 			IF L # F.trailer THEN
@@ -2110,7 +2148,7 @@ BEGIN
 				END;
 				L.next := F.trailer
 			END
-		END;
+		END
 	END;
 	
 	(* screen update, can optimize updates, see comment in GadgetsChanges.Text *)
@@ -2119,11 +2157,9 @@ BEGIN
 		O.F := F; O.M := NIL; O.x := 0; O.y := 0; O.res := -1; O.dlink := NIL; F.handle(F, O)
 	END;
 	IF M.mode = Display.display THEN
-		y := M.Y - M.dY; h := M.H - M.dH;  (*calculate previous coordinates *)
-		
+		y := M.Y - M.dY; h := M.H - M.dH; (*calculate previous coordinates *)
 		IF (M.Y + M.H = y + h) & (h > 0) & (M.dW = 0) & (M.dX = 0) THEN
 			(* left top most corner is stable, had height, no width change *)
-
 			IF M.dH > 0 THEN (* got bigger *)
 				D.x := M.x; D.y := M.y; D.F := F; D.device := Display.screen; D.id := Display.area;
 				D.u := 0; D.v := -F.H + 1; D.w := F.W; D.h := ABS(M.dH) + 2;
@@ -2138,11 +2174,10 @@ BEGIN
 			Gadgets.MakeMask(F, M.x + F.X, M.y + F.Y, M.dlink, mask);
 			RestoreSlider(F, mask, M.x + F.X, M.y + F.Y, F.W, F.H);
 			IF (Gadgets.selected IN F.state) THEN
-				Display3.FillPattern(mask, Display3.white, Display3.selectpat,
-					M.x + F.X, M.y + F.Y, M.x + F.X, M.y + F.Y, F.left, F.H, Display.paint);
+				Display3.FillPattern(mask, Display3.white, Display3.selectpat, M.x + F.X, M.y + F.Y, M.x + F.X, M.y + F.Y, F.left, F.H, Display.paint)
 			END
 		ELSIF (F.H > 0) & (F.W > 0) THEN
-			D.x := M.x; D.y := M.y; D.F := F; D.device := Display.screen;D.id := Display.full;
+			D.x := M.x; D.y := M.y; D.F := F; D.device := Display.screen; D.id := Display.full;
 			D.dlink := M.dlink; D.res := -1; Objects.Stamp(D);
 			F.handle(F, D)
 		END
@@ -2247,7 +2282,7 @@ PROCEDURE DSelect (F: Frame; x, y: INTEGER; VAR M: Display.SelectMsg);
 VAR obj: Objects.Object;
 BEGIN
 	IF M.id = Display.get THEN
-		IF F.frametime > M.time THEN
+		IF ((M.time-F.frametime) < 0) OR (M.time = -1) THEN
 			GetSelectedFrames(F.text, obj);
 			IF obj # NIL THEN M.time := F.frametime; M.obj := obj; M.sel := F
 			ELSE Gadgets.framehandle(F, M); ToBoxes(F, x, y, M)
@@ -2347,7 +2382,7 @@ BEGIN
 						END
 					END
 				ELSIF M IS Display.DisplayMsg THEN
-					WITH M: Display.DisplayMsg  DO
+					WITH M: Display.DisplayMsg DO
 						IF M.device = Display.screen THEN
 							IF (M.F = NIL) OR ((M.id = Display.full) & (M.F = F)) THEN
 								F.trailer := NIL; F.car := FALSE; F.sel := FALSE; (* ejz *)
@@ -2382,8 +2417,8 @@ BEGIN
 				ELSIF M IS Oberon.ControlMsg THEN OControl(F, x, y, M(Oberon.ControlMsg))
 				ELSIF M IS Display.ModifyMsg THEN
 					WITH M: Display.ModifyMsg DO
-						IF (M.F = F) THEN ModifyFrame(F, M);
-						ELSE AdjustChild(F, x, y, M);
+						IF (M.F = F) THEN ModifyFrame(F, M)
+						ELSE AdjustChild(F, x, y, M)
 						END
 					END
 				ELSIF M IS Gadgets.UpdateMsg THEN
@@ -2401,19 +2436,19 @@ BEGIN
 						END
 					END
 				ELSIF M IS Display3.OverlapMsg THEN
-					Gadgets.framehandle(F, M);
+					Gadgets.framehandle(F, M)
 				ELSIF M IS Display3.UpdateMaskMsg THEN
 					WITH M: Display3.UpdateMaskMsg DO
-						IF  M.F = F THEN (* panel has to construct its own mask *)
+						IF M.F = F THEN (* panel has to construct its own mask *)
 							NEW(F.mask); Display3.Open(F.mask); Display3.Add(F.mask, 0, -F.H+1, F.W, F.H);
-							F.mask.x := 0; F.mask.y := 0; M.res := 0;
+							F.mask.x := 0; F.mask.y := 0; M.res := 0
 						ELSE ToBoxes(F, x, y, M)
-						END;
+						END
 					END
 				ELSIF M IS Gadgets.UpdateMsg THEN
 					WITH M: Gadgets.UpdateMsg DO
 						ChildUpdate(F, M, x, y, M.dlink);
-						ToBoxes(F, x, y, M);
+						ToBoxes(F, x, y, M)
 					END
 				ELSIF M IS Display.ConsumeMsg THEN Consume(F, x, y, M(Display.ConsumeMsg))
 				ELSIF M IS Oberon.RecallMsg THEN
@@ -2441,7 +2476,7 @@ BEGIN
 					ToBoxes(F, x, y, M);
 					IF M.res < 0 THEN Gadgets.framehandle(F, M) END
 				END;
-				M.x := u; M.y := v; (* restore volatile info *)
+				M.x := u; M.y := v (* restore volatile info *)
 			END
 		ELSE
 			Gadgets.framehandle(F, M)
@@ -2456,14 +2491,14 @@ BEGIN
 	F.invertC := SHORT(Max(0, 15 - F.col));
 	IF (F.invertC = 0) OR (Display.TrueColor(0)) THEN F.invertC := Display3.invertC END;
 	F.handle := FrameHandler; F.state0 := {mayselect .. autoindent};
-	F.text := T; F.org := 0
+	F.text := T; F.org := 0; F.time := Input.Time()-MAX(INTEGER); F.frametime := F.time
 END InitFrame;
 
 PROCEDURE InitPagePosition;
 BEGIN
 	(* old positioning
 	PrintertopY := Printer.Height DIV 10 * 9; PrinterbotY := Printer.Height DIV 20; PrinterleftX := Printer.Width DIV 10;
-	HeaderY := Printer.Height DIV 20 * 19; PagenoX := Printer.Width DIV 10 *  9;
+	HeaderY := Printer.Height DIV 20 * 19; PagenoX := Printer.Width DIV 10 * 9;
 	PrintertopY := PrintertopY - Printer.FrameY; PrinterbotY := PrinterbotY - Printer.FrameY
 	*)
 	(* new positioning *)

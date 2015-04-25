@@ -1,17 +1,5 @@
-﻿(* OBERON System 3, Release 2.3.
-
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
-
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
-
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
+﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE ListGadgets; (** portable *)	(* ps,  *)
 
@@ -43,7 +31,7 @@ TYPE
 	(** used to identify position of line in list *)
 	Loc* = RECORD
 		line*: Line;	(** which line *)
-		y*: INTEGER	(** line's y relative to top of farme *)
+		y*: INTEGER	(** line's y relative to top of frame *)
 	END;
 
 	LineDesc* = RECORD
@@ -91,6 +79,7 @@ VAR
 	WaitTime, mayscroll: LONGINT;
 	W: Texts.Writer;
 	pointText: Texts.Text;
+    saved: Oberon.CaretMsg;
 
 (* ------------ aux. procs ------------ *)
 PROCEDURE P (x: LONGINT): INTEGER;
@@ -485,7 +474,7 @@ BEGIN
 	FlipCaretMsg(F, carpos)
 END SetCaret;
 
-PROCEDURE ScrollUpdate (F:  Frame; Q: Display3.Mask; x, y, dy: INTEGER; dlink: Objects.Object);
+PROCEDURE ScrollUpdate (F: Frame; Q: Display3.Mask; x, y, dy: INTEGER; dlink: Objects.Object);
 VAR cx, cy, cw, ch, mx, my, mw, mh, w, h: INTEGER; D: Display.DisplayMsg;
 BEGIN
 	Oberon.RemoveMarks(x, y, w, h);
@@ -505,9 +494,11 @@ BEGIN
 			ClipAgainst(cx, cy, cw, ch, mx, my, mw, mh);	(* clip source area *)
 			INC(cy, dy);
 			ClipAgainst(cx, cy, cw, ch, mx, my, mw, mh);	(* clip destination area *)
-			D.v :=  cy - dy - (y + F.H - 1); D.h := dy
+			D.v := cy - dy - (y + F.H - 1); D.h := dy
 		END;
-		Display.CopyBlock(cx, cy - dy, cw, ch, cx, cy, Display.replace)
+		IF (cw > 0) & (ch > 0) THEN
+			Display.CopyBlock(cx, cy - dy, cw, ch, cx, cy, Display.replace)
+		END
 	ELSE	(* full update *)
 		D.v := F.bottom - F.H; D.h := h
 	END;
@@ -684,7 +675,7 @@ PROCEDURE RestoreFrame (F: Frame; Q: Display3.Mask; x, y, w, h: INTEGER);
 VAR L: Line; R: ListRiders.Rider; lev, Y, lx, lw, cx, cy, cw, ch: INTEGER;
 BEGIN
 	Oberon.FadeCursor(Oberon.Mouse);
-	Y :=  y + h - F.top; lx := x + F.left; lw := w - (F.left + F.right);
+	Y := y + h - F.top; lx := x + F.left; lw := w - (F.left + F.right);
 	L := F.first;
 	R := F.do.GetRider(F, FALSE);
 	IF R # NIL THEN
@@ -721,7 +712,7 @@ BEGIN
 
 	IF Gadgets.selected IN F.state THEN
 		Display3.FillPattern(Q, Display3.white, Display3.selectpat, x, y, x, y, w, h, Display3.paint)
-  END
+	END
 END RestoreFrame;
 
 PROCEDURE PrintFrame (F: Frame; VAR M: Display.DisplayMsg);
@@ -732,7 +723,7 @@ BEGIN
 	Gadgets.MakePrinterMask(F, x, y, M.dlink, Q);
 	Printer3.FilledRect3D(Q, Display3.bottomC, Display3.topC, F.backC, x, y, w, h, P(1), Display3.replace);
 	top := P(F.top); bottom := P(F.bottom); left := P(F.left); right := P(F.right);
-	Y :=  y + h - top; lx := x + left; lw := w - (left + right);
+	Y := y + h - top; lx := x + left; lw := w - (left + right);
 	L := F.first;
 	R := F.do.GetRider(F, FALSE);
 	IF R # NIL THEN
@@ -771,7 +762,7 @@ BEGIN
 	
 	LocateLine(F, y, M.Y, loc, cnt);
 	first := loc.line; oL := first; fy := loc.y; oy := fy;
-	InvertSelection(F,  Q, x, y, fy, first, first.next);
+	InvertSelection(F, Q, x, y, fy, first, first.next);
 	keysum := M.keys;
 	REPEAT
 		Input.Mouse(M.keys, M.X, M.Y);
@@ -867,7 +858,7 @@ BEGIN
 	Oberon.FadeCursor(Oberon.Mouse);
 	Display3.ReplConst(Q, F.backC, ox, top + oy, ow, 2, Display.invert);
 
-	IF (keysum = {1}) & (cnt = 0) THEN
+	IF ((keysum = {1}) OR (Oberon.New & (keysum = {2}))) & (cnt = 0) THEN
 		IF (exponpoint IN F.state0) OR (x <= M.X) & (M.X < x + loc.line.dx) THEN
 			ToggleLine(F, loc.line); update := TRUE
 		END;
@@ -895,10 +886,20 @@ END TrackPoint;
 PROCEDURE TrackCaret (F: Frame; x, y: INTEGER; VAR M: Oberon.InputMsg);
 VAR Q: Display3.Mask; T: Texts.Text; keysum: SET; oldorg, time, beg, end: LONGINT; oy, dy, cnt: INTEGER; loc: Loc;
 BEGIN
+	LocateLine(F, y, M.Y, loc, cnt);
+	IF Oberon.New & F.car & (F.carloc.line.n = loc.line.n) THEN
+		Oberon.Defocus;
+		IF (saved.car # NIL) & (saved.text # NIL) THEN
+			saved.id := Oberon.set; Display.Broadcast(saved)
+		END;
+		TrackPoint(F, x, y, M);
+		RETURN
+	END;
 	Gadgets.MakeMask(F, x, y, M.dlink, Q); Display3.Copy(Q, Q);
+	saved.car := NIL; saved.text := NIL;
+	saved.id := Oberon.get; Display.Broadcast(saved);
 	Oberon.Defocus;
 	oldorg := F.first.n;
-	LocateLine(F, y, M.Y, loc, cnt);
 	oy := loc.y;
 	FlipCaret(F, Q, x, y, oy);
 	keysum := M.keys;
@@ -926,10 +927,10 @@ BEGIN
 	Oberon.FadeCursor(Oberon.Mouse);
 	FlipCaret(F, Q, x, y, oy);
 
-	IF (cnt  = 0) OR (cnt = -1) THEN	(* caret in frame *)
+	IF (cnt = 0) OR (cnt = -1) THEN	(* caret in frame *)
 		IF ~(locked IN F.state0) & (keysum = {1, 2}) THEN	(* copy over *)
 			Oberon.GetSelection(T, beg, end, time);
-			IF time >= 0 THEN
+			IF time # -1 THEN
 				IF time = F.time THEN InsertLink(F, loc.line)
 				ELSE InsertItems(F, T, beg, end, loc.line)
 				END
@@ -946,7 +947,7 @@ VAR Q: Display3.Mask; carY, Y, dy, cnt: INTEGER; carL, L: Line; keys: SET;
 BEGIN
 	Gadgets.MakeMask(F, x, y, M.dlink, Q);
 	IF (M.ch = LArrow) & ~(locked IN F.state0) THEN AscSelection(F)
-	ELSIF (M.ch = RArrow) & ~(locked IN F.state0) THEN  DescSelection(F)
+	ELSIF (M.ch = RArrow) & ~(locked IN F.state0) THEN DescSelection(F)
 	ELSIF M.ch = UArrow THEN
 		IF F.carloc.line # F.lines THEN
 			RemoveCaret(F);
@@ -1237,7 +1238,8 @@ BEGIN
 			IF M.obj # F.obj THEN
 				F.obj := M.obj;
 				F.lines.prev := F.lines; F.lines.next := F.lines;
-				UpdateModel(F)
+				UpdateModel(F);
+				SetVPos(F, FALSE); SetVRange(F) (*C2*)
 			END;
 			M.res := 0
 		ELSE Gadgets.framehandle(F, M)
@@ -1370,7 +1372,10 @@ BEGIN
 										Oberon.RemoveMarks(x, y, w, h);
 										IF M.keys = {0} THEN TrackSelection(F, x, y, M)
 										ELSIF M.keys = {1} THEN TrackPoint(F, x, y, M)
-										ELSIF M.keys = {2} THEN TrackCaret(F, x, y, M)
+										ELSIF M.keys = {2} THEN
+											IF Oberon.New & (locked IN F.state0) THEN TrackPoint(F, x, y, M)
+											ELSE TrackCaret(F, x, y, M)
+											END
 										END
 									ELSE Gadgets.framehandle(F, M)
 									END
@@ -1399,7 +1404,7 @@ BEGIN
 					ELSIF M IS Oberon.SelectMsg THEN
 						WITH M: Oberon.SelectMsg DO
 							IF M.id = Oberon.get THEN
-								IF F.sel & (M.time < F.time) THEN
+								IF F.sel & (M.time - F.time < 0) THEN
 									GetSelection(F, T);
 									IF T.len > 0 THEN M.sel := F; M.text := T; M.beg := 0; M.end := T.len; M.time := F.time END
 								END

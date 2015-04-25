@@ -1,17 +1,5 @@
-﻿(* OBERON System 3, Release 2.3.
-
-Copyright 1999 ETH Zürich Institute for Computer Systems, 
-ETH Center, CH-8092 Zürich.  e-mail: oberon@inf.ethz.ch.
-
-This module may be used under the conditions of the general Oberon 
-System 3 license contract.  The full text can be downloaded from
-
-	"ftp://ftp.inf.ethz.ch/pub/software/Oberon/System3/license.txt;A"
-
-Under the license terms stated it is in particular (a) prohibited to modify
-the interface of this module in any way that disagrees with the style
-or content of the system and (b) requested to provide all conversions
-of the source code to another platform with the name OBERON. *)
+﻿(* ETH Oberon, Copyright 2000 ETH Zuerich Institut fuer Computersysteme, ETH Zentrum, CH-8092 Zuerich.
+Refer to the "General ETH Oberon System Source License" contract available at: http://www.oberon.ethz.ch/ *)
 
 MODULE Dates; (** portable *)	(* PS  *)
 
@@ -27,7 +15,8 @@ VAR
 
 (** Returns TRUE if year is a leap year *)
 PROCEDURE IsLeapYear* (year: INTEGER): BOOLEAN;
-BEGIN RETURN (year MOD 4 = 0) & (~(year MOD 100 = 0) OR (year MOD 400 = 0))
+BEGIN
+	RETURN (year MOD 4 = 0) & (~(year MOD 100 = 0) OR (year MOD 400 = 0))
 END IsLeapYear;
 
 PROCEDURE LastDay (year, month: INTEGER): INTEGER;
@@ -62,7 +51,6 @@ BEGIN
 	RETURN ASH(ASH(y-zeroY, 4) + m, 5) + d
 END NumberOfDaysToDate;
 
-
 (** Converts year, month and day into an Oberon date *)
 PROCEDURE ToDate* (year, month, day: INTEGER): LONGINT;
 VAR d: INTEGER;
@@ -76,7 +64,6 @@ END ToDate;
 PROCEDURE ToTime* (hour, min, sec: INTEGER): LONGINT;
 BEGIN RETURN ((LONG(hour) MOD 24)*64 + (min MOD 60))*64 + (sec MOD 60)
 END ToTime;
-
 
 (** Extracts year, month and day of an Oberon date *)
 PROCEDURE ToYMD* (date: LONGINT; VAR year, month, day: INTEGER);
@@ -103,10 +90,9 @@ END DayOfWeek;
 PROCEDURE DaysOfMonth* (date: LONGINT): INTEGER;	(* returns last day in month *)
 VAR year, month: LONGINT;
 BEGIN
-	month := (date DIV 32) MOD 16; year := date DIV 512;
+	month := (date DIV 32) MOD 16; year := (date DIV 512) + zeroY;
 	RETURN LastDay(SHORT(year), SHORT(month))
 END DaysOfMonth;
-
 
 (** Following three procedures are used to add/subtract a certain amount of days/month/years. *)
 PROCEDURE AddYear* (date: LONGINT; years: INTEGER): LONGINT;
@@ -124,7 +110,7 @@ PROCEDURE AddMonth* (date: LONGINT; months: INTEGER): LONGINT;
 VAR y, m, d: INTEGER;
 BEGIN
 	ToYMD(date, y, m, d); INC(m, months - 1);
-	y :=  y + m DIV 12;
+	y := y + m DIV 12;
 	IF firstY <= y THEN
 		m := m MOD 12 + 1;
 		IF m =2 THEN
@@ -142,7 +128,6 @@ PROCEDURE AddDay* (date: LONGINT; days: INTEGER): LONGINT;
 VAR num: LONGINT;
 BEGIN num := NumberOfDays(date); num := num + days; RETURN NumberOfDaysToDate(num)
 END AddDay;
-
 
 (** Following three procedures are used to add/subtract a certain amount of time. *)
 PROCEDURE AddHour* (time: LONGINT; hour: INTEGER): LONGINT;
@@ -173,8 +158,8 @@ END AddSecond;
 PROCEDURE AddTime* (VAR time, date: LONGINT; sec: LONGINT);
 VAR h, m, s: LONGINT; ss, mm, hh: INTEGER;
 BEGIN
-	h := 0; m := 0;
-	ToHMS(time, hh, mm, ss); s := sec + ss;
+	ToHMS(time, hh, mm, ss);
+	s := sec + ss; h := hh; m := mm;
 	IF (s < 0) OR (s >= 60) THEN
 		m := s DIV 60 + mm; s := s MOD 60;
 		IF (m < 0) OR (m >= 60) THEN
@@ -191,7 +176,7 @@ PROCEDURE Init();
 	VAR i, j: LONGINT;
 BEGIN
 	A[0] := 0; A[1] := 31; A[2] := 59; A[3] := 90; A[4] := 120; A[5] := 151; A[6] := 181;
-	A[7] := 212; A[8] := 243; A[9] :=  273; A[10] := 304; A[11] := 334; A[12] := 365;
+	A[7] := 212; A[8] := 243; A[9] := 273; A[10] := 304; A[11] := 334; A[12] := 365;
 	i := 0; j := 0;
 	WHILE i < 12 DO WHILE j < A[i+1] DO T[j] := SHORT(SHORT(i + 1)); INC(j) END; INC(i) END;
 	TimeDiff := 0
