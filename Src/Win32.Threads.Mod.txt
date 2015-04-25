@@ -580,21 +580,30 @@ MODULE Threads; (** non-portable / source: Win32.Threads.Mod *)	(* ejz,  *)
 		VAR
 			t: Thread; cont: Kernel32.Context;
 			sp, p, bottom: Kernel32.ADDRESS;
-			res: Kernel32.BOOL;
+			(*handle: Kernel32.HANDLE;*) res: Kernel32.BOOL;
 	BEGIN
-		cont.ContextFlags := Kernel32.ContextControl + Kernel32.ContextInteger;
 		t := threads;
 		WHILE t # NIL DO
-			IF t # this0 THEN		
-				res := Kernel32.GetThreadContext(t.handle, cont);
-				IF res = Kernel32.False THEN
-					sp := t.stackBottom
+			cont.ContextFlags := Kernel32.ContextControl + Kernel32.ContextInteger;
+			IF t # this0 THEN
+				(* THREAD_GET_CONTEXT, THREAD_QUERY_INFORMATION
+				handle := Kernel32.OpenThread({3, 6}, Kernel32.False, t.id);
+				IF handle # Kernel32.NULL THEN
+				*)
+					res := Kernel32.GetThreadContext(t.handle, cont);
+					IF res = Kernel32.False THEN (* hack for Windows 7 Beta *)
+						cont.Esp := t.stackBottom
+					END;
+				(*
+					Kernel32.CloseHandle(handle)
 				ELSE
-					Kernel.Candidate(cont.Edi); Kernel.Candidate(cont.Esi);
-					Kernel.Candidate(cont.Ebx); Kernel.Candidate(cont.Edx);
-					Kernel.Candidate(cont.Ecx); Kernel.Candidate(cont.Eax);
-					sp := cont.Esp
-				END
+					Kernel32.Str("CheckStacks OpenThread"); Kernel32.Ln()
+				END;
+				*)
+				Kernel.Candidate(cont.Edi); Kernel.Candidate(cont.Esi);
+				Kernel.Candidate(cont.Ebx); Kernel.Candidate(cont.Edx);
+				Kernel.Candidate(cont.Ecx); Kernel.Candidate(cont.Eax);
+				sp := cont.Esp
 			ELSE
 				SYSTEM.GETREG(SYSTEM.ESP, sp)
 			END;
